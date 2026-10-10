@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { COLORS, footprint, normalizeDesign, partHeight, partTopStuds, type Brick, type Design } from './model.js';
+import { COLORS, PARTS, footprint, normalizeDesign, partHeight, partTopStuds, type Brick, type Design } from './model.js';
 import { partSurfaces } from './part-surfaces.js';
 
 // One stud is 8 mm; the canonical vertical unit is one 3.2 mm plate.
@@ -20,7 +20,8 @@ function bodyGeometry(brick: Brick): THREE.BufferGeometry {
     (z - brick.z - height / 2) * scaleZ,
     (y - brick.y - depth / 2) * scaleY,
   ));
-  const positions: number[] = [];
+  const positions: number[] = [], normals: number[] = [];
+  const curved = ['round-brick', 'round-plate', 'cone'].includes(PARTS[brick.partId].kind);
   for (const face of surfaces.faces) {
     const [nx, ny, nz] = face.normal;
     const outward = new THREE.Vector3(nx / scaleX, nz / scaleZ, ny / scaleY).normalize();
@@ -30,25 +31,49 @@ function bodyGeometry(brick: Brick): THREE.BufferGeometry {
       // normal to keep both web backface culling and USDZ winding correct.
       const normal = b.clone().sub(a).cross(c.clone().sub(a));
       const triangle = normal.dot(outward) < 0 ? [a, c, b] : [a, b, c];
-      triangle.forEach(point => positions.push(point.x, point.y, point.z));
+      triangle.forEach(point => {
+        positions.push(point.x, point.y, point.z);
+        let normal = outward;
+        if (curved && Math.hypot(outward.x, outward.z) > 1e-8) {
+          // Smooth only around a radial surface, retaining the sharp shoulder,
+          // rim and groove boundaries between profile rings.
+          const sign = point.x * outward.x + point.z * outward.z < 0 ? -1 : 1;
+          normal = new THREE.Vector3(point.x, 0, point.z).normalize().multiplyScalar(sign * Math.hypot(outward.x, outward.z));
+          normal.y = outward.y; normal.normalize();
+        }
+        normals.push(normal.x, normal.y, normal.z);
+      });
     }
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.computeVertexNormals();
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
   return geometry;
+}
+
+function modelCenter(bricks: Brick[]) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const brick of bricks) {
+    const { width, depth } = footprint(brick);
+    minX = Math.min(minX, brick.x); minY = Math.min(minY, brick.y);
+    maxX = Math.max(maxX, brick.x + width); maxY = Math.max(maxY, brick.y + depth);
+  }
+  return { centerX: (minX + maxX) / 2, centerY: (minY + maxY) / 2 };
 }
 
 export function createBrickModel(design: Design): THREE.Group {
   design = normalizeDesign(design);
-  const minX = Math.min(...design.bricks.map(brick => brick.x));
-  const maxX = Math.max(...design.bricks.map(brick => brick.x + footprint(brick).width));
-  const minY = Math.min(...design.bricks.map(brick => brick.y));
-  const maxY = Math.max(...design.bricks.map(brick => brick.y + footprint(brick).depth));
-  const centerX = (minX + maxX) / 2, centerY = (minY + maxY) / 2;
+  const { centerX, centerY } = modelCenter(design.bricks);
   const model = new THREE.Group();
   model.name = 'BrickModel';
-  const studGeometry = new THREE.CylinderGeometry(0.3, 0.3, 0.22, 20);
+  const studGeometries = new Map<string, THREE.BufferGeometry>();
+  const studGeometry = (hollow: boolean) => {
+    const key = hollow ? 'hollow' : 'solid';
+    if (!studGeometries.has(key)) studGeometries.set(key, hollow
+      ? new THREE.LatheGeometry([new THREE.Vector2(0.3, -0.11), new THREE.Vector2(0.3, 0.11), new THREE.Vector2(0.2, 0.11), new THREE.Vector2(0.2, -0.11)], 32)
+      : new THREE.CylinderGeometry(0.3, 0.3, 0.22, 20));
+    return studGeometries.get(key)!;
+  };
   const bodies = new Map<string, THREE.BufferGeometry>();
   const materials = new Map<number, THREE.MeshStandardMaterial>();
   design.bricks.forEach((brick, index) => {
@@ -66,7 +91,7 @@ export function createBrickModel(design: Design): THREE.Group {
     body.position.set(brick.x + width / 2 - centerX, (brick.z + partHeight(brick) / 2) * STUD_UNITS_PER_PLATE - 0.01, brick.y + depth / 2 - centerY);
     body.castShadow = true; body.receiveShadow = true; group.add(body);
     for (const point of partTopStuds(brick)) {
-      const stud = new THREE.Mesh(studGeometry, material);
+      const stud = new THREE.Mesh(studGeometry(PARTS[brick.partId].topStudStyle === 'hollow'), material);
       stud.name = `Stud_${index}_${Math.floor(point.x - brick.x)}_${Math.floor(point.y - brick.y)}`;
       stud.position.set(point.x - centerX, point.z * STUD_UNITS_PER_PLATE + 0.08, point.y - centerY);
       stud.castShadow = true; stud.receiveShadow = true; group.add(stud);
@@ -79,8 +104,7 @@ export function createBrickModel(design: Design): THREE.Group {
 /** The browser batches identical pieces; native exports retain named real meshes. */
 export function createInstancedBrickModel(input: Design) {
   const design = normalizeDesign(input);
-  const centerX = (Math.min(...design.bricks.map(b => b.x)) + Math.max(...design.bricks.map(b => b.x + footprint(b).width))) / 2;
-  const centerY = (Math.min(...design.bricks.map(b => b.y)) + Math.max(...design.bricks.map(b => b.y + footprint(b).depth))) / 2;
+  const { centerX, centerY } = modelCenter(design.bricks);
   const model = new THREE.Group();
   model.name = 'InstancedBrickModel';
   const shapes = new Map<string, { geometry: THREE.BufferGeometry; edges: THREE.EdgesGeometry }>();
@@ -100,7 +124,7 @@ export function createInstancedBrickModel(input: Design) {
         geometry.deleteAttribute('uv');
         return geometry.translate(mesh.position.x, mesh.position.y, mesh.position.z);
       });
-      const edges = new THREE.EdgesGeometry(parts[0]);
+      const edges = new THREE.EdgesGeometry(parts[0], ['round-brick', 'round-plate', 'cone'].includes(PARTS[brick.partId].kind) ? 15 : 1);
       const geometry = mergeGeometries(parts)!;
       shapes.set(shapeKey, { geometry, edges });
       parts.forEach(part => part.dispose());

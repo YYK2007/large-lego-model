@@ -1,6 +1,6 @@
 import type { Design } from '../shared/model';
 
-export type GenerationProgress = { stage: 'planning' | 'checking' | 'repairing'; attempt: number; maxAttempts: number };
+export type GenerationProgress = { stage: 'researching' | 'planning' | 'checking' | 'comparing' | 'repairing'; attempt: number; maxAttempts: number };
 
 export class BuildRequestError extends Error {
   readonly checks: string[];

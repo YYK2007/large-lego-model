@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeDesign, validateDesign, partTopStuds, exportLDraw, billOfMaterials, type Brick, type Design } from '../shared/model.js';
+import { WORKSPACE, normalizeDesign, validateDesign, partTopStuds, exportLDraw, billOfMaterials, type Brick, type Design } from '../shared/model.js';
 import { ROOF_SAMPLE } from '../shared/roof-sample.js';
 
 const brick = (id: string, changes: Partial<Brick> = {}): Brick => ({ id, partId: '3003', colorId: 4, x: 0, y: 0, z: 0, rotation: 0, ...changes });
@@ -45,9 +45,9 @@ test('legacy conversion is repeatable, preserves physical LDraw positions and re
 });
 
 test('height bounds include body height and the roof retains its exact real-parts BOM', () => {
-  assert.equal(validateDesign(design(Array.from({ length: 24 }, (_, i) => brick(`layer-${i}`, { z: i * 3 })))).valid, true);
-  const tooTall = Array.from({ length: 24 }, (_, i) => brick(`layer-${i}`, { z: i * 3 }));
-  tooTall.push(brick('overflow', { partId: '3022', z: 72 }));
+  assert.equal(validateDesign(design(Array.from({ length: WORKSPACE.heightPlates / 3 }, (_, i) => brick(`layer-${i}`, { z: i * 3 })))).valid, true);
+  const tooTall = Array.from({ length: WORKSPACE.heightPlates / 3 }, (_, i) => brick(`layer-${i}`, { z: i * 3 }));
+  tooTall.push(brick('overflow', { partId: '3022', z: WORKSPACE.heightPlates }));
   assert.equal(validateDesign(design(tooTall)).valid, false);
   assert.equal(validateDesign(ROOF_SAMPLE).valid, true);
   assert.deepEqual(Object.fromEntries(billOfMaterials(ROOF_SAMPLE).map(item => [`${item.partId}:${item.colorId}`, item.quantity])), { '3001:71': 2, '3020:15': 3, '3022:15': 4, '3039:4': 4 });

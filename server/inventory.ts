@@ -34,7 +34,7 @@ export async function importSet(setNumber: string): Promise<{ items: InventoryIt
       const partId = row.part?.part_num;
       const colorId = row.color?.id;
       if (!Number.isInteger(row.quantity) || row.quantity! < 0) throw new GenerationError('Unexpected set quantity.', 502);
-      if (row.is_spare || typeof partId !== 'string' || !Number.isInteger(colorId) || !Object.hasOwn(PARTS, partId) || !Object.hasOwn(COLORS, colorId!)) { excluded += row.quantity!; continue; }
+      if (row.is_spare || typeof partId !== 'string' || !Number.isInteger(colorId) || !Object.hasOwn(PARTS, partId) || !Object.hasOwn(COLORS, colorId!) || !PARTS[partId].allowedColors.includes(colorId!)) { excluded += row.quantity!; continue; }
       const key = `${partId}:${colorId}`;
       const existing = quantities.get(key);
       if (existing) existing.quantity += row.quantity!;
@@ -43,5 +43,5 @@ export async function importSet(setNumber: string): Promise<{ items: InventoryIt
     next = body.next || null;
   }
   if (next) throw new GenerationError('This inventory is too large for the current importer.', 422);
-  return { items: [...quantities.values()], excluded, source, note: 'Supported catalog bricks, plates, and upright slopes in supported colors only. Spare and unsupported parts are excluded. Check the returned inventory against your physical set; alternate set inventory versions are not resolved automatically.' };
+  return { items: [...quantities.values()], excluded, source, note: 'Supported catalog parts and verified colors only. Spare and unsupported parts are excluded. Check the returned inventory against your physical set; alternate set inventory versions are not resolved automatically.' };
 }

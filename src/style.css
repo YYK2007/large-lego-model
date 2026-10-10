@@ -389,3 +389,22 @@ table{min-width:350px;font-size:10px}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}
 .spin{animation:none}
 }
+
+.reference-review{margin:0 26px 22px;padding:20px;min-width:0;border:1px solid #d8e3e5;border-radius:16px;background:#f6f9f8;color:#40545b;font-size:13px;line-height:1.6;overflow-wrap:anywhere}
+.reference-heading{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:6px 14px}
+.reference-heading h3{margin:0;font-size:16px;color:#223c46}
+.reference-heading span{font-size:11px;font-weight:700;color:#386952}
+.reference-heading .needs-work{color:#965819}
+.reference-subject{margin:6px 0;font-weight:600}
+.reference-photos{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr));gap:18px;margin:16px 0}
+.reference-photos figure{margin:0;min-width:0}
+.reference-photo-link{display:block}
+.reference-photos img{display:block;width:100%;height:170px;object-fit:contain;background:#e7eeec;border-radius:8px}
+.reference-photo-unavailable{display:flex;min-height:170px;align-items:center;justify-content:center;padding:16px;background:#e7eeec;border-radius:8px;text-align:center}
+.reference-photos figcaption{margin-top:8px;font-size:11px;line-height:1.5}
+.reference-photos figcaption span{display:block;margin:3px 0}
+.reference-review a{color:#30697a;text-decoration:underline;text-underline-offset:2px}
+.reference-review summary{cursor:pointer;font-weight:600}
+.reference-review ul{padding-left:20px}
+.reference-review small{display:block;margin-top:12px;font-size:11px;color:#697c82}
+@media(max-width:650px){.reference-review{margin:0 14px 16px;padding:14px}.reference-heading{align-items:flex-start}}

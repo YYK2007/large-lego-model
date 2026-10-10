@@ -1,3 +1,5 @@
+import partColors from './part-colors.json';
+import { isDesignResearch, type DesignResearch } from './references';
 export type Brick = {
   id: string;
   partId: string;
@@ -9,18 +11,22 @@ export type Brick = {
 };
 
 export const SCHEMA_VERSION = 2;
-export const CATALOG_VERSION = 'upright-plates-slopes-1';
+export const CATALOG_VERSION = 'upright-architecture-2';
+export const PREVIOUS_CATALOG_VERSION = 'upright-plates-slopes-1';
+export const WORKSPACE = { width: 96, depth: 96, heightPlates: 384 } as const;
+const LEGACY_PART_IDS = new Set(['3005', '3004', '3622', '3010', '3003', '3002', '3001']);
 export const COORDINATE_SYSTEM = 'stud-xy-plate-z';
 
 export type Design = {
   schemaVersion?: 2;
-  catalogVersion?: typeof CATALOG_VERSION;
+  catalogVersion?: typeof CATALOG_VERSION | typeof PREVIOUS_CATALOG_VERSION;
   coordinateSystem?: typeof COORDINATE_SYSTEM;
   id: string;
   title: string;
   description: string;
   bricks: Brick[];
   source: 'sample' | 'ai';
+  research?: DesignResearch;
   prompt: string;
   createdAt: string;
 };
@@ -32,7 +38,9 @@ export type InventoryItem = {
   source: string;
 };
 
-export const PARTS: Record<string, { id: string; name: string; width: number; depth: number; heightPlates: 1 | 3; kind: 'brick' | 'plate' | 'slope'; ldrawId: string }> = {
+export type PartDefinition = { id: string; name: string; width: number; depth: number; heightPlates: number; kind: 'brick' | 'plate' | 'slope' | 'tile' | 'round-brick' | 'round-plate' | 'cone'; ldrawId: string; topStudStyle?: 'hollow' };
+
+const PART_DEFINITIONS: Record<string, PartDefinition> = {
   '3005': { id: '3005', name: 'Brick 1 × 1', width: 1, depth: 1, heightPlates: 3, kind: 'brick', ldrawId: '3005.dat' },
   '3004': { id: '3004', name: 'Brick 1 × 2', width: 1, depth: 2, heightPlates: 3, kind: 'brick', ldrawId: '3004.dat' },
   '3622': { id: '3622', name: 'Brick 1 × 3', width: 1, depth: 3, heightPlates: 3, kind: 'brick', ldrawId: '3622.dat' },
@@ -48,7 +56,24 @@ export const PARTS: Record<string, { id: string; name: string; width: number; de
   '3022': { id: '3022', name: 'Plate 2 × 2', width: 2, depth: 2, heightPlates: 1, kind: 'plate', ldrawId: '3022.dat' },
   '3020': { id: '3020', name: 'Plate 2 × 4', width: 2, depth: 4, heightPlates: 1, kind: 'plate', ldrawId: '3020.dat' },
   '3039': { id: '3039', name: 'Slope 45° 2 × 2', width: 2, depth: 2, heightPlates: 3, kind: 'slope', ldrawId: '3039.dat' },
+  '3009': { id: '3009', name: 'Brick 1 × 6', width: 1, depth: 6, heightPlates: 3, kind: 'brick', ldrawId: '3009.dat' },
+  '3007': { id: '3007', name: 'Brick 2 × 8', width: 2, depth: 8, heightPlates: 3, kind: 'brick', ldrawId: '3007.dat' },
+  '3666': { id: '3666', name: 'Plate 1 × 6', width: 1, depth: 6, heightPlates: 1, kind: 'plate', ldrawId: '3666.dat' },
+  '3460': { id: '3460', name: 'Plate 1 × 8', width: 1, depth: 8, heightPlates: 1, kind: 'plate', ldrawId: '3460.dat' },
+  '3034': { id: '3034', name: 'Plate 2 × 8', width: 2, depth: 8, heightPlates: 1, kind: 'plate', ldrawId: '3034.dat' },
+  '3036': { id: '3036', name: 'Plate 6 × 8', width: 6, depth: 8, heightPlates: 1, kind: 'plate', ldrawId: '3036.dat' },
+  '3069b': { id: '3069b', name: 'Tile 1 × 2 with Groove', width: 1, depth: 2, heightPlates: 1, kind: 'tile', ldrawId: '3069b.dat' },
+  '3068b': { id: '3068b', name: 'Tile 2 × 2 with Groove', width: 2, depth: 2, heightPlates: 1, kind: 'tile', ldrawId: '3068b.dat' },
+  '3040b': { id: '3040b', name: 'Slope 45° 1 × 2', width: 1, depth: 2, heightPlates: 3, kind: 'slope', ldrawId: '3040b.dat' },
+  '3062b': { id: '3062b', name: 'Round Brick 1 × 1 with Hollow Stud', width: 1, depth: 1, heightPlates: 3, kind: 'round-brick', ldrawId: '3062b.dat', topStudStyle: 'hollow' },
+  // Rebrickable 6141 / BrickLink 4073; both refer to LDraw 6141.dat.
+  '6141': { id: '6141', name: 'Round Plate 1 × 1', width: 1, depth: 1, heightPlates: 1, kind: 'round-plate', ldrawId: '6141.dat' },
+  '4589': { id: '4589', name: 'Cone 1 × 1', width: 1, depth: 1, heightPlates: 3, kind: 'cone', ldrawId: '4589.dat', topStudStyle: 'hollow' },
 };
+
+export const PARTS: Record<string, PartDefinition & { allowedColors: readonly number[] }> = Object.fromEntries(
+  Object.entries(PART_DEFINITIONS).map(([id, part]) => [id, { ...part, allowedColors: partColors.parts[id as keyof typeof partColors.parts].allowedColorIds }]),
+);
 
 // Keys are Rebrickable color IDs. Keep the explicit LDraw mapping even where IDs match.
 export const COLORS: Record<number, { id: number; name: string; hex: string; ldrawId: number }> = {
@@ -58,6 +83,10 @@ export const COLORS: Record<number, { id: number; name: string; hex: string; ldr
   4: { id: 4, name: 'Red', hex: '#C91A09', ldrawId: 4 },
   14: { id: 14, name: 'Yellow', hex: '#F2CD37', ldrawId: 14 },
   15: { id: 15, name: 'White', hex: '#FFFFFF', ldrawId: 15 },
+  19: { id: 19, name: 'Tan', hex: '#E4CD9E', ldrawId: 19 },
+  28: { id: 28, name: 'Dark Tan', hex: '#958A73', ldrawId: 28 },
+  72: { id: 72, name: 'Dark Bluish Gray', hex: '#6C6E68', ldrawId: 72 },
+  320: { id: 320, name: 'Dark Red', hex: '#720E0F', ldrawId: 320 },
   25: { id: 25, name: 'Orange', hex: '#FE8A18', ldrawId: 25 },
   70: { id: 70, name: 'Reddish Brown', hex: '#582A12', ldrawId: 70 },
   71: { id: 71, name: 'Light Bluish Gray', hex: '#A0A5A9', ldrawId: 71 },
@@ -75,12 +104,13 @@ export function footprint(brick: Brick): { width: number; depth: number } {
 export function normalizeDesign(design: Design): Design {
   if (!design || typeof design !== 'object' || !Array.isArray(design.bricks)) throw new Error('Design bricks must be an array.');
   if (design.schemaVersion === SCHEMA_VERSION) {
-    if (design.catalogVersion !== CATALOG_VERSION || design.coordinateSystem !== COORDINATE_SYSTEM) throw new Error('Unsupported design catalog or coordinate system.');
-    return { ...design, bricks: design.bricks.map(brick => ({ ...brick })) };
+    if (![CATALOG_VERSION, PREVIOUS_CATALOG_VERSION].includes(design.catalogVersion || '') || design.coordinateSystem !== COORDINATE_SYSTEM) throw new Error('Unsupported design catalog or coordinate system.');
+    return { ...design, catalogVersion: CATALOG_VERSION, bricks: design.bricks.map(brick => ({ ...brick })) };
   }
   if (design.schemaVersion !== undefined || design.catalogVersion !== undefined || design.coordinateSystem !== undefined) throw new Error('Unsupported design version or incomplete coordinate metadata.');
   const bricks = design.bricks.map(brick => {
-    if (!brick || !Object.hasOwn(PARTS, brick.partId) || PARTS[brick.partId].kind !== 'brick') throw new Error('Legacy design contains an unsupported part.');
+    if (!brick || !LEGACY_PART_IDS.has(brick.partId)) throw new Error('Legacy design contains an unsupported part.');
+    if (![brick.x, brick.y].every(value => Number.isInteger(value) && value >= 0 && value < 24) || brick.x + footprint(brick).width > 24 || brick.y + footprint(brick).depth > 24) throw new Error('Legacy brick extends beyond the 24 × 24 stud workspace.');
     if (!Number.isInteger(brick.z) || brick.z < 0 || brick.z >= 24) throw new Error('Legacy brick z must be an integer from 0 to 23.');
     if (brick.rotation !== 0 && brick.rotation !== 90) throw new Error('Legacy brick rotation must be 0 or 90.');
     return { ...brick, z: brick.z * 3 };
@@ -99,14 +129,15 @@ export function partPoint(brick: Brick, u: number, v: number): { x: number; y: n
 
 export function partTopStuds(brick: Brick): { x: number; y: number; z: number }[] {
   const part = PARTS[brick.partId];
-  const points = [];
+  const points: { x: number; y: number; z: number }[] = [];
+  if (part.kind === 'tile') return points;
   for (let y = part.kind === 'slope' ? 1 : 0; y < part.depth; y++) for (let x = 0; x < part.width; x++) points.push({ ...partPoint(brick, x + 0.5, y + 0.5), z: brick.z + part.heightPlates });
   return points;
 }
 
 export function partBottomSites(brick: Brick): { x: number; y: number; z: number }[] {
   const part = PARTS[brick.partId];
-  const points = [];
+  const points: { x: number; y: number; z: number }[] = [];
   for (let y = 0; y < part.depth; y++) for (let x = 0; x < part.width; x++) points.push({ ...partPoint(brick, x + 0.5, y + 0.5), z: brick.z });
   return points;
 }
@@ -124,6 +155,7 @@ export function validateDesign(design: Design): { valid: boolean; errors: string
   }
   if (typeof design.id === 'string' && !/^[a-zA-Z0-9_-]{1,80}$/.test(design.id)) errors.push('Design ID contains unsupported characters.');
   if (typeof design.createdAt === 'string' && !Number.isFinite(Date.parse(design.createdAt))) errors.push('Design createdAt must be a valid date.');
+  if (design.research !== undefined && !isDesignResearch(design.research)) errors.push('Design reference evidence is invalid.');
   if (design.source !== 'sample' && design.source !== 'ai') errors.push('Design source must be sample or ai.');
   if (!Array.isArray(design.bricks)) return { valid: false, errors: [...errors, 'Design bricks must be an array.'], warnings };
   if (design.bricks.length === 0) errors.push('Design must contain at least one brick.');
@@ -141,22 +173,23 @@ export function validateDesign(design: Design): { valid: boolean; errors: string
     else ids.add(brick.id);
     if (typeof brick.partId !== 'string' || !Object.hasOwn(PARTS, brick.partId)) errors.push(`${label} has an unsupported part.`);
     if (!Number.isInteger(brick.colorId) || !Object.hasOwn(COLORS, brick.colorId)) errors.push(`${label} has an unsupported color.`);
+    if (Object.hasOwn(PARTS, brick.partId) && Object.hasOwn(COLORS, brick.colorId) && !PARTS[brick.partId].allowedColors.includes(brick.colorId)) errors.push(`${label} uses a part/color pair absent from the verified catalog: ${brick.partId} in ${COLORS[brick.colorId].name}.`);
     if (![0, 90, 180, 270].includes(brick.rotation)) errors.push(`${label} rotation must be 0, 90, 180, or 270.`);
     for (const axis of ['x', 'y', 'z'] as const) {
-      const limit = axis === 'z' ? 72 : 24;
+      const limit = axis === 'z' ? WORKSPACE.heightPlates : axis === 'x' ? WORKSPACE.width : WORKSPACE.depth;
       if (!Number.isInteger(brick[axis]) || brick[axis] < 0 || brick[axis] >= limit) errors.push(`${label} ${axis} must be an integer from 0 to ${limit - 1}.`);
     }
     if (errors.length !== before) return;
     const { width, depth } = footprint(brick);
-    if (brick.x + width > 24 || brick.y + depth > 24) { errors.push(`${label} extends beyond the 24 × 24 stud workspace.`); return; }
-    if (brick.z + partHeight(brick) > 72) { errors.push(`${label} extends beyond the vertical workspace.`); return; }
+    if (brick.x + width > WORKSPACE.width || brick.y + depth > WORKSPACE.depth) { errors.push(`${label} extends beyond the ${WORKSPACE.width} × ${WORKSPACE.depth} stud workspace.`); return; }
+    if (brick.z + partHeight(brick) > WORKSPACE.heightPlates) { errors.push(`${label} extends beyond the vertical workspace.`); return; }
     usable.push(brick);
   });
 
   const neighbors = usable.map(() => [] as number[]);
   const supported = new Set<number>();
-  // Integer cells keep checks local as designs grow. Slopes reserve their full
-  // body envelope; this upright palette does not permit nesting in the ramp.
+  // Every part reserves its conservative rectangular envelope. Curved sides and
+  // slope ramps do not grant permission to nest another piece in that space.
   const key = (x: number, y: number, z: number) => `${x},${y},${z}`;
   const bodies = new Map<string, number>();
   const studs = new Map<string, number>();
@@ -261,12 +294,12 @@ export function exportLDraw(design: Design): string {
       const color = COLORS[brick.colorId];
       const { width, depth } = footprint(brick);
       const cos = [1, 0, -1, 0][brick.rotation / 90], sin = [0, 1, 0, -1][brick.rotation / 90];
-      // Rectangular DATs have their long axis along X. 3039 instead has a
-      // rear-row origin: native bounds X[-20,20], Z[-30,10], with top at Y0.
+      // Rectangular DATs have their long axis along X. Both upright slopes
+      // have a rear-row origin, Z[-30,10], with top at Y0. Round parts are centered.
       const matrix = part.kind === 'slope'
         ? [cos, 0, -sin, 0, 1, 0, sin, 0, cos]
         : [sin, 0, cos, 0, 1, 0, -cos, 0, sin];
-      const origin = part.kind === 'slope' ? partPoint(brick, 1, 1.5) : { x: brick.x + width / 2, y: brick.y + depth / 2 };
+      const origin = part.kind === 'slope' ? partPoint(brick, part.width / 2, part.depth - 0.5) : { x: brick.x + width / 2, y: brick.y + depth / 2 };
       lines.push(`1 ${color.ldrawId} ${origin.x * 20} ${-(brick.z + partHeight(brick)) * 8} ${origin.y * 20} ${matrix.join(' ')} ${part.ldrawId}`);
     }
   }

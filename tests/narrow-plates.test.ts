@@ -133,7 +133,7 @@ test('the original live Bell Tower clock details become tileable without conceal
 });
 
 test('additive narrow plates retain existing V2 metadata and never enter legacy brick-only plans', () => {
-  assert.equal(CATALOG_VERSION, 'upright-plates-slopes-1');
+  assert.equal(CATALOG_VERSION, 'upright-architecture-2');
   const original = structuredClone(ROOF_SAMPLE);
   assert.deepEqual(normalizeDesign(ROOF_SAMPLE), original);
   assert.equal(validateDesign(ROOF_SAMPLE).valid, true);

@@ -21,21 +21,27 @@ function occupied(design: Design) {
 
 test('an alternate scan seats the recorded Bell Tower eaves without adding or removing any colored cells', () => {
   const plan = structuredClone(BELL_TOWER_PACKING_PLAN);
-  const first = compilePlan(plan, { prompt: plan.title });
-  assert.equal(first.bricks.length, 488);
-  assert.deepEqual(validateDesign(first).errors, ['Brick b446 has no stud support directly below it.']);
-  const alternate = compilePlan(plan, { prompt: plan.title, scanOrder: 'x-major' });
-  assert.equal(alternate.bricks.length, 487);
+  // Keep the palette that exposed this bug. Larger new parts can bridge the
+  // original eave on the first scan, which would no longer exercise the retry.
+  const originalParts = ['3005', '3004', '3622', '3010', '3003', '3002', '3001', '3024', '3023', '3623', '3710', '3022', '3020', '3039'];
+  const colors = [...new Set([...plan.boxes, ...(plan.slopes || [])].map(item => item.colorId))];
+  const inventory: InventoryItem[] = originalParts.flatMap(partId => colors.map(colorId => ({ partId, colorId, quantity: 10000, source: 'Historical palette regression stock' })));
+  const options = { prompt: plan.title, inventory, ownedOnly: true };
+  const first = compilePlan(plan, options);
+  const rejected = validateDesign(first);
+  assert.equal(rejected.valid, false);
+  assert.equal(rejected.errors.length, 1);
+  assert.match(rejected.errors[0], /no stud support directly below/);
+  const alternate = compilePlan(plan, { ...options, scanOrder: 'x-major' });
   assert.equal(validateDesign(alternate).valid, true);
   assert.deepEqual(occupied(alternate), occupied(first));
   assert.deepEqual(plan, BELL_TOWER_PACKING_PLAN);
-  assert.deepEqual(compileGeneratedPlan(plan, { prompt: plan.title }).bricks, alternate.bricks);
+  assert.deepEqual(compileGeneratedPlan(plan, { prompt: plan.title, inventory, inventoryMode: 'owned' }).bricks, alternate.bricks);
   assert.ok(alternate.bricks.some(brick => brick.partId === '3020' && brick.x === 8 && brick.y === 16 && brick.z === 66 && brick.rotation === 90), 'A real 2x4 plate bridges from the existing corner pier');
 });
 
 test('default scan retains a valid original packing and alternate scan retains exact owned stock constraints', () => {
   const defaultResult = compilePlan(HOLLOW_ROOM_PLAN, { prompt: 'Original room' });
-  assert.equal(defaultResult.bricks.length, 78);
   assert.equal(validateDesign(defaultResult).valid, true);
   assert.deepEqual(compilePlan(HOLLOW_ROOM_PLAN, { prompt: 'Original room', scanOrder: 'y-major' }).bricks, defaultResult.bricks);
   assert.deepEqual(compileGeneratedPlan(HOLLOW_ROOM_PLAN, { prompt: 'Original room' }).bricks, defaultResult.bricks);

@@ -32,7 +32,24 @@ test('AI admission rejects a cap over the slopes low row rather than treating th
     { x: 0, y: 0, z: 0, width: 4, depth: 2, height: 3, colorId: 71 },
     { x: 0, y: 0, z: 6, width: 1, depth: 1, height: 3, colorId: 15 },
   ], slopes: [{ kind: 'upright45', x: 0, y: 0, z: 3, width: 4, rotation: 0, colorId: 4 }] };
-  assert.throws(() => compileGeneratedPlan(badRoof, { prompt: 'A flat roof test' }), /part 3005, x=0, y=0, z=6 plates, rotation=0\) has no stud support/);
+  assert.throws(() => compileGeneratedPlan(badRoof, { prompt: 'A flat roof test' }), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /part 3005, x=0, y=0, z=6 plates, rotation=0\).*has no stud support/);
+    assert.match(error.message, /"nearestAlignedStudGapPlates":3/,
+      'The empty low row of the slope is not mistaken for a stud at z6');
+    return true;
+  });
+});
+
+test('support feedback locates the nearest real stud under a footprint and reports the exact plate gap', () => {
+  const floating: ShapePlanV2 = { ...plan(), boxes: [], parts: [
+    { partId: '3003', colorId: 4, x: 0, y: 0, z: 0, rotation: 0 },
+    { partId: '3005', colorId: 4, x: 0, y: 0, z: 3, rotation: 0 },
+    { partId: '3024', colorId: 15, x: 0, y: 0, z: 8, rotation: 0 },
+  ] };
+  assert.throws(() => compileGeneratedPlan(floating, { prompt: 'A flat support check' }), /"nearestAlignedStudGapPlates":2/);
+  const noColumn = { ...floating, parts: [floating.parts![0], { ...floating.parts![2], x: 6, y: 6 }] };
+  assert.throws(() => compileGeneratedPlan(noColumn, { prompt: 'A flat support check' }), /"nearestAlignedStudGapPlates":null/);
 });
 
 test('narrow plates preserve the thin clock-face trim that previously rejected the Bell Tower', () => {
@@ -58,9 +75,14 @@ test('piece limits are optional and have no application ceiling', () => {
   for (const maxBricks of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
     assert.throws(() => validateInput({ prompt: 'A castle', maxBricks }), (error: unknown) => error instanceof GenerationError && error.status === 400);
   }
-  const large = { ...plan(), boxes: [{ x: 0, y: 0, z: 0, width: 24, depth: 24, height: 9, colorId: 4 }] };
+  // Fixed placements keep this admission test independent of future packing efficiencies.
+  const large: ShapePlanV2 = { ...plan(), boxes: [], parts: [
+    { partId: '3036', colorId: 4, x: 0, y: 0, z: 0, rotation: 0 },
+    ...Array.from({ length: 6 }, (_, layer) => Array.from({ length: 8 }, (_, y) => Array.from({ length: 6 }, (_, x) => ({ partId: '3005', colorId: 4, x, y, z: 1 + layer * 3, rotation: 0 as const })))).flat(2),
+  ] };
   const design = compileGeneratedPlan(large, { prompt: 'A solid volume for testing piece admission' });
   assert.ok(design.bricks.length > 160);
+  assert.equal(design.bricks.length, large.parts!.length, 'Every explicit piece survives admission');
   assert.throws(() => compileGeneratedPlan(large, { prompt: 'An explicit small budget', maxBricks: 100 }), /100-brick budget/);
   assert.equal(compileGeneratedPlan(large, { prompt: 'An explicit larger budget', maxBricks: 2000 }).bricks.length, design.bricks.length);
 });

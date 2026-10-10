@@ -56,7 +56,11 @@ app.post('/api/designs', async (req, res) => {
   if (!check.valid) throw new GenerationError('Cannot save an invalid design: ' + check.errors.join('; '), 400);
   validateInventory(req.body.inventory || []);
   // An export freezes this exact collection and geometry. Existing shared links never change.
-  const snapshot = { ...normalizeDesign(design), id: randomUUID(), inventory: req.body.inventory || [] };
+  const original = await loadDesign(design.id);
+  const normalized = normalizeDesign(design);
+  const sameGeometry = original && JSON.stringify(normalizeDesign(original).bricks) === JSON.stringify(normalized.bricks);
+  // Export snapshots inherit only the stored assessment of these exact placements.
+  const snapshot = { ...normalized, research: sameGeometry ? original.research : undefined, id: randomUUID(), inventory: req.body.inventory || [] };
   await saveDesign(snapshot);
   res.json({ id: snapshot.id });
 });

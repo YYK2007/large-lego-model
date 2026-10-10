@@ -1,4 +1,4 @@
-import { COLORS, footprint, normalizeDesign, partBottomSites, partHeight, partTopStuds, type Brick, type Design } from './model';
+import { COLORS, PARTS, footprint, normalizeDesign, partBottomSites, partHeight, partTopStuds, type Brick, type Design } from './model';
 import { partSurfaces, type PartPoint } from './part-surfaces';
 
 type RenderOptions = {
@@ -113,7 +113,9 @@ function painterOrder(drawings: Drawing[], point: (...position: PartPoint) => st
   const normals: PartPoint[] = [];
   const normalIds = new Map<string, number>();
   const planes = drawings.map(drawing => drawing.normals.map(normal => {
-    const key = normal.join(',');
+    // Translated radial profiles can differ only by floating-point roundoff.
+    // Share their test direction so cache size depends on shapes, not positions.
+    const key = normal.map(value => Math.round(value * 1e8) / 1e8).join(',');
     if (!normalIds.has(key)) { normalIds.set(key, normals.length); normals.push(normal); }
     return normalIds.get(key)!;
   }));
@@ -191,16 +193,18 @@ export function renderDesignSvg(design: Design, options: RenderOptions = {}): st
   const width = options.width ?? 1000;
   const height = options.height ?? 650;
   const showCue = width >= 300 && height >= 200;
-  const corners = design.bricks.flatMap((brick) => {
+  if (!design.bricks.length) return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"/>`;
+  let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
+  for (const brick of design.bricks) {
     const size = footprint(brick);
-    return [brick.x, brick.x + size.width].flatMap((x) => [brick.y, brick.y + size.depth]
-      .flatMap((y) => [brick.z, brick.z + partHeight(brick) + 0.5].map((z) => project(x, y, z))));
-  });
-  if (!corners.length) return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"/>`;
-  const left = Math.min(...corners.map(([x]) => x));
-  const right = Math.max(...corners.map(([x]) => x));
-  const top = Math.min(...corners.map(([, y]) => y));
-  const bottom = Math.max(...corners.map(([, y]) => y));
+    for (const x of [brick.x, brick.x + size.width]) for (const y of [brick.y, brick.y + size.depth]) {
+      for (const z of [brick.z, brick.z + partHeight(brick) + 0.5]) {
+        const [px, py] = project(x, y, z);
+        left = Math.min(left, px); right = Math.max(right, px);
+        top = Math.min(top, py); bottom = Math.max(bottom, py);
+      }
+    }
+  }
   const padding = Math.min(width, height) * 0.06;
   const cueHeight = showCue ? 48 : 0;
   const scale = Math.min((width - 2 * padding) / Math.max(1, right - left),
@@ -222,7 +226,9 @@ export function renderDesignSvg(design: Design, options: RenderOptions = {}): st
     const color = faded ? tint(base, 0.77) : base;
     const stroke = faded ? '#b2c8cf' : tint(color, -0.43);
     const strokeWidth = Math.max(0.45, Math.min(1.4, scale * 0.03));
-    const face = (points: string[], fill: string) => `<polygon points="${points.join(' ')}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" stroke-linejoin="round"/>`;
+    const curved = ['round-brick', 'round-plate', 'cone'].includes(PARTS[brick.partId].kind);
+    // Radial tessellation is a rendering detail, not a rib on the physical part.
+    const face = (points: string[], fill: string) => `<polygon points="${points.join(' ')}" fill="${fill}" stroke="${curved ? fill : stroke}" stroke-width="${curved ? 0.5 : strokeWidth}" stroke-linejoin="round"/>`;
     const body = partSurfaces(brick);
     const polygons: Polygon[] = body.faces.filter(({ normal }) => dot(normal, view) > 1e-8).map(({ indices, normal }) => {
       const metricNormal = [normal[0], normal[1], normal[2] / 0.4];
@@ -231,8 +237,11 @@ export function renderDesignSvg(design: Design, options: RenderOptions = {}): st
         svg: face(indices.map((index) => point(...body.vertices[index])), tint(color, shade)) };
     });
     const marker = `<g data-brick-id="${escapeXml(brick.id)}" data-highlighted="${highlighted?.has(brick.id) ?? false}">`;
+    // Stepped necks and hollow tops have visible surfaces inside their outer shell.
+    // Draw their local polygons back-to-front before ordering complete pieces.
+    const orderedPolygons = curved ? splitPolygonOrder(polygons) : polygons;
     const drawings: Drawing[] = [{ vertices: body.vertices, normals: body.faces.map(({ normal }) => normal),
-      svg: `${marker}${polygons.map(polygon => polygon.svg).join('')}</g>`, marker: `${marker}</g>`, polygons: () => polygons }];
+      svg: `${marker}${orderedPolygons.map(polygon => polygon.svg).join('')}</g>`, marker: `${marker}</g>`, polygons: () => polygons }];
     for (const { x, y, z } of partTopStuds(brick)) {
       // An attached brick encloses the stud; never draw it through that brick.
       if (occupied.has(`${x},${y},${z}`)) continue;
@@ -240,8 +249,10 @@ export function renderDesignSvg(design: Design, options: RenderOptions = {}): st
       const rx = scale * 0.3 * Math.sqrt(1.5);
       const ry = scale * 0.3 * Math.sqrt(0.5);
       const rise = scale * 0.2;
+      const hollow = PARTS[brick.partId].topStudStyle === 'hollow';
       const stud = `<path d="M ${cx - rx} ${cy - rise} L ${cx - rx} ${cy} A ${rx} ${ry} 0 0 0 ${cx + rx} ${cy} L ${cx + rx} ${cy - rise} Z" fill="${tint(color, -0.15)}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`
-        + `<ellipse cx="${cx}" cy="${cy - rise}" rx="${rx}" ry="${ry}" fill="${tint(color, 0.16)}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+        + `<ellipse cx="${cx}" cy="${cy - rise}" rx="${rx}" ry="${ry}" fill="${tint(color, 0.16)}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`
+        + (hollow ? `<ellipse data-hollow-stud="true" cx="${cx}" cy="${cy - rise}" rx="${rx * 2 / 3}" ry="${ry * 2 / 3}" fill="${tint(color, -0.62)}" stroke="${stroke}" stroke-width="${strokeWidth}"/>` : '');
       drawings.push({ vertices: boxVertices({ x: x - 0.3, y: y - 0.3, z, w: 0.6, d: 0.6, h: 0.5 }),
         normals: [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
         svg: `<g data-stud-owner="${escapeXml(brick.id)}">${stud}</g>`, marker: `<g data-stud-owner="${escapeXml(brick.id)}"/>`,

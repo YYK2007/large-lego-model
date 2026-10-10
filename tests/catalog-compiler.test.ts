@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compilePlan, type ShapePlan, type ShapePlanV2, type SlopeRun } from '../server/compiler.js';
-import { allocateInventory, billOfMaterials, buildSteps, footprint, partHeight, partTopStuds, partBottomSites, validateDesign, type Design, type InventoryItem } from '../shared/model.js';
+import { CATALOG_VERSION, WORKSPACE, allocateInventory, billOfMaterials, buildSteps, footprint, partHeight, partTopStuds, partBottomSites, validateDesign, type Design, type InventoryItem } from '../shared/model.js';
 import { BIRDHOUSE_SAMPLE } from '../shared/birdhouse-sample.js';
 import { COMPLEX_PLAN } from '../shared/complex-plan.js';
 import { COMPLEX_SAMPLE } from '../shared/complex-sample.js';
@@ -42,7 +42,7 @@ test('legacy plans preserve brick geometry while always returning explicit V2 pl
   const result = compilePlan(legacy, { prompt: 'Same shape' });
   assert.equal(result.schemaVersion, 2);
   assert.equal(result.coordinateSystem, 'stud-xy-plate-z');
-  assert.equal(result.catalogVersion, 'upright-plates-slopes-1');
+  assert.equal(result.catalogVersion, CATALOG_VERSION);
   assert.deepEqual(result.bricks.map(brick => [brick.partId, brick.z]), [['3001', 0], ['3001', 3]]);
   assert.equal(solidCells(result).size, 48);
   assert.equal(legacy.boxes[0].height, 2, 'migration does not mutate the plan');
@@ -132,7 +132,7 @@ test('repeat admission rejects nested, coincident, malformed, and out-of-workspa
   const feature = { boxes: roof().boxes, count: 2, dx: 6, dy: 0, dz: 0 };
   const invalid = [
     null, { ...feature, count: 0 }, { ...feature, count: 1.5 }, { ...feature, count: Number.MAX_SAFE_INTEGER },
-    { ...feature, dx: 0 }, { ...feature, dx: 0.5 }, { ...feature, dx: -6 }, { ...feature, dx: 22 },
+    { ...feature, dx: 0 }, { ...feature, dx: 0.5 }, { ...feature, dx: -6 }, { ...feature, dx: WORKSPACE.width - 2 },
     { ...feature, repeats: [] }, { ...feature, boxes: [] }, { ...feature, boxes: null }, { ...feature, slopes: {} },
   ];
   for (const repeat of invalid) assert.throws(() => compilePlan(v2({ repeats: [repeat] as never }), { prompt: 'Invalid motif' }));
@@ -151,7 +151,7 @@ test('new plans reject ambiguous units, invalid slope dimensions, and reserved-e
     { ...roof(), schemaVersion: 3 }, { ...roof(), coordinateSystem: 'full-brick' },
     { title: 'Legacy', description: 'Ambiguous slopes.', boxes: [], slopes: [] },
     v2(), v2({ slopes: null as unknown as SlopeRun[] }), v2({ slopes: [null as unknown as SlopeRun] }),
-    ...[{ width: 3 }, { width: 0 }, { width: 26 }, { z: 70 }, { x: -1 }, { rotation: 45 }, { kind: 'wedge' }, { colorId: '4' }, { colorId: 999 }].map(value => v2({ slopes: [{ ...run(), ...value } as SlopeRun] })),
+    ...[{ width: 3 }, { width: 0 }, { width: WORKSPACE.width + 2 }, { z: WORKSPACE.heightPlates - 2 }, { x: -1 }, { rotation: 45 }, { kind: 'wedge' }, { colorId: '4' }, { colorId: 999 }].map(value => v2({ slopes: [{ ...run(), ...value } as SlopeRun] })),
     v2({ boxes: [{ x: 0, y: 0, z: 3, width: 1, depth: 1, height: 1, colorId: 4 }], slopes: [run()] }),
     v2({ slopes: [run(), run({ rotation: 180 })] }),
   ];

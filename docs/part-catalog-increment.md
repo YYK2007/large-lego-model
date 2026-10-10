@@ -2,6 +2,33 @@
 
 Research/design checkpoint, 2026-10-10. **Implemented in checkpoint 03.** The original plan below records the source-grounded migration decision. Production now includes 3022/3020 plates and 3039 slopes, V2 plate-height coordinates, four yaw orientations, accurate high-edge slope studs, matching geometry/exports, and legacy normalization without rewriting old snapshots. See `VERIFICATION.md` for checks and remaining limits. This increment does not finish the broader part catalog.
 
+## Checkpoint 05 preview: architectural parts
+
+Catalog `upright-architecture-2` adds the twelve parts below, for **26 part types**. The workspace expands to 96×96 studs and 384 plate heights; upright four-yaw placement and the earlier V2 coordinate system remain unchanged. Old V2 snapshots retain their coordinates. These are implemented parts, with geometry/connection/render/export regression checks, rather than a promise of support for arbitrary shapes.
+
+| Canonical Rebrickable ID | Shape | Body height | LDraw reference |
+| --- | --- | --- | --- |
+| 3009 | Brick 1×6 | 3 plates | [3009.dat](https://library.ldraw.org/library/official/parts/3009.dat) |
+| 3007 | Brick 2×8 | 3 plates | [3007.dat](https://library.ldraw.org/library/official/parts/3007.dat) |
+| 3666 | Plate 1×6 | 1 plate | [3666.dat](https://library.ldraw.org/library/official/parts/3666.dat) |
+| 3460 | Plate 1×8 | 1 plate | [3460.dat](https://library.ldraw.org/library/official/parts/3460.dat) |
+| 3034 | Plate 2×8 | 1 plate | [3034.dat](https://library.ldraw.org/library/official/parts/3034.dat) |
+| 3036 | Plate 6×8 | 1 plate | [3036.dat](https://library.ldraw.org/library/official/parts/3036.dat) |
+| 3069b | Tile 1×2 with groove | 1 plate | [3069b.dat](https://library.ldraw.org/library/official/parts/3069b.dat) |
+| 3068b | Tile 2×2 with groove | 1 plate | [3068b.dat](https://library.ldraw.org/library/official/parts/3068b.dat) |
+| 3040b | Upright slope 45° 1×2 | 3 plates | [3040b.dat](https://library.ldraw.org/library/official/parts/3040b.dat) |
+| 3062b | Round brick 1×1, hollow stud | 3 plates | [3062b.dat](https://library.ldraw.org/library/official/parts/3062b.dat) |
+| 6141 | Round plate 1×1 | 1 plate | [6141.dat](https://library.ldraw.org/library/official/parts/6141.dat) |
+| 4589 | Cone 1×1, hollow stud | 3 plates | [4589.dat](https://library.ldraw.org/library/official/parts/4589.dat) |
+
+Rebrickable's canonical round-plate ID is **6141**. The live `4073` part-detail request returned 404; a colors request alone misleadingly returned an empty 200 response. Do not infer valid part identity from an empty color list or use the BrickLink alias in Rebrickable imports.
+
+Tan (19), Dark Tan (28), Dark Bluish Gray (72), and Dark Red (320) bring the palette to 13 colors. All supported part color lists were read with the configured Rebrickable key on 2026-10-10; `shared/part-colors.json` stores the dated snapshot and exact endpoint per part. Within this palette, Dark Tan is excluded for 3007, 3062b and 4589. This verifies recorded catalog combinations, not present stock or price. Import, compilation and validation enforce the same pairs.
+
+Tiles have a groove and no top studs. The narrow slope has one rear stud; round/cone pieces have one centered stud, hollow where specified. Procedural surfaces and LDraw origin transforms preserve their actual orientations. Conservative bounding-envelope collisions prevent unsupported nesting; no bar-through-hole, hinge, lateral, inverted or half-stud connection is enabled. Procedural underside tubes remain simplified; LDraw exports reference full DAT assets. Larger cone proposals 3942c and 3943b remain excluded pending their underside/connection audit.
+
+The compiler can place these exact parts explicitly, including within repeated groups, reserving their envelopes and deducting exact stock. Box packing continues to prefer structural full bricks where possible. A seven-piece fixture was visually inspected in the browser and a seven-page manual; tests check geometry, stud sites, four yaws, stock, colors, USDZ and LDraw transforms. `docs/VERIFICATION.md` records broader tests and the unresolved live generation/likeness failures. No physical build is claimed.
+
 ## Checkpoint 04: narrow plates implemented
 
 2026-10-10. Four narrow plates extend the catalog to **14 part types: seven bricks, six plates, and one upright slope**. They allow one-stud-wide details and thin bonds that the previous two plate sizes could not pack.

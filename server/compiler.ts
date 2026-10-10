@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { PARTS, COLORS, partTopStuds, partBottomSites, SCHEMA_VERSION, COORDINATE_SYSTEM, CATALOG_VERSION, type Brick, type Design, type InventoryItem } from '../shared/model.js';
+import { PARTS, COLORS, WORKSPACE, footprint, partHeight, partTopStuds, partBottomSites, SCHEMA_VERSION, COORDINATE_SYSTEM, CATALOG_VERSION, type Brick, type Design, type InventoryItem } from '../shared/model.js';
 
 export type ShapeCutout = { x: number; y: number; z: number; width: number; depth: number; height: number };
 export type ShapeBox = { x: number; y: number; z: number; width: number; depth: number; height: number; colorId: number; cutouts?: ShapeCutout[] };
 export type SlopeRun = { kind: 'upright45'; x: number; y: number; z: number; width: number; rotation: 0 | 90 | 180 | 270; colorId: number };
-export type ShapeRepeat = { boxes?: ShapeBox[]; slopes?: SlopeRun[]; count: number; dx: number; dy: number; dz: number };
-export type ShapePlan = { title: string; description: string; boxes: ShapeBox[]; schemaVersion?: 2; coordinateSystem?: 'stud-xy-plate-z'; slopes?: SlopeRun[]; repeats?: ShapeRepeat[] };
+export type ShapePart = Omit<Brick, 'id'>;
+export type ShapeRepeat = { boxes?: ShapeBox[]; slopes?: SlopeRun[]; parts?: ShapePart[]; count: number; dx: number; dy: number; dz: number };
+export type ShapePlan = { title: string; description: string; boxes: ShapeBox[]; schemaVersion?: 2; coordinateSystem?: 'stud-xy-plate-z'; slopes?: SlopeRun[]; parts?: ShapePart[]; repeats?: ShapeRepeat[] };
 export type ShapePlanV2 = ShapePlan & { schemaVersion: 2; coordinateSystem: 'stud-xy-plate-z' };
 
 const keyAt = (x: number, y: number, z: number) => `${x},${y},${z}`;
@@ -18,23 +19,26 @@ export function compilePlan(plan: ShapePlan, options: { prompt: string; inventor
     throw new Error('The shape plan must include a title, description, and boxes array.');
   }
   const legacy = plan.schemaVersion === undefined && plan.coordinateSystem === undefined;
-  if ((!legacy && (plan.schemaVersion !== SCHEMA_VERSION || plan.coordinateSystem !== COORDINATE_SYSTEM)) || (legacy && (plan.slopes !== undefined || plan.repeats !== undefined))) throw new Error('Label new plans with schemaVersion 2 and coordinateSystem stud-xy-plate-z. Slopes and repeated features require a V2 plan.');
+  if ((!legacy && (plan.schemaVersion !== SCHEMA_VERSION || plan.coordinateSystem !== COORDINATE_SYSTEM)) || (legacy && (plan.slopes !== undefined || plan.parts !== undefined || plan.repeats !== undefined))) throw new Error('Label new plans with schemaVersion 2 and coordinateSystem stud-xy-plate-z. Slopes, explicit parts and repeated features require a V2 plan.');
+  const workspace = legacy ? { width: 24, depth: 24, heightPlates: 72 } : WORKSPACE;
+  if (plan.parts !== undefined && !Array.isArray(plan.parts)) throw new Error('Explicit parts must be an array.');
   if (plan.slopes !== undefined && !Array.isArray(plan.slopes)) throw new Error('Slope runs must be an array.');
   if (plan.repeats !== undefined && !Array.isArray(plan.repeats)) throw new Error('Repeated features must be an array.');
   const runs = plan.slopes || [];
+  const explicitParts = plan.parts || [];
   const repeats = plan.repeats || [];
   for (const repeat of repeats) {
     if (!repeat || typeof repeat !== 'object' || 'repeats' in repeat ||
       !Number.isSafeInteger(repeat.count) || repeat.count < 1 || ![repeat.dx, repeat.dy, repeat.dz].every(Number.isSafeInteger) ||
-      (repeat.boxes !== undefined && !Array.isArray(repeat.boxes)) || (repeat.slopes !== undefined && !Array.isArray(repeat.slopes)) ||
-      !(repeat.boxes?.length || repeat.slopes?.length)) throw new Error('Each repeated feature needs boxes or slopes, a positive safe-integer count, integer dx/dy/dz, and no nested repeats.');
+      (repeat.boxes !== undefined && !Array.isArray(repeat.boxes)) || (repeat.slopes !== undefined && !Array.isArray(repeat.slopes)) || (repeat.parts !== undefined && !Array.isArray(repeat.parts)) ||
+      !(repeat.boxes?.length || repeat.slopes?.length || repeat.parts?.length)) throw new Error('Each repeated feature needs boxes, slopes or parts, a positive safe-integer count, integer dx/dy/dz, and no nested repeats.');
     if (repeat.count > 1 && !repeat.dx && !repeat.dy && !repeat.dz) throw new Error('Repeated copies must move along at least one axis.');
     // A nonzero integer displacement bounds copies by the physical workspace,
     // before expansion. A huge count must not become a huge allocation or loop.
-    if (Math.abs(repeat.dx) * (repeat.count - 1) > 23 || Math.abs(repeat.dy) * (repeat.count - 1) > 23 || Math.abs(repeat.dz) * (repeat.count - 1) > 71) throw new Error('Repeated feature exceeds the 24 × 24 stud, 72 plate-height design grid.');
+    if (Math.abs(repeat.dx) * (repeat.count - 1) > workspace.width - 1 || Math.abs(repeat.dy) * (repeat.count - 1) > workspace.depth - 1 || Math.abs(repeat.dz) * (repeat.count - 1) > workspace.heightPlates - 1) throw new Error('Repeated feature exceeds the design grid.');
   }
-  if (plan.boxes.length + runs.length + repeats.length < 1) throw new Error('Use at least one shape box or slope run.');
-  function* expanded<T extends ShapeBox | SlopeRun>(initial: T[], field: 'boxes' | 'slopes'): Generator<T> {
+  if (plan.boxes.length + runs.length + explicitParts.length + repeats.length < 1) throw new Error('Use at least one shape box, slope run or explicit part.');
+  function* expanded<T extends ShapeBox | SlopeRun | ShapePart>(initial: T[], field: 'boxes' | 'slopes' | 'parts'): Generator<T> {
     yield* initial;
     for (const repeat of repeats) for (let i = 0; i < repeat.count; i++) for (const primitive of repeat[field] || []) {
       if (!primitive) { yield primitive as T; continue; }
@@ -51,7 +55,7 @@ export function compilePlan(plan: ShapePlan, options: { prompt: string; inventor
     if (legacy && raw.cutouts !== undefined) throw new Error('Box cutouts require a V2 plan with plate-height coordinates.');
     if (raw.cutouts !== undefined && !Array.isArray(raw.cutouts)) throw new Error('Box cutouts must be an array of local volumes.');
     const box = { ...raw, z: raw.z * (legacy ? 3 : 1), height: raw.height * (legacy ? 3 : 1) };
-    if (box.x < 0 || box.y < 0 || box.z < 0 || box.width < 1 || box.depth < 1 || box.height < 1 || box.x + box.width > 24 || box.y + box.depth > 24 || box.z + box.height > 72) throw new Error('Shape exceeds the 24 × 24 stud, 72 plate-height design grid.');
+    if (box.x < 0 || box.y < 0 || box.z < 0 || box.width < 1 || box.depth < 1 || box.height < 1 || box.x + box.width > workspace.width || box.y + box.depth > workspace.depth || box.z + box.height > workspace.heightPlates) throw new Error(`Shape exceeds the ${workspace.width} × ${workspace.depth} stud, ${workspace.heightPlates} plate-height design grid.`);
     const cutouts = box.cutouts || [];
     for (const cut of cutouts) {
       if (!cut || typeof cut !== 'object' || Array.isArray(cut) || 'cutouts' in cut || !['x', 'y', 'z', 'width', 'depth', 'height'].every(key => Number.isInteger(cut[key as keyof ShapeCutout])) ||
@@ -76,7 +80,7 @@ export function compilePlan(plan: ShapePlan, options: { prompt: string; inventor
   for (const run of expanded(runs, 'slopes')) {
     if (!run || run.kind !== 'upright45' || !['x', 'y', 'z', 'width', 'rotation', 'colorId'].every(key => Number.isInteger(run[key as keyof SlopeRun])) || !validColor(run.colorId) || ![0, 90, 180, 270].includes(run.rotation) || run.width < 2 || run.width % 2 !== 0) throw new Error('A slope run needs kind upright45, integer coordinates, an even width, a supported color, and yaw 0, 90, 180, or 270.');
     const width = run.rotation % 180 ? 2 : run.width, depth = run.rotation % 180 ? run.width : 2;
-    if (run.x < 0 || run.y < 0 || run.z < 0 || run.x + width > 24 || run.y + depth > 24 || run.z + 3 > 72) throw new Error('Slope run exceeds the design grid.');
+    if (run.x < 0 || run.y < 0 || run.z < 0 || run.x + width > workspace.width || run.y + depth > workspace.depth || run.z + 3 > workspace.heightPlates) throw new Error('Slope run exceeds the design grid.');
     for (let z = run.z; z < run.z + 3; z++) for (let y = run.y; y < run.y + depth; y++) for (let x = run.x; x < run.x + width; x++) {
       const key = keyAt(x, y, z);
       if (cells.has(key) || reservations.has(key)) throw new Error('A slope envelope overlaps a box or another slope run. Keep its whole 2-stud-depth, 3-plate-height envelope clear.');
@@ -87,18 +91,33 @@ export function compilePlan(plan: ShapePlan, options: { prompt: string; inventor
       fixed.push({ id: '', partId: '3039', colorId: run.colorId, x: run.x + (run.rotation % 180 ? 0 : along), y: run.y + (run.rotation % 180 ? along : 0), z: run.z, rotation: run.rotation });
     }
   }
+  for (const raw of expanded(explicitParts, 'parts')) {
+    if (!raw || typeof raw.partId !== 'string' || !Object.hasOwn(PARTS, raw.partId) || !validColor(raw.colorId) ||
+      ![raw.x, raw.y, raw.z].every(Number.isInteger) || ![0, 90, 180, 270].includes(raw.rotation)) throw new Error('Each explicit part needs a supported part ID, color, integer coordinates and yaw 0, 90, 180, or 270.');
+    if (!PARTS[raw.partId].allowedColors.includes(raw.colorId)) throw new Error(`Explicit part ${raw.partId} is not available in ${COLORS[raw.colorId].name} in the verified catalog.`);
+    const brick: Brick = { id: '', partId: raw.partId, colorId: raw.colorId, x: raw.x, y: raw.y, z: raw.z, rotation: raw.rotation };
+    const { width, depth } = footprint(brick), height = partHeight(brick);
+    if (brick.x < 0 || brick.y < 0 || brick.z < 0 || brick.x + width > workspace.width || brick.y + depth > workspace.depth || brick.z + height > workspace.heightPlates) throw new Error('Explicit part exceeds the design grid.');
+    for (let z = brick.z; z < brick.z + height; z++) for (let y = brick.y; y < brick.y + depth; y++) for (let x = brick.x; x < brick.x + width; x++) {
+      const key = keyAt(x, y, z);
+      if (cells.has(key) || reservations.has(key)) throw new Error('An explicit part envelope overlaps a box, slope or another explicit part. Keep its entire footprint and height clear.');
+      reservations.add(key);
+    }
+    fixed.push(brick);
+  }
   const available = new Map<string, number>();
   for (const item of options.inventory || []) {
     if (!item || typeof item.partId !== 'string' || !Object.hasOwn(PARTS, item.partId) || !validColor(item.colorId) || !Number.isSafeInteger(item.quantity) || item.quantity < 0) throw new Error('Invalid inventory part, color, or quantity.');
+    if (!PARTS[item.partId].allowedColors.includes(item.colorId)) throw new Error(`Inventory contains an unverified part/color pair: ${item.partId} in ${COLORS[item.colorId].name}.`);
     const key = `${item.partId}:${item.colorId}`;
     const quantity = (available.get(key) || 0) + item.quantity;
     if (!Number.isSafeInteger(quantity)) throw new Error('Combined inventory quantity exceeds exact integer precision.');
     available.set(key, quantity);
   }
-  // Reserve all requested slopes first, so rectangular packing cannot spend their inventory.
+  // Reserve all fixed parts first, so rectangular packing cannot spend their inventory.
   if (options.ownedOnly) for (const brick of fixed) {
     const key = `${brick.partId}:${brick.colorId}`, remaining = available.get(key) || 0;
-    if (remaining < 1) throw new Error(`Cannot build the slope runs with the available inventory: missing ${COLORS[brick.colorId].name} 3039.`);
+    if (remaining < 1) throw new Error(`Cannot place the requested parts with the available inventory: missing ${COLORS[brick.colorId].name} ${brick.partId}.`);
     available.set(key, remaining - 1);
   }
   const bricks: Brick[] = [];
@@ -143,7 +162,7 @@ export function compilePlan(plan: ShapePlan, options: { prompt: string; inventor
     if (maxBricks !== undefined && bricks.length > maxBricks) throw new Error(`Design exceeds the requested ${maxBricks}-brick budget. Increase that budget or simplify the requested shape.`);
     for (const stud of partTopStuds(brick)) placedStuds.set(keyAt(stud.x, stud.y, stud.z), brick.id);
   };
-  const sizes = Object.values(PARTS).filter(part => part.kind !== 'slope' && (!legacy || legacyParts.has(part.id))).flatMap(part => ([0, 90] as const).filter(rotation => rotation === 0 || part.width !== part.depth).map(rotation => ({ part, rotation, width: rotation ? part.depth : part.width, depth: rotation ? part.width : part.depth })));
+  const sizes = Object.values(PARTS).filter(part => (part.kind === 'brick' || part.kind === 'plate') && (!legacy || legacyParts.has(part.id))).flatMap(part => ([0, 90] as const).filter(rotation => rotation === 0 || part.width !== part.depth).map(rotation => ({ part, rotation, width: rotation ? part.depth : part.width, depth: rotation ? part.width : part.depth })));
   const fixedLayers = new Map<number, Brick[]>();
   for (const brick of fixed) {
     layers.add(brick.z);
@@ -154,9 +173,13 @@ export function compilePlan(plan: ShapePlan, options: { prompt: string; inventor
   for (const z of [...layers].sort((a, b) => a - b)) {
     for (const brick of fixedLayers.get(z) || []) place(brick);
     const layer = legacy ? z / 3 : z;
-    const candidates = [...sizes].sort((a, b) => b.width * b.depth * b.part.heightPlates - a.width * a.depth * a.part.heightPlates || (layer % 2 ? b.width - a.width : b.depth - a.depth));
+    // Prefer full-height structural bricks before broad thin plates when both fit.
+    // Otherwise a large plate beside a brick creates staggered support heights
+    // that no later rectangular layer can bridge. Thin bands still use plates.
+    const candidates = [...sizes].sort((a, b) => b.part.heightPlates - a.part.heightPlates || b.width * b.depth * b.part.heightPlates - a.width * a.depth * a.part.heightPlates || (layer % 2 ? b.width - a.width : b.depth - a.depth));
     const candidateBrick = (candidate: typeof sizes[number], x: number, y: number, colorId: number): Brick => ({ id: '', partId: candidate.part.id, rotation: candidate.rotation, colorId, x, y, z });
     const fits = (candidate: typeof sizes[number], x: number, y: number, colorId: number, reservedPart?: string) => {
+      if (!candidate.part.allowedColors.includes(colorId)) return false;
       if (options.ownedOnly && (available.get(`${candidate.part.id}:${colorId}`) || 0) - Number(candidate.part.id === reservedPart) <= 0) return false;
       for (let dz = 0; dz < candidate.part.heightPlates; dz++) for (let dy = 0; dy < candidate.depth; dy++) for (let dx = 0; dx < candidate.width; dx++) if (cells.get(keyAt(x + dx, y + dy, z + dz)) !== colorId) return false;
       return true;

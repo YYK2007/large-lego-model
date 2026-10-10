@@ -7,7 +7,10 @@ import { HOLLOW_ROOM_PLAN } from './fixtures/hollow-room-plan.js';
 
 const validPlan = { schemaVersion: 2, coordinateSystem: 'stud-xy-plate-z', title: 'Test sculpture', description: 'A volume for checking request admission.', boxes: [{ x: 0, y: 0, z: 0, width: 4, depth: 4, height: 9, colorId: 4 }], slopes: [] };
 const invalidPlan = { ...validPlan, boxes: [] };
+const replaceBoxes = (boxes: unknown[]) => ({ edits: [{ op: 'replace', path: '/boxes', valueJson: JSON.stringify(boxes) }] });
 const responseFor = (plan: unknown) => new Response(JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: JSON.stringify(plan) }] }, finishReason: 'STOP' }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+const originalSubject = (init: RequestInit) => JSON.parse(String(init.body)).generationConfig.responseJsonSchema.properties.kind
+  ? responseFor({ kind: 'original', name: 'Original sculpture', location: '', aliases: [] }) : undefined;
 
 function isolateCredentials(t: TestContext, model = 'gemini-3.8-flash') {
   const key = process.env.GEMINI_API_KEY, previousModel = process.env.GEMINI_MODEL;
@@ -28,15 +31,17 @@ test('generation announces actual stages and uses documented low thinking withou
   t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
     calls++;
     requestBody = JSON.parse(String(init.body));
+    const classification = originalSubject(init);
+    if (classification) { assert.equal(events.at(-1)?.stage, 'researching'); return classification; }
     assert.equal(events.at(-1)?.stage, 'planning', 'planning is visible before the provider request');
     return responseFor(validPlan);
   });
   const result = await generateDesign({ prompt: 'A red sculpture' }, event => events.push(event));
   assert.equal(result.bricks.length, 6);
-  assert.equal(calls, 1);
-  assert.deepEqual(events, [{ stage: 'planning', attempt: 1, maxAttempts: 2 }, { stage: 'checking', attempt: 1, maxAttempts: 2 }]);
+  assert.equal(calls, 2, 'Subject identification precedes the single plan');
+  assert.deepEqual(events, [{ stage: 'researching', attempt: 1, maxAttempts: 2 }, { stage: 'planning', attempt: 1, maxAttempts: 2 }, { stage: 'checking', attempt: 1, maxAttempts: 2 }]);
   assert.equal(requestBody.generationConfig.thinkingConfig.thinkingLevel, 'LOW');
-  assert.equal(requestBody.generationConfig.maxOutputTokens, 10000);
+  assert.equal(requestBody.generationConfig.maxOutputTokens, 14000);
   const brief = JSON.parse(requestBody.contents[0].parts[0].text.split('\n')[0]);
   assert.equal(Object.hasOwn(brief, 'budget'), false);
   assert.equal(Object.hasOwn(brief, 'maxBricks'), false, 'an omitted user limit must stay omitted at the provider boundary');
@@ -46,6 +51,7 @@ test('an explicitly requested large piece limit reaches the provider unchanged',
   isolateCredentials(t);
   let brief: Record<string, unknown> = {};
   t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+    const classification = originalSubject(init); if (classification) return classification;
     const request = JSON.parse(String(init.body));
     brief = JSON.parse(request.contents[0].parts[0].text.split('\n')[0]);
     return responseFor(validPlan);
@@ -64,6 +70,7 @@ test('the provider can return repeated structural groups which become connected,
     ],
   }] };
   t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+    const classification = originalSubject(init); if (classification) return classification;
     const request = JSON.parse(String(init.body));
     assert.ok(request.generationConfig.responseJsonSchema.properties.repeats.items.properties.boxes);
     return responseFor(repeatedPlan);
@@ -83,6 +90,7 @@ test('the provider can return repeated structural groups which become connected,
 test('provider-local cutouts survive schema guidance and final generation admission', async t => {
   isolateCredentials(t);
   t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+    const classification = originalSubject(init); if (classification) return classification;
     const request = JSON.parse(String(init.body));
     const schema = request.generationConfig.responseJsonSchema;
     assert.ok(schema.properties.boxes.items.properties.cutouts.items.properties.height);
@@ -100,21 +108,41 @@ test('one rejected plan may be repaired, with checker feedback and distinct prog
   const events: GenerationProgress[] = [];
   const bodies: Record<string, any>[] = [];
   t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+    const classification = originalSubject(init); if (classification) return classification;
     bodies.push(JSON.parse(String(init.body)));
-    return responseFor(bodies.length === 1 ? invalidPlan : validPlan);
+    return responseFor(bodies.length === 1 ? invalidPlan : replaceBoxes(validPlan.boxes));
   });
   await generateDesign({ prompt: 'A red sculpture' }, event => events.push(event));
   assert.equal(bodies.length, 2);
-  assert.match(JSON.stringify(bodies[1].contents), /Checker feedback.*at least one shape box or slope run/);
-  assert.deepEqual(events.map(event => `${event.stage}:${event.attempt}/${event.maxAttempts}`), ['planning:1/2', 'checking:1/2', 'repairing:2/2', 'planning:2/2', 'checking:2/2']);
+  assert.ok(bodies[1].generationConfig.responseJsonSchema.properties.edits);
+  assert.equal(bodies[1].generationConfig.maxOutputTokens, 6000);
+  assert.match(bodies[1].contents[0].parts[0].text.split('\n').slice(1).join('\n'), /Checker feedback.*at least one shape box/);
+  assert.deepEqual(events.map(event => `${event.stage}:${event.attempt}/${event.maxAttempts}`), ['researching:1/2', 'planning:1/2', 'checking:1/2', 'repairing:2/2', 'planning:2/2', 'checking:2/2']);
 });
 
-test('two invalid plans stop without launching a third billed request', async t => {
+test('two invalid plans stop without launching a third plan after subject identification', async t => {
   isolateCredentials(t);
   let calls = 0;
-  t.mock.method(globalThis, 'fetch', async () => { calls++; return responseFor(invalidPlan); });
+  t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => { calls++; return originalSubject(init) || responseFor(calls === 2 ? invalidPlan : replaceBoxes([])); });
   await assert.rejects(generateDesign({ prompt: 'A red sculpture' }), (error: unknown) => error instanceof GenerationError && error.status === 422 && error.checks.length === 2 && /two attempts/.test(error.message));
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
+});
+
+test('a syntactically invalid first plan requests one complete regeneration because it cannot be patched', async t => {
+  isolateCredentials(t);
+  const bodies: Record<string, any>[] = [];
+  t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+    const classification = originalSubject(init); if (classification) return classification;
+    bodies.push(JSON.parse(String(init.body)));
+    return bodies.length === 1
+      ? new Response(JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: '{broken JSON' }] }, finishReason: 'STOP' }] }), { headers: { 'content-type': 'application/json' } })
+      : responseFor(validPlan);
+  });
+  assert.equal(validateDesign(await generateDesign({ prompt: 'A red sculpture' })).valid, true);
+  assert.equal(bodies.length, 2);
+  assert.ok(bodies[1].generationConfig.responseJsonSchema.properties.boxes);
+  assert.equal(bodies[1].generationConfig.responseJsonSchema.properties.edits, undefined);
+  assert.equal(bodies[1].generationConfig.maxOutputTokens, 14000);
 });
 
 test('provider failures are not retried by the SDK or mistaken for repairable geometry', async t => {
@@ -124,7 +152,7 @@ test('provider failures are not retried by the SDK or mistaken for repairable ge
   t.mock.method(globalThis, 'fetch', async () => { calls++; return new Response(JSON.stringify({ error: { code: 503, message: 'Test unavailable', status: 'UNAVAILABLE' } }), { status: 503 }); });
   await assert.rejects(generateDesign({ prompt: 'A red sculpture' }, event => events.push(event)), (error: unknown) => error instanceof GenerationError && error.status === 502);
   assert.equal(calls, 1);
-  assert.deepEqual(events.map(event => event.stage), ['planning']);
+  assert.deepEqual(events.map(event => event.stage), ['researching']);
 });
 
 test('a provider 504 is identified as a timeout without blaming credentials or retrying it', async t => {
@@ -143,7 +171,7 @@ test('exhausted provider quota is reported as HTTP 429 and is not retried', asyn
   assert.equal(calls, 1);
 });
 
-test('the overall deadline aborts a stalled provider request at 60 seconds', async t => {
+test('the overall deadline aborts even a stalled subject-identification request at 90 seconds', async t => {
   isolateCredentials(t);
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
   let started!: () => void;
@@ -157,9 +185,9 @@ test('the overall deadline aborts a stalled provider request at 60 seconds', asy
       started();
     });
   });
-  const rejected = assert.rejects(generateDesign({ prompt: 'A red sculpture' }), (error: unknown) => error instanceof GenerationError && error.status === 504 && /60-second/.test(error.message));
+  const rejected = assert.rejects(generateDesign({ prompt: 'A red sculpture' }), (error: unknown) => error instanceof GenerationError && error.status === 504 && /90-second/.test(error.message));
   await startedPromise;
-  t.mock.timers.tick(60_000);
+  t.mock.timers.tick(90_000);
   await rejected;
   assert.equal(calls, 1);
   assert.equal(aborted, true);
@@ -170,20 +198,23 @@ test('a late invalid response does not start a repair with only five seconds rem
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
   let calls = 0;
   const events: GenerationProgress[] = [];
-  t.mock.method(globalThis, 'fetch', async () => { calls++; t.mock.timers.tick(55_000); return responseFor(invalidPlan); });
+  t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => { calls++; const classification = originalSubject(init); if (classification) return classification; t.mock.timers.tick(85_000); return responseFor(invalidPlan); });
   await assert.rejects(generateDesign({ prompt: 'A red sculpture' }, event => events.push(event)), (error: unknown) => error instanceof GenerationError && error.status === 504 && /not enough time/.test(error.message));
-  assert.equal(calls, 1);
-  assert.deepEqual(events.map(event => event.stage), ['planning', 'checking']);
+  assert.equal(calls, 2);
+  assert.deepEqual(events.map(event => event.stage), ['researching', 'planning', 'checking']);
 });
 
-test('the repair shares the original deadline instead of receiving another full minute', async t => {
+test('classification, first plan, and repair share one deadline without resetting the clock', async t => {
   isolateCredentials(t);
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
   let startedRepair!: () => void;
   const startedPromise = new Promise<void>(resolve => { startedRepair = resolve; });
   let calls = 0, aborted = false;
   t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
-    if (++calls === 1) { t.mock.timers.tick(35_000); return responseFor(invalidPlan); }
+    calls++;
+    const classification = originalSubject(init);
+    if (classification) { t.mock.timers.tick(20_000); return classification; }
+    if (calls === 2) { t.mock.timers.tick(35_000); return responseFor(invalidPlan); }
     return new Promise<Response>((_resolve, reject) => {
       init.signal!.addEventListener('abort', () => { aborted = true; reject(new Error('Request aborted')); }, { once: true });
       startedRepair();
@@ -191,18 +222,18 @@ test('the repair shares the original deadline instead of receiving another full 
   });
   const rejected = assert.rejects(generateDesign({ prompt: 'A red sculpture' }), (error: unknown) => error instanceof GenerationError && error.status === 504);
   await startedPromise;
-  t.mock.timers.tick(24_999);
+  t.mock.timers.tick(34_999);
   assert.equal(aborted, false);
   t.mock.timers.tick(1);
   await rejected;
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
   assert.equal(aborted, true);
 });
 
 test('thinking settings are not imposed on an unverified alternative model', async t => {
   isolateCredentials(t, 'gemini-2.5-flash');
   let requestBody: Record<string, any> = {};
-  t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => { requestBody = JSON.parse(String(init.body)); return responseFor(validPlan); });
+  t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => { const classification = originalSubject(init); if (classification) return classification; requestBody = JSON.parse(String(init.body)); return responseFor(validPlan); });
   await generateDesign({ prompt: 'A red sculpture' });
   assert.equal(requestBody.generationConfig.thinkingConfig, undefined);
 });

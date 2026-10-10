@@ -107,7 +107,7 @@ test('every catalog part at all four yaws exports the correct number of actual t
   for (const part of Object.values(PARTS)) for (const rotation of [0, 90, 180, 270] as const) {
     const one = { ...design, ...v2, bricks: [{ ...design.bricks[0], partId: part.id, rotation }] };
     const meshes = exportedMeshes(archiveFiles(await generateUsdz(one)));
-    assert.equal(meshes.length, 1 + (part.kind === 'slope' ? 2 : part.width * part.depth), `${part.id} at ${rotation} degrees`);
+    assert.equal(meshes.length, 1 + (part.kind === 'tile' ? 0 : part.kind === 'slope' ? part.width : part.width * part.depth), `${part.id} at ${rotation} degrees`);
   }
 });
 
