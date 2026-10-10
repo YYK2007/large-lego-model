@@ -5,13 +5,15 @@ import { RotateCcw, Rotate3D, Grid2X2, Focus, AlertCircle } from 'lucide-react';
 import { footprint, type Design } from '../shared/model';
 import { createBrickModel } from '../shared/brick-geometry';
 
-export function BrickScene({ design, visibleIds, highlightIds }: { design: Design; visibleIds?: string[]; highlightIds?: string[] }) {
+export function BrickScene({ design, visibleIds, highlightIds, activeId, replayKey }: { design: Design; visibleIds?: string[]; highlightIds?: string[]; activeId?: string; replayKey?: number }) {
   const host = useRef<HTMLDivElement>(null);
-  const actions = useRef<{ reset(): void; top(): void; rotate(value: boolean): void } | null>(null);
+  const actions = useRef<{ reset(): void; front(): void; top(): void; rotate(value: boolean): void } | null>(null);
   const [rotating, setRotating] = useState(false);
   const [error, setError] = useState(false);
-  const visibility = useRef({ visibleIds, highlightIds });
-  visibility.current = { visibleIds, highlightIds };
+  const visibility = useRef({ visibleIds, highlightIds, activeId });
+  visibility.current = { visibleIds, highlightIds, activeId };
+  const placementAnimation = useRef({ id: activeId, start: 0 });
+  useEffect(() => { placementAnimation.current = { id: activeId, start: performance.now() }; }, [activeId, replayKey, design]);
   const brickMeshes = useRef<THREE.Group[]>([]);
 
   useEffect(() => {
@@ -70,20 +72,32 @@ export function BrickScene({ design, visibleIds, highlightIds }: { design: Desig
     }
     scene.add(model);
     const distance = Math.max(height * 2.6, width * 2.7, 28);
-    const reset = () => { camera.position.set(distance * 0.46, height / 2 + distance * 0.36, distance * 0.85); controls.target.set(0, height * 0.47, 0); controls.update(); };
+    const reset = () => { camera.up.set(0, 1, 0); camera.position.set(distance * 0.46, height / 2 + distance * 0.36, distance * 0.85); controls.target.set(0, height * 0.47, 0); controls.update(); };
     reset();
-    actions.current = { reset, top: () => { camera.position.set(0.01, Math.max(height + 20, distance), 0.01); controls.target.set(0, 0, 0); controls.update(); }, rotate: value => { controls.autoRotate = value; } };
+    actions.current = {
+      reset,
+      front: () => { camera.up.set(0, 1, 0); camera.position.set(0, height * 0.47 + 0.1, distance); controls.target.set(0, height * 0.47, 0); controls.update(); },
+      top: () => { camera.up.set(0, 0, -1); camera.position.set(0, Math.max(height + 20, distance), 0.001); controls.target.set(0, 0, 0); controls.update(); },
+      rotate: value => { controls.autoRotate = value; },
+    };
     setRotating(false);
     const observer = new ResizeObserver(() => { const { width, height } = container.getBoundingClientRect(); renderer.setSize(width, height); camera.aspect = width / height; camera.updateProjectionMatrix(); });
     observer.observe(container);
     let frame = 0;
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     const animate = () => {
       frame = requestAnimationFrame(animate);
-      const { visibleIds: visible, highlightIds: highlight } = visibility.current;
+      const { visibleIds: visible, highlightIds: highlight, activeId: active } = visibility.current;
       for (const group of brickMeshes.current) {
         group.visible = !visible || visible.includes(group.userData.brickId);
         const faded = !!highlight && !highlight.includes(group.userData.brickId);
+        const selected = group.userData.brickId === active;
+        const elapsed = Math.min(1, (performance.now() - placementAnimation.current.start) / 550);
+        // This display offset never changes saved placements. Current steps add
+        // upright bricks above earlier layers, with an unobstructed approach.
+        group.position.y = selected && !reducedMotion.matches && placementAnimation.current.id === active ? 2 * (1 - elapsed) ** 3 : 0;
         for (const child of group.children) if (child instanceof THREE.Mesh) { const material = child.material as THREE.MeshStandardMaterial; material.transparent = faded; material.opacity = faded ? 0.3 : 1; material.depthWrite = !faded; }
+        for (const child of group.children) if (child instanceof THREE.LineSegments) { const material = child.material as THREE.LineBasicMaterial; material.color.set(selected ? 0x006dff : 0x142a26); material.opacity = selected ? 1 : 0.13; }
       }
       controls.update(); renderer.render(scene, camera);
     };
@@ -97,10 +111,10 @@ export function BrickScene({ design, visibleIds, highlightIds }: { design: Desig
     <div className="scene-guide"><span className="tiny-dot" /> DRAG TO EXPLORE <span className="guide-separator">/</span> SCROLL TO ZOOM</div>
     <div className="scene-tools">
       <button title="Reset camera" aria-label="Reset camera" onClick={() => actions.current?.reset()}><Focus size={17} /></button>
-      <button title="View from above" aria-label="View from above" onClick={() => actions.current?.top()}><Grid2X2 size={17} /></button>
+      <button title="Top view: +X right, +Y down" aria-label="View from above" onClick={() => { actions.current?.top(); actions.current?.rotate(false); setRotating(false); }}><Grid2X2 size={17} /></button>
       <span />
       <button title="Auto rotate" aria-label="Auto rotate" aria-pressed={rotating} className={rotating ? 'active' : ''} onClick={() => { actions.current?.rotate(!rotating); setRotating(!rotating); }}><Rotate3D size={18} /></button>
-      <button title="Return to front" aria-label="Return to front" onClick={() => { actions.current?.reset(); actions.current?.rotate(false); setRotating(false); }}><RotateCcw size={16} /></button>
+      <button title="Return to front" aria-label="Return to front" onClick={() => { actions.current?.front(); actions.current?.rotate(false); setRotating(false); }}><RotateCcw size={16} /></button>
     </div>
   </div>;
 }

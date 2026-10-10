@@ -71,7 +71,7 @@ if (existsSync(resolve('dist'))) {
 }
 app.use((error: Error & { status?: number; type?: string }, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const status = error instanceof GenerationError ? error.status : error.status === 413 ? 413 : error instanceof SyntaxError ? 400 : 500;
-  res.status(status).json({ error: status === 500 ? 'Something went wrong. Your current design is safe; try again.' : status === 413 ? 'That upload is too large. Use an image under 5 MB.' : error.message });
+  res.status(status).json({ error: status === 500 ? 'Something went wrong. Your current design is safe; try again.' : status === 413 ? 'That upload is too large. Use an image under 5 MB.' : error.message, ...(error instanceof GenerationError && error.checks.length ? { checks: error.checks } : {}) });
 });
 const port = Number(process.env.PORT) || 3001;
 const host = process.env.HOST || '127.0.0.1';

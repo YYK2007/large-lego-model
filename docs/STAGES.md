@@ -4,13 +4,19 @@ Architecture: **Large Lego Model**. Provisional product name: Sprout. Turn an id
 
 ## Branch and review process
 
-`main` holds the starting research. Implementation lives on `feat/brick-studio`. Each completed stage receives a commit and a checkpoint entry here. No remote repository or public deployment has been created.
+`main` holds the starting research. Implementation lives on `feat/brick-studio`. Each completed stage receives a commit and a checkpoint entry here. The private collaboration repository is on GitHub; the app currently runs locally.
 
 ## 1. Website and canonical brick model
 
 Review: open the local studio; choose a genuinely volumetric sample; orbit/zoom and inspect details from multiple sides; inspect the parts table; step through assembly; download a PDF, CSV, LDraw model, and native USDZ. All outputs must use the same placements. Sample designs are explicitly identified as samples. Flat reliefs do not meet the representative-model acceptance criteria.
 
 Verification: schema validation, no overlapping brick volumes, supported upper layers, one connected final assembly, exact counts, consistent instruction order, browser and PDF visual checks. These are geometric checks, not physical load/stability certification.
+
+Design acceptance: Windows XP is the leading visual reference for the Frutiger Aero / Y2K workshop and manual: blue rounded window frames, sky/grass colors, gloss, friendly icons, and depth. Compare the assembly workflow to observed LEGO Builder app screens and official walkthroughs; improve piece callouts, orientation, placement clarity, and progress based on that evidence. Record what was inspected, and do not claim a hands-on mobile-app test from a marketing page alone.
+
+## Required catalog expansion
+
+The finished objective includes more than rectangular bricks. After validating the first volumetric generator, add plates, tiles, and upright slopes; then curved pieces and wedges; then verified wheels, hinges, brackets, and connector families. For each increment, review a model that actually uses those parts and verify the same geometry and connections in generation, inventory, viewer, exports, and instructions. Preserve exact part/color IDs and counts. See `docs/complex-builds.md` for the coordinate, connection, and assembly requirements. The current seven-brick catalog does not satisfy this goal by itself.
 
 ## 2. AI, image inspiration, and owned inventory
 
@@ -28,10 +34,12 @@ Verification: exercise routing, duplicate handling, media intake, per-conversati
 
 Review: rehearse prompt → preview → revision → parts → instructions, including an inventory-constrained build. Confirm sponsor requirements with the current organizer guide.
 
-Later: ElevenLabs incoming/outgoing voice notes, physical stability solver and real build testing, broader part geometry, AR, multi-person collaborative assembly. Gemini powers text, image understanding, and revisions in the main path. These later features are not included in the initial claim of completion.
+Later: ElevenLabs incoming/outgoing voice notes, physical stability solver and real build testing, AR, multi-person collaborative assembly. Broader part geometry is a required staged expansion described above. Gemini powers text, image understanding, and revisions in the main path. These later features are not included in the initial claim of completion.
 
 ## Checkpoints
 
 - Baseline: existing research preserved; staged plan recorded. Implementation not started.
-- Repository: private `https://github.com/YYK2007/sprout-hacknc2026`, `main` baseline and `feat/brick-studio` review branch. JSA30 invited with write access; acceptance is separate.
+- Repository: private `https://github.com/YYK2007/sprout-hacknc2026`, `main` baseline and `feat/brick-studio` review branch. JSA30 now has write access, confirmed through the GitHub collaborator permission endpoint.
 - Checkpoint 01 (`checkpoint-01-studio`): local studio, geometric validation, exact BOM/source allocation, cumulative steps, PDF/CSV/LDraw/PNG exports, and USDZ export implemented. The 97-brick rocket is volumetric. 50 automated checks and the production build pass; PDF and desktop UI inspected. Gemini/image and Photon adapters exist but await live credentials. Broader sample complexity and mobile QA continue on the feature branch.
+
+- Checkpoint 02 (`checkpoint-02-xp-assembly`): XP-inspired workshop and manual; four volumetric samples (flower 118, rocket 97, tree 119, duck 91 pieces); per-piece assembly tray, replay, placement map, and saved viewing progress; corrected SVG occlusion. 57 tests and the production build pass; desktop, 390-pixel mobile, and exported PDF inspected. Live Gemini text generation, exact recolor, and a corrected owned-only four-layer pyramid passed. Two image-inspired attempts failed (geometry rejection and provider failure); reliability work remains. Plates/slopes have a source-checked implementation plan and are not yet enabled.

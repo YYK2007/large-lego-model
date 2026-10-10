@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { inflateSync } from 'node:zlib';
+import { deflateSync, inflateSync } from 'node:zlib';
+import sharp from 'sharp';
 import { generateManualPdf } from '../server/manual';
 import { renderDesignSvg } from '../shared/illustration';
 import { validateDesign, type Design } from '../shared/model';
@@ -16,18 +17,37 @@ const design: Design = {
   ],
 };
 
-// Read PDFKit's compressed drawing streams so assertions test actual exported text.
+// PDF streams are binary: a final CR byte belongs to the data, not the following
+// newline. PDFKit writes direct /Length values, so read those exact byte ranges.
 function pdfText(pdf: Buffer): string {
   const raw = pdf.toString('latin1');
   let extracted = '';
-  for (const match of raw.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
-    try {
-      const stream = inflateSync(Buffer.from(match[1], 'latin1')).toString('latin1');
-      extracted += [...stream.matchAll(/<([\da-f]+)>/gi)].map((value) => Buffer.from(value[1], 'hex').toString('latin1')).join('') + '\n';
-    } catch { /* Non-deflated streams contain no PDFKit page text. */ }
+  const starts = /(?:^|\n)stream\r?\n/g;
+  let match: RegExpExecArray | null;
+  while ((match = starts.exec(raw))) {
+    const dictionary = raw.slice(raw.lastIndexOf(' obj', match.index) + 4, match.index);
+    const length = dictionary.match(/\/Length\s+(\d+)\b/);
+    assert.ok(length, 'PDFKit stream must declare its byte length');
+    const start = match.index + match[0].length;
+    const end = start + Number(length[1]);
+    assert.match(raw.slice(end), /^\r?\nendstream\b/, 'Stream length must reach the endstream delimiter');
+    const bytes = pdf.subarray(start, end);
+    const stream = (/\/Filter\s+\/FlateDecode\b/.test(dictionary) ? inflateSync(bytes) : bytes).toString('latin1');
+    extracted += [...stream.matchAll(/<([\da-f]+)>/gi)].map((value) => Buffer.from(value[1], 'hex').toString('latin1')).join('') + '\n';
+    starts.lastIndex = end;
   }
   return extracted;
 }
+
+test('PDF text extraction preserves a final carriage-return byte in compressed data', () => {
+  const instruction = 'BT <4c6974746c6520746f776572> Tj ET\n%';
+  const bytes = Array.from({ length: 256 }, (_, suffix) => deflateSync(Buffer.from(instruction + String.fromCharCode(suffix), 'latin1')))
+    .find((value) => value.at(-1) === 13)!;
+  assert.ok(bytes, 'Fixture must end in a literal CR byte');
+  const pdf = Buffer.concat([Buffer.from(`1 0 obj\n<< /Length ${bytes.length} /Filter /FlateDecode >>\nstream\n`), bytes,
+    Buffer.from('\nendstream\nendobj\n')]);
+  assert.equal(pdfText(pdf).trim(), 'Little tower');
+});
 
 test('layer illustrations retain the full-model camera and exact geometry', () => {
   const full = renderDesignSvg(design);
@@ -45,6 +65,48 @@ test('highlights preserve new-brick color and escape labels', () => {
   assert.match(svg, /data-brick-id="base-a" data-highlighted="false"/);
   assert.ok(svg.includes('A &lt;script&gt; &amp; &quot;B&quot;'));
   assert.ok(!svg.includes('<script>'));
+});
+
+test('covered studs disappear only when the covering brick is visible', () => {
+  const full = renderDesignSvg(design);
+  assert.ok(!full.includes('data-stud-owner="base-a"'));
+  assert.equal((full.match(/data-stud-owner="join"/g) ?? []).length, 3);
+  const partial = renderDesignSvg(design, { visibleIds: ['base-a'] });
+  assert.equal((partial.match(/data-stud-owner="base-a"/g) ?? []).length, 2);
+});
+
+test('solid staggered walls render solid side faces, without back faces or studs bleeding through', async () => {
+  const solid: Design = { ...design, id: 'occlusion-regression', bricks: [] };
+  for (let z = 0; z < 3; z++) {
+    if (z === 1) continue;
+    const rotated = z % 2 === 1;
+    for (let x = 0; x < 8; x += rotated ? 4 : 2) for (let y = 0; y < 8; y += rotated ? 2 : 4) {
+      solid.bricks.push({ id: `brick-${x}-${y}-${z}`, partId: '3001', colorId: 25, x, y, z, rotation: rotated ? 90 : 0 });
+    }
+  }
+  // Mixed sizes and orientations expose ordering errors that uniform tiling hides.
+  const middle: [string, number, number, 0 | 90][] = [
+    ['3002', 0, 0, 90], ['3002', 3, 0, 0], ['3002', 5, 0, 90],
+    ['3001', 0, 2, 0], ['3010', 2, 2, 0], ['3001', 5, 2, 0], ['3010', 7, 2, 0],
+    ['3001', 3, 3, 0], ['3002', 0, 6, 90], ['3002', 5, 6, 90], ['3004', 3, 7, 90],
+  ];
+  for (const [partId, x, y, rotation] of middle) solid.bricks.push({ id: `middle-${x}-${y}`, partId, colorId: 25, x, y, z: 1, rotation });
+  assert.equal(validateDesign(solid).valid, true);
+  const { data, info } = await sharp(Buffer.from(renderDesignSvg(solid))).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  // Independent analytic front-face samples of the complete 8 x 8 x 3 solid.
+  // Avoid edges, seams and the top surface, where antialiasing/studs are expected.
+  const scale = 524 / (8 + 3.18 * 1.2);
+  const offsetY = 39 + 3.18 * 1.2 * scale;
+  const pixel = (x: number, y: number, z: number) => {
+    const px = Math.round(500 + (x - y) * Math.sqrt(3) / 2 * scale);
+    const py = Math.round(offsetY + ((x + y) / 2 - z * 1.2) * scale);
+    const start = (py * info.width + px) * info.channels;
+    return Array.from(data.subarray(start, start + 4));
+  };
+  for (const z of [0.35, 0.65, 1.35, 1.65, 2.35, 2.65]) for (let position = 0.4; position < 8; position += 0.5) {
+    assert.deepEqual(pixel(position, 8, z), [216, 117, 20, 255], `Wrong front wall at x=${position}, z=${z}`);
+    assert.deepEqual(pixel(8, position, z), [178, 97, 17, 255], `Wrong side wall at y=${position}, z=${z}`);
+  }
 });
 
 test('PDF has all step coordinates, complete BOM, inventory shortages, and numbered pages', async () => {

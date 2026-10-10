@@ -4,7 +4,7 @@ import type { Design } from './model.js';
 export const ROCKET_SAMPLE: Design = {
   id: "sample-rocket",
   title: "Orbit explorer",
-  description: "A volumetric retro rocket with four fins, blue windows on four sides, a stepped red nose, and a wide brick plinth. A curated sample.",
+  description: "A volumetric retro rocket with four fins, blue windows on four sides, a stepped red nose, and a wide brick plinth. A curated prototype; physical stability is untested.",
   source: "sample",
   prompt: "Sample design: a volumetric red, white, and blue retro rocket.",
   createdAt: "2026-10-10T12:00:00.000Z",

@@ -16,7 +16,7 @@ npm run dev
 
 Open [http://127.0.0.1:5173](http://127.0.0.1:5173). The API runs on port 3001. The website updates automatically during frontend edits; restart `npm run dev` after server/shared-code changes. Credentials are re-read from `.env` when used.
 
-The four curated sample builds work without API keys. They are labeled samples; they are never substituted for an AI response. Start with a sample, rotate it, open **Build steps** and **Pieces**, add some owned bricks, then use **Let's build** to download the matching PDF, CSV, LDraw model, and preview.
+The four curated sample builds work without API keys. They are labeled samples; they are never substituted for an AI response. Start with a sample, rotate it, open **Build steps** and **Pieces**, add some owned bricks, then use **Let's build** to download the matching PDF, CSV, LDraw model, native USDZ, and preview. The build guide includes per-piece navigation, exact part/color quantities, a top-down placement map, replay, and saved viewing progress.
 
 ## Connect the real services
 
@@ -55,9 +55,9 @@ All outputs derive from the same placements. Exported/shared snapshots receive n
 
 - Seven ordinary upright rectangular brick sizes, nine colors, quarter-turn rotation, a 24 × 24 × 24 grid, and at most 160 bricks. The compiler is a heuristic and may reject a feasible inventory rather than find an optimal packing.
 - Geometric support and connectivity are checked. Clutch strength, torque, tipping, material wear, and intermediate physical stability are **not simulated**. A real hand-build remains part of demo validation.
-- Plates, hinges, minifigures, specialty geometry, moving mechanisms, arbitrary mesh conversion, and collaborative assembly are future work.
+- A broader catalog is a required next increment: plates and upright slopes first, then tiles, curves, wedges, and verified moving/connector families. Current production generation still supports only the seven rectangular brick sizes. Minifigures, arbitrary mesh conversion, and collaborative assembly remain unimplemented.
 - Rebrickable imports the endpoint's available set inventory. It excludes spares/unsupported parts and does not automatically resolve alternate historical inventory versions. Verify counts against the physical set.
-- API-free samples and local exports are tested. Live Gemini generation, authenticated Rebrickable lookup, Photon delivery, and iPhone behavior require credentials/device verification; no live success is claimed yet.
+- Live Gemini text generation and one exact recolor revision passed; the 71-piece rocket retained every part placement while its red pieces became green. After fixing a checker issue exposed by the first owned-stock run, a repeat produced the requested four-layer pyramid with zero shortages; see the verification record for both outcomes. Rebrickable, Photon delivery, and target-iPhone behavior still need live verification.
 - The API binds to localhost by default. Before public hosting, add user authentication, quotas, durable shared storage, and deployment-specific origin controls. This checkpoint is a local/team prototype.
 
 ## Team workflow
@@ -79,6 +79,9 @@ npm start
 ## Research and attribution
 
 - [Generation options and the BrickGPT decision](docs/generation-research.md)
+- [Observed LEGO Builder screens and assembly UX](docs/lego-builder-ux.md)
+- [Complex models and catalog expansion](docs/complex-builds.md)
+- [First plate and slope increment](docs/part-catalog-increment.md)
 - [Parts, geometry, inventory provenance, and instructions](docs/parts-research.md)
 - [Native 3D viewing and messages](docs/imessage-3d-preview.md)
 - [HackNC / Photon setup and sources](docs/photon-setup.md)

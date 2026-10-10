@@ -1,6 +1,6 @@
 # Large Lego Model: interactive 3D in iMessage
 
-Research verified October 10, 2026. The offline USDZ exporter and Photon attachment code are implemented and locally tested. No USDZ, animation, or app-card messages have been sent or verified on a phone.
+Research verified October 10, 2026. The offline USDZ exporter, download route, web export button, and Photon attachment code are implemented locally. Artifact tests verify the exported geometry. No USDZ, animation, or app-card messages have been sent or verified on a phone.
 
 ## Recommendation
 
@@ -28,10 +28,11 @@ Apple's AR Quick Look documentation supports USDZ or Reality files and touch man
 
 Spectrum accepts file attachments from a path, URL, or buffer with explicit filename and MIME type. The prepared transport code uses a `.usdz` filename and `model/vnd.usdz+zip`. The installed `@spectrum-ts/imessage` 12.10.1 attachment path uploads generic file content; no USDZ-specific success guarantee is documented. This is a supported API shape plus an integration hypothesis that requires a real-device test. [Photon attachment API](https://photon.codes/docs/spectrum-ts/content/attachments)
 
-For a web fallback, serve the USDZ with the same MIME type. Use an anchor with `rel="ar"` and a single image/picture child to launch Quick Look from Safari, while keeping the current WebGL viewer available. WebKit documents both the MIME requirement and this link pattern. An ordinary direct file link can require an additional thumbnail tap. [WebKit's USDZ guide](https://webkit.org/blog/8421/viewing-augmented-reality-assets-in-safari-for-ios/)
+The web app serves `/api/designs/:id/model.usdz` with that MIME type. **Let's build → Native 3D model** saves a design/inventory snapshot and downloads the USDZ. The current button is a download action; opening Quick Look directly from Safari is a separate optional improvement. WebKit documents an anchor with `rel="ar"` and a single image/picture child for that flow. An ordinary direct file link can require an additional thumbnail tap. [WebKit's USDZ guide](https://webkit.org/blog/8421/viewing-augmented-reality-assets-in-safari-for-ios/)
 
 ```html
-<!-- Planned web action; the endpoint does not exist yet. -->
+<!-- Optional direct-launch UI pattern. Both file endpoints exist locally;
+     the current export button downloads the USDZ instead. -->
 <a rel="ar" href="/api/designs/DESIGN_ID/model.usdz">
   <img src="/api/designs/DESIGN_ID/preview.png" alt="Open this build in 3D" />
 </a>
@@ -62,7 +63,7 @@ Apple's `MSMessageLiveLayout` allows custom interactive transcript views and req
 1. **Shared geometry is implemented.** `shared/brick-geometry.ts` builds the exact bodies, studs, and catalog colors used by `src/BrickScene.tsx` and the native exporter. The USDZ excludes the display pedestal, UI, grid, lights, and decorative outlines.
 2. **Offline USDZ export is implemented and tested.** `server/native-model.ts` validates the design before calling Three.js `USDZExporter.parseAsync` with `quickLookCompatible: true`. Untextured `MeshStandardMaterial` keeps this path independent of browser canvas APIs. Tests export every catalog part at both rotations and all four sample designs; every geometry reference resolves. [Official Three.js exporter documentation](https://threejs.org/docs/pages/USDZExporter.html)
 3. **Scale and orientation are tested in the exported archive.** The model is Y-up, with 8 mm stud spacing and 9.6 mm layer spacing. Tests check the actual USDA transforms and vertices, rotated footprints, all bodies/studs, and uncompressed ZIP entries aligned to 64 bytes. The cosmetic body gap leaves the bottom 0.04 mm above the ground, matching the web geometry. Apple's Quick Look respects USDZ unit metadata. [Apple's asset guidance](https://developer.apple.com/videos/play/wwdc2023/10274/)
-4. **Attachment code is prepared; delivery remains untested.** After the PNG and optional web link, the adapter prepares a USDZ attachment with the correct MIME type and a caption explaining the feedback loop. Native export/delivery errors leave the earlier preview and manual available. The web download/Quick Look action should call the same exporter. A new revision has a new design ID.
+4. **Web download and attachment code are implemented; phone delivery remains untested.** The web export button and `/api/designs/:id/model.usdz` route call the same exporter. After the PNG and optional web link, the adapter prepares a USDZ attachment with the correct MIME type and a caption explaining the feedback loop. Native export/delivery errors leave the earlier preview and manual available. A new revision has a new design ID.
 5. **The feedback loop remains explicit in iMessage.** A text revision passes the current design and saved inventory to `generateDesign`, then sends the updated preview. The existing `manual` command produces instructions without inventing a viewing/approval event.
 6. **Turntable and app cards remain future work.** A turntable is optional preview media. A live card is a separate device test with the Spectrum extension installed, retaining a regular link fallback.
 
@@ -72,9 +73,9 @@ This work should not change inventory constraints, the validated model, or manua
 
 - Deliver a small known-good USDZ through the configured Photon line; open it from Messages and manipulate it with touch.
 - Deliver one exported Large Lego Model design; inspect color, orientation, studs, centering, scale, and native object/AR behavior.
-- Test the HTTPS viewer and Safari Quick Look action separately; test on the actual recipient phone rather than relying on desktop preview.
+- Test the HTTPS viewer and downloaded USDZ separately on the actual recipient phone. If a direct Safari Quick Look action is later added, test that separately too.
 - Send a revision from iMessage and confirm the new model, preserved owned inventory, and resulting PDF all correspond to the new design ID.
 - If adding GIF/video, test recipient motion settings and first-frame usefulness; do not require autoplay for comprehension.
 - If adding a live app card, test the install/fallback experience and then the existing WebGL viewer's gestures inside Spectrum. Document the tested iOS and Spectrum versions.
 
-Research, offline USDZ generation, and local artifact tests are complete. Turntable generation and live app-card integration remain unimplemented. Photon delivery and all on-device checks above remain unverified.
+Research, offline USDZ generation, local artifact tests, and the web download integration are complete. Turntable generation, a direct Safari Quick Look launch action, and live app-card integration remain unimplemented. Photon delivery and all on-device checks above remain unverified. Follow [the live test guide](live-testing.md) when credentials and a phone are available.

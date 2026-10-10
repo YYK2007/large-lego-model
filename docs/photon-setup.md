@@ -33,9 +33,9 @@ A failed generation keeps the previous design. A bare `/new` intentionally clear
 
 ## Native 3D preview
 
-The adapter now prepares a USDZ attachment from the same brick geometry as the web viewer, with real-world scale (8 mm stud pitch, 9.6 mm brick layers). Apple's Quick Look supports USDZ in Messages; opening the attachment is the planned native way to rotate the model with touch. The PNG and public web link remain fallbacks. Export is tested locally; actual Photon delivery and the recipient's Quick Look behavior still require a phone test.
+The adapter now prepares a USDZ attachment from the same brick geometry as the web viewer, with real-world scale (8 mm stud pitch, 9.6 mm brick layers). Apple's Quick Look supports USDZ in Messages; opening the attachment is the planned native way to rotate the model with touch. The PNG and public web link remain fallbacks. **Let's build → Native 3D model** downloads the same export through `/api/designs/:id/model.usdz`. Export is tested locally; actual Photon delivery and the recipient's Quick Look behavior still require a phone test.
 
-The feedback loop stays in the conversation: inspect the model, reply with a change, then send `manual` for instructions. Each revision preserves the current owned-inventory snapshot. A turntable GIF/video is optional future preview media and does not provide user-controlled rotation. Spectrum live app cards require the recipient's iMessage extension; WebGL and gestures must be tested before choosing that route. Voice memos remain a later feature. See [the source-grounded 3D preview plan](imessage-3d-preview.md) for platform limits and device checks.
+The feedback loop stays in the conversation: inspect the model, reply with a change, then send `manual` for instructions. Each revision preserves the current owned-inventory snapshot. A turntable GIF/video is optional future preview media and does not provide user-controlled rotation. Spectrum live app cards require the recipient's iMessage extension; WebGL and gestures must be tested before choosing that route. Voice memos remain a later feature. See [the source-grounded 3D preview plan](imessage-3d-preview.md) for platform limits and [the live test guide](live-testing.md) for exact steps and acceptance criteria.
 
 ## Prize and submission facts
 

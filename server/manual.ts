@@ -17,9 +17,12 @@ function text(doc: PDFKit.PDFDocument, value: string, x: number, y: number, widt
 
 function page(doc: PDFKit.PDFDocument, label: string, title: string, subtitle?: string) {
   doc.addPage();
-  doc.rect(0, 0, PAGE_WIDTH, 10).fill(doc.linearGradient(0, 0, PAGE_WIDTH, 0).stop(0, BLUE).stop(1, GREEN));
-  text(doc, 'SPROUT / BUILD SOMETHING NEW', MARGIN, 30, 370, 8, BLUE, true);
-  text(doc, label.toUpperCase(), 410, 30, 148, 8, MUTED, true);
+  doc.roundedRect(18, 15, PAGE_WIDTH - 36, 32, 9)
+    .fill(doc.linearGradient(0, 15, 0, 47).stop(0, '#57b9ff').stop(0.46, '#087bd3').stop(1, '#0752ab'));
+  doc.roundedRect(19, 16, PAGE_WIDTH - 38, 30, 8).lineWidth(0.7).strokeColor('#c1e7ff').stroke();
+  doc.moveTo(31, 18).lineTo(PAGE_WIDTH - 31, 18).strokeColor('#e1f5ff').stroke();
+  text(doc, 'SPROUT / BUILD SOMETHING NEW', MARGIN, 27, 370, 8, '#ffffff', true);
+  text(doc, label.toUpperCase(), 410, 27, 148, 8, '#e8f7ff', true);
   let titleSize = 25;
   doc.font('Helvetica-Bold').fontSize(titleSize);
   while (doc.widthOfString(title) > 522 && titleSize > 16) doc.fontSize(--titleSize);
@@ -93,10 +96,23 @@ export async function generateManualPdf(design: Design, inventory?: InventoryIte
 
   page(doc, 'Your building guide', design.title);
   text(doc, design.description.slice(0, 360), MARGIN, 100, 520, 12, MUTED);
-  doc.roundedRect(MARGIN, 169, 523, 369, 20).fill(doc.linearGradient(0, 169, 0, 538).stop(0, '#e8f8ff').stop(1, '#f3faf5'));
-  illustration(doc, design, 46, 179, 503, 346);
+  doc.roundedRect(MARGIN + 2, 172, 523, 369, 15).fill('#c8dce6');
+  doc.roundedRect(MARGIN, 169, 523, 369, 15)
+    .fill(doc.linearGradient(0, 169, 0, 214).stop(0, '#6fceff').stop(0.5, '#1586d9').stop(1, '#0751ae'));
+  doc.roundedRect(MARGIN + 1, 170, 521, 367, 14).lineWidth(1).strokeColor('#c1efff').stroke();
+  text(doc, 'FINISHED MODEL', 51, 181, 300, 9, '#ffffff', true);
+  doc.save();
+  doc.roundedRect(41, 202, 513, 331, 10).clip();
+  doc.rect(41, 202, 513, 331).fill(doc.linearGradient(0, 202, 0, 533).stop(0, '#aee1ff').stop(0.6, '#effbff').stop(1, '#f9fff5'));
+  doc.fillOpacity(0.55).ellipse(121, 236, 96, 20).fill('#ffffff');
+  doc.ellipse(456, 254, 114, 26).fill('#ffffff');
+  doc.fillOpacity(1).moveTo(41, 510).bezierCurveTo(161, 442, 367, 540, 554, 478).lineTo(554, 533).lineTo(41, 533).closePath()
+    .fill(doc.linearGradient(0, 478, 0, 533).stop(0, '#9fd86e').stop(1, '#5caf50'));
+  doc.fillOpacity(0.78).roundedRect(53, 211, 489, 314, 13).fill('#ffffff');
+  doc.restore();
+  illustration(doc, design, 46, 203, 503, 323);
   text(doc, `${design.bricks.length} BRICKS     ${steps.length} BUILD STEPS     ${bom.length} PART / COLOR TYPES`, MARGIN, 558, 523, 11, BLUE, true);
-  text(doc, 'A little imagination. A real set of pieces.', MARGIN, 595, 510, 22, INK, true);
+  text(doc, 'Your parts and assembly steps.', MARGIN, 595, 510, 22, INK, true);
   text(doc, 'Gather your parts, follow the numbered layers, and keep the front of your model facing you. Each diagram and placement is generated from this exact design.', MARGIN, 632, 500, 12, MUTED);
   if (allocation) text(doc, allocation.totalMissing
     ? `COLLECTION CHECK: ${allocation.totalMissing} ${allocation.totalMissing === 1 ? 'brick' : 'bricks'} missing. Gather the missing pieces before building.`
