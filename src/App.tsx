@@ -7,6 +7,7 @@ import { renderDesignSvg } from '../shared/illustration';
 import { BrickScene } from './BrickScene';
 import { AssemblyView } from './AssemblyView';
 import { BuildRequestError, readGenerationStream, summarizeBuildChecks, type GenerationProgress } from './generation-stream';
+import { prepareUsdzDownload } from './usdz-download';
 
 type Status = { gemini: boolean; model: string; rebrickable: boolean; photon: boolean };
 type Photo = { data: string; mimeType: string; name: string };
@@ -65,6 +66,7 @@ export function App() {
   const [inventoryBusy, setInventoryBusy] = useState(false);
   const [manualBusy, setManualBusy] = useState(false);
   const [modelBusy, setModelBusy] = useState(false);
+  const modelExportInFlight = useRef(false);
   const [modelDownload, setModelDownload] = useState<{ url: string; title: string; size: number } | null>(null);
   const [estimates, setEstimates] = useState<InventoryItem[] | null>(null);
   const [estimateNote, setEstimateNote] = useState('');
@@ -139,26 +141,30 @@ export function App() {
   async function exportDesign(format: string) {
     const manual = format === 'manual.pdf';
     const nativeModel = format === 'model.usdz';
-    if (manual && manualBusy || nativeModel && modelBusy) return;
+    if (manual && manualBusy || nativeModel && modelExportInFlight.current) return;
     const requestedDesign = design;
     setError(''); setNotice('');
     if (manual) { setManualBusy(true); setNotice('Preparing your instruction PDF. You can keep using the studio.'); }
-    if (nativeModel) { setModelBusy(true); setNotice(`Preparing the 3D model for “${requestedDesign.title}”.`); }
+    if (nativeModel) { modelExportInFlight.current = true; setModelBusy(true); setNotice(`Preparing the 3D model for “${requestedDesign.title}”.`); }
     try {
-      const snapshot = await api<{ id: string }>('/designs', { design: requestedDesign, inventory });
-      const url = `/api/designs/${encodeURIComponent(snapshot.id)}/${format}`;
+      const nativeDownload = nativeModel ? await prepareUsdzDownload(requestedDesign, inventory) : null;
+      const snapshot = nativeDownload ? null : await api<{ id: string }>('/designs', { design: requestedDesign, inventory });
+      const url = nativeDownload?.url ?? `/api/designs/${encodeURIComponent(snapshot!.id)}/${format}`;
       const anchor = document.createElement('a');
       if (manual || nativeModel) {
-        const response = await fetch(url);
-        if (!response.ok) {
-          const detail = await response.json().catch(() => null);
-          throw new Error(detail?.error || (nativeModel ? 'The 3D model could not be downloaded. Please try again.' : 'The manual could not be exported. Please try again.'));
+        let file = nativeDownload?.file;
+        if (!file) {
+          const response = await fetch(url);
+          if (!response.ok) {
+            const detail = await response.json().catch(() => null);
+            throw new Error(detail?.error || 'The manual could not be exported. Please try again.');
+          }
+          file = await response.blob();
         }
-        const file = await response.blob();
         const downloadUrl = URL.createObjectURL(file);
         anchor.href = downloadUrl;
         const filename = requestedDesign.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 70) || 'build';
-        anchor.download = manual ? `${filename}-instructions.pdf` : `${filename}.usdz`;
+        anchor.download = nativeDownload?.filename ?? `${filename}-instructions.pdf`;
         if (nativeModel) { setModelDownload({ url, title: requestedDesign.title, size: file.size }); setModal(current => current === 'exports' ? null : current); }
         document.body.appendChild(anchor);
         anchor.click();
@@ -166,8 +172,8 @@ export function App() {
         window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 60_000);
         setNotice(nativeModel ? 'Your 3D file is ready. If the download has not started, use Save USDZ file below.' : 'Instruction PDF ready. Check your browser’s downloads.');
       } else { anchor.href = url; anchor.download = ''; anchor.click(); }
-    } catch (e) { setNotice(''); setError(nativeModel && e instanceof TypeError ? new Error(`The 3D download for “${requestedDesign.title}” was interrupted. Check your connection and try again.`) : e as Error); setModal(null); }
-    finally { if (manual) setManualBusy(false); if (nativeModel) setModelBusy(false); }
+    } catch (e) { setNotice(''); setError(nativeModel && e instanceof Error && e.name === 'TimeoutError' ? new Error(`The 3D download for “${requestedDesign.title}” timed out. Please try again.`) : nativeModel && e instanceof TypeError ? new Error(`The 3D download for “${requestedDesign.title}” was interrupted. Check your connection and try again.`) : e as Error); setModal(null); }
+    finally { if (manual) setManualBusy(false); if (nativeModel) { modelExportInFlight.current = false; setModelBusy(false); } }
   }
   async function saveForPhone() {
     try { const snapshot = await api<{ id: string }>('/designs', { design, inventory }); await navigator.clipboard.writeText(`/open ${snapshot.id}`); setNotice('Copied the /open command. Send it to your connected Photon agent to continue this build.'); setModal(null); }
