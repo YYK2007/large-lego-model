@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import dotenv from 'dotenv';
 import { generateDesign, GenerationError, type GenerationProgress } from '../server/generation.js';
 import { footprint, validateDesign } from '../shared/model.js';
+import { HOLLOW_ROOM_PLAN } from './fixtures/hollow-room-plan.js';
 
 const validPlan = { schemaVersion: 2, coordinateSystem: 'stud-xy-plate-z', title: 'Test sculpture', description: 'A volume for checking request admission.', boxes: [{ x: 0, y: 0, z: 0, width: 4, depth: 4, height: 9, colorId: 4 }], slopes: [] };
 const invalidPlan = { ...validPlan, boxes: [] };
@@ -77,6 +78,21 @@ test('the provider can return repeated structural groups which become connected,
   assert.equal(body.size, 16);
   for (const point of ['0,0', '0,4', '8,0', '8,4']) assert.ok(body.has(point), `missing repeated pier at ${point}`);
   assert.equal(body.has('4,2'), false, 'the courtyard is empty above its floor');
+});
+
+test('provider-local cutouts survive schema guidance and final generation admission', async t => {
+  isolateCredentials(t);
+  t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+    const request = JSON.parse(String(init.body));
+    const schema = request.generationConfig.responseJsonSchema;
+    assert.ok(schema.properties.boxes.items.properties.cutouts.items.properties.height);
+    assert.ok(schema.properties.repeats.items.properties.boxes.items.properties.cutouts);
+    return responseFor(HOLLOW_ROOM_PLAN);
+  });
+  const design = await generateDesign({ prompt: 'An open room with real windows, a doorway and a table' });
+  assert.equal(validateDesign(design).valid, true);
+  assert.ok(design.bricks.some(brick => brick.colorId === 14 && brick.x === 2 && brick.y === 2 && brick.z === 9));
+  assert.equal(design.bricks.some(brick => brick.z === 6 && brick.x <= 5 && brick.x + footprint(brick).width > 5 && brick.y === 0), false);
 });
 
 test('one rejected plan may be repaired, with checker feedback and distinct progress', async t => {

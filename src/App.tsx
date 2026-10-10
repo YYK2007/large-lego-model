@@ -5,7 +5,7 @@ import { PARTS, COLORS, allocateInventory, billOfMaterials, buildSteps, validate
 import { renderDesignSvg } from '../shared/illustration';
 import { BrickScene } from './BrickScene';
 import { AssemblyView } from './AssemblyView';
-import { readGenerationStream, type GenerationProgress } from './generation-stream';
+import { BuildRequestError, readGenerationStream, summarizeBuildChecks, type GenerationProgress } from './generation-stream';
 
 type Status = { gemini: boolean; model: string; rebrickable: boolean; photon: boolean };
 type Photo = { data: string; mimeType: string; name: string };
@@ -15,7 +15,7 @@ type Modal = 'connections' | 'inventory' | 'about' | 'exports' | null;
 async function api<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(`/api${path}`, body === undefined ? undefined : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || 'Request failed. Please try again.');
+  if (!response.ok) throw new BuildRequestError(data.error || 'Request failed. Please try again.', data.checks);
   return data;
 }
 
@@ -34,6 +34,13 @@ const MiniBuild = memo(function MiniBuild({ design }: { design: Design }) {
   return <div className="mini-build" aria-hidden="true" dangerouslySetInnerHTML={{ __html: renderDesignSvg(design, { width: 180, height: 180 }) }} />;
 });
 
+function ErrorFeedback({ error }: { error: BuildRequestError }) {
+  return <div className="error-feedback"><span>{error.message}</span>{error.checks.length > 0 && <>
+    <p>{summarizeBuildChecks(error.checks)}</p>
+    <details><summary>View check details</summary><ol>{error.checks.map((check, index) => <li key={index}>{check}</li>)}</ol></details>
+  </>}</div>;
+}
+
 export function App() {
   const [design, setDesign] = useState<Design>(() => { const fallback = SAMPLE_DESIGNS.find(item => item.id === 'sample-castle')!; const saved = stored<Design>('sprout-design', fallback); return saved?.source === 'sample' ? SAMPLE_DESIGNS.find(item => item.id === saved.id) || fallback : validateDesign(saved).valid ? normalizeDesign(saved) : fallback; });
   const [inventory, setInventory] = useState<InventoryItem[]>(storedInventory);
@@ -47,12 +54,14 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [generationProgress, setGenerationProgress] = useState<GenerationProgress | null>(null);
   const [elapsed, setElapsed] = useState(0);
-  const [error, setError] = useState('');
+  const [error, setErrorState] = useState<BuildRequestError | null>(null);
+  const setError = (value: string | Error) => setErrorState(value ? value instanceof BuildRequestError ? value : new BuildRequestError(typeof value === 'string' ? value : value.message) : null);
   const [notice, setNotice] = useState('');
   const [refining, setRefining] = useState(false);
   const [history, setHistory] = useState<Design[]>([]);
   const [setNumber, setSetNumber] = useState('');
   const [inventoryBusy, setInventoryBusy] = useState(false);
+  const [manualBusy, setManualBusy] = useState(false);
   const [estimates, setEstimates] = useState<InventoryItem[] | null>(null);
   const [estimateNote, setEstimateNote] = useState('');
   const [newPart, setNewPart] = useState('3001');
@@ -67,7 +76,7 @@ export function App() {
   const ownedCount = inventory.reduce((sum, item) => sum + item.quantity, 0);
 
   const refreshStatus = () => api<Status>('/status').then(setStatus).catch(() => setStatus(null));
-  useEffect(() => { refreshStatus(); const id = new URLSearchParams(location.search).get('design'); if (id) api<Design & { inventory?: InventoryItem[] }>(`/designs/${encodeURIComponent(id)}`).then(value => { if (!validateDesign(value).valid) throw new Error('This saved design is invalid.'); setDesign(normalizeDesign(value)); if (value.inventory) setInventory(value.inventory); }).catch(e => setError(e.message)); }, []);
+  useEffect(() => { refreshStatus(); const id = new URLSearchParams(location.search).get('design'); if (id) api<Design & { inventory?: InventoryItem[] }>(`/designs/${encodeURIComponent(id)}`).then(value => { if (!validateDesign(value).valid) throw new Error('This saved design is invalid.'); setDesign(normalizeDesign(value)); if (value.inventory) setInventory(value.inventory); }).catch(e => setError(e)); }, []);
   useEffect(() => { localStorage.setItem('sprout-design', JSON.stringify(design)); }, [design]);
   useEffect(() => { localStorage.setItem('sprout-inventory', JSON.stringify(inventory)); }, [inventory]);
   useEffect(() => {
@@ -82,7 +91,7 @@ export function App() {
     if (!modal) return;
     const previous = document.activeElement as HTMLElement | null;
     const dialog = document.querySelector<HTMLElement>('.modal')!;
-    const focusable = () => [...dialog.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled)')];
+    const focusable = () => [...dialog.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), summary')];
     focusable()[0]?.focus();
     const trap = (event: KeyboardEvent) => {
       if (event.key !== 'Tab') return;
@@ -109,30 +118,48 @@ export function App() {
     if (photo && photoMode === 'inventory') {
       setBusy(true);
       try { const result = await api<{ items: InventoryItem[]; note: string }>('/inventory/photo', { image: photo }); setEstimates(result.items); setEstimateNote(result.note); setModal('inventory'); }
-      catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+      catch (e) { setError(e as Error); } finally { setBusy(false); }
       return;
     }
     if (!prompt.trim()) { setError('Describe what you’d like to build first.'); promptRef.current?.focus(); return; }
     setBusy(true);
+    const signal = AbortSignal.timeout(65_000);
     try {
-      const response = await fetch('/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify({ prompt, image: photo || undefined, previous: refining ? design : undefined, inventory, inventoryMode }) });
+      const response = await fetch('/api/generate', { method: 'POST', signal, headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify({ prompt, image: photo || undefined, previous: refining ? design : undefined, inventory, inventoryMode }) });
       const next = await readGenerationStream(response, setGenerationProgress);
       chooseDesign(next); setPrompt(''); setPhoto(null); setNotice('Your design passed our geometry checks. Take a look, then refine it or start building.');
-    } catch (e) { setError((e as Error).message); } finally { setBusy(false); refreshStatus(); }
+    } catch (e) { setError(signal.aborted ? new BuildRequestError('The connection timed out before a completed design arrived. Your previous design is unchanged. Please try again.') : e as Error); } finally { setBusy(false); refreshStatus(); }
   }
   async function exportDesign(format: string) {
-    setError('');
-    try { const snapshot = await api<{ id: string }>('/designs', { design, inventory }); const anchor = document.createElement('a'); anchor.href = `/api/designs/${encodeURIComponent(snapshot.id)}/${format}`; anchor.download = ''; anchor.click(); }
-    catch (e) { setError((e as Error).message); }
+    const manual = format === 'manual.pdf';
+    if (manual && manualBusy) return;
+    setError(''); setNotice('');
+    if (manual) { setManualBusy(true); setNotice('Preparing your instruction PDF. You can keep using the studio.'); }
+    try {
+      const snapshot = await api<{ id: string }>('/designs', { design, inventory });
+      const url = `/api/designs/${encodeURIComponent(snapshot.id)}/${format}`;
+      const anchor = document.createElement('a');
+      if (manual) {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error((await response.json()).error || 'The manual could not be exported. Please try again.');
+        const downloadUrl = URL.createObjectURL(await response.blob());
+        anchor.href = downloadUrl;
+        anchor.download = `${design.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 70) || 'build'}-instructions.pdf`;
+        anchor.click();
+        window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+        setNotice('Instruction PDF ready. Check your browser’s downloads.');
+      } else { anchor.href = url; anchor.download = ''; anchor.click(); }
+    } catch (e) { setNotice(''); setError(e as Error); setModal(null); }
+    finally { if (manual) setManualBusy(false); }
   }
   async function saveForPhone() {
     try { const snapshot = await api<{ id: string }>('/designs', { design, inventory }); await navigator.clipboard.writeText(`/open ${snapshot.id}`); setNotice('Copied the /open command. Send it to your connected Photon agent to continue this build.'); setModal(null); }
-    catch (e) { setError((e as Error).message); }
+    catch (e) { setError(e as Error); }
   }
   async function lookupSet() {
     setInventoryBusy(true); setError('');
     try { const result = await api<{ items: InventoryItem[]; excluded: number; note: string }>('/inventory/set', { setNumber: setNumber.trim() }); setInventory(previous => [...previous, ...result.items]); setNotice(`Added ${result.items.reduce((sum, row) => sum + row.quantity, 0)} supported bricks. ${result.excluded} spare or unsupported pieces excluded. ${result.note}`); setSetNumber(''); }
-    catch (e) { setError((e as Error).message); } finally { setInventoryBusy(false); }
+    catch (e) { setError(e as Error); } finally { setInventoryBusy(false); }
   }
 
   return <>
@@ -146,7 +173,7 @@ export function App() {
         <div><div className="eyebrow"><Leaf size={13} /> LARGE LEGO MODEL · BUILD STUDIO</div><h1>Build something new. <span>Use the bricks you own.</span></h1><p>Describe a build, review it in 3D, and get the parts and instructions.</p></div>
         <div className="intro-note"><span className="note-orb"><Box size={21} /></span><span>One brick model.<br /><strong>Matching parts and instructions.</strong></span></div>
       </section>
-      {(error || notice) && <div className={`message-banner ${error ? 'error' : 'success'}`} role={error ? 'alert' : 'status'}><span>{error || notice}</span><button aria-label="Dismiss message" onClick={() => { setError(''); setNotice(''); }}><X size={16} /></button></div>}
+      {(error || notice) && <div className={`message-banner ${error ? 'error' : 'success'}`} role={error ? 'alert' : 'status'}>{error ? <ErrorFeedback error={error} /> : <span>{notice}</span>}<button aria-label="Dismiss message" onClick={() => { setError(''); setNotice(''); }}><X size={16} /></button></div>}
       <section className="workspace">
         <aside className="sidebar">
           <section className="prompt-card panel">
@@ -178,15 +205,15 @@ export function App() {
     </main>
     {modal && <div className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget) setModal(null); }}><section className={`modal ${modal === 'inventory' ? 'inventory-modal' : ''}`} role="dialog" aria-modal="true" aria-labelledby="modal-title"><button className="modal-close" aria-label="Close dialog" onClick={() => setModal(null)}><X size={20} /></button>
       {modal === 'connections' && <><div className="modal-icon"><Settings2 /></div><h2 id="modal-title">Connect your tools.</h2><p className="modal-intro">Keys stay on your server. Add them to the project’s <code>.env</code> file, then refresh the connection status.</p><div className="connection-list">{[{ name: 'Gemini', detail: 'Ideas, images, and design revisions', key: 'GEMINI_API_KEY', ready: status?.gemini, link: 'https://aistudio.google.com/apikey' }, { name: 'Rebrickable', detail: 'Import the bricks in your existing sets', key: 'REBRICKABLE_API_KEY', ready: status?.rebrickable, link: 'https://rebrickable.com/api/' }, { name: 'Photon · Spectrum', detail: 'Continue the conversation in iMessage', key: 'SPECTRUM_PROJECT_ID + SPECTRUM_PROJECT_SECRET', ready: status?.photon, link: 'https://app.photon.codes/dashboard' }].map(tool => <div className="connection-row" key={tool.name}><div><strong>{tool.name} <span className={tool.ready ? 'ready-label' : 'pending-label'}>{tool.ready ? 'Configured' : 'Not configured'}</span></strong><p>{tool.detail}</p><code>{tool.key}</code></div><a href={tool.link} target="_blank" rel="noreferrer" aria-label={`Open ${tool.name} setup`}><ExternalLink size={17} /></a></div>)}</div><p className="subtle-note">Photon HackNC promo: <strong>HACKWITHPHOTON</strong>. Run the separate Photon worker after setup. Configured does not mean a live iMessage connection has been tested.</p><button className="primary-button" onClick={refreshStatus}><RotateIcon /> Refresh connections</button></>}
-      {modal === 'about' && <><div className="modal-icon"><Sprout /></div><h2 id="modal-title">How Large Lego Model works.</h2><p className="modal-intro">Large Lego Model keeps every view of your creation connected to the same real pieces.</p><ol className="how-steps"><li><span>01</span><div><h3>Imagine something</h3><p>Describe an idea or share an inspiration photo. Gemini turns it into a small, colored shape.</p></div></li><li><span>02</span><div><h3>Make it buildable in the model</h3><p>A deterministic compiler chooses catalog bricks. Overlaps, support, connections, and your confirmed inventory are checked before a design appears.</p></div></li><li><span>03</span><div><h3>Make it yours</h3><p>Rotate the actual bricks, ask for changes, and download matching instructions and a precise parts list.</p></div></li></ol><div className="info-box">This first version uses seven standard rectangular brick sizes and nine colors. Plates, hinges, minifigures, mechanical builds, and physical load simulation are outside its current scope. Photo inventory always needs your review.</div></>}
-      {modal === 'exports' && <><div className="modal-icon"><BookOpen /></div><h2 id="modal-title">Download this build.</h2><p className="modal-intro">Everything for <strong>{design.title}</strong>, made from the same {design.bricks.length} bricks you see in the preview.</p>{inventory.length > 0 && <div className="info-box">{allocation.totalMissing ? `${allocation.totalMissing} bricks are missing from your collection. Review Pieces before starting.` : 'Your confirmed collection covers every brick in this design.'}</div>}<div className="export-grid"><button onClick={() => exportDesign('manual.pdf')}><BookOpen /><div><strong>Build manual</strong><span>Illustrated PDF · exact placement maps</span></div><Download size={17} /></button><button onClick={() => exportDesign('parts.csv')}><Box /><div><strong>Parts & collection list</strong><span>CSV · quantities, colors, source sets</span></div><Download size={17} /></button><button onClick={() => exportDesign('model.usdz')}><Cuboid /><div><strong>Native 3D model</strong><span>USDZ · for Apple Quick Look</span></div><Download size={17} /></button><button onClick={() => exportDesign('model.ldr')}><Cuboid /><div><strong>LDraw model</strong><span>Editable brick placements · .ldr</span></div><Download size={17} /></button><button onClick={() => exportDesign('preview.png')}><ImagePlus /><div><strong>Design preview</strong><span>Shareable image · PNG</span></div><Download size={17} /></button></div><button className="primary-button" onClick={() => { setTab('steps'); setModal(null); }}>Follow the steps here <ArrowRight size={17} /></button><button className="phone-link text-button" onClick={saveForPhone}><MessageCircle size={15} /> Copy command to continue in iMessage</button><p className="subtle-note">Check the physical build as you go. Geometry checks don’t verify clutch strength or tipping.</p></>}
+      {modal === 'about' && <><div className="modal-icon"><Sprout /></div><h2 id="modal-title">How Large Lego Model works.</h2><p className="modal-intro">Large Lego Model keeps every view of your creation connected to the same real pieces.</p><ol className="how-steps"><li><span>01</span><div><h3>Imagine something</h3><p>Describe an idea or share an inspiration photo. Gemini turns it into a structured plan for real pieces.</p></div></li><li><span>02</span><div><h3>Make it buildable in the model</h3><p>A deterministic compiler chooses catalog bricks. Overlaps, support, connections, and your confirmed inventory are checked before a design appears.</p></div></li><li><span>03</span><div><h3>Make it yours</h3><p>Rotate the actual bricks, ask for changes, and download matching instructions and a precise parts list.</p></div></li></ol><div className="info-box">This version uses {Object.keys(PARTS).length} real part types in nine colors: standard bricks, plates from 1 × 1 through 1 × 4 plus 2 × 2 and 2 × 4, and upright slopes. Hinges, wheels, minifigures, and physical load simulation remain outside its current scope. Photo inventory always needs your review.</div></>}
+      {modal === 'exports' && <><div className="modal-icon"><BookOpen /></div><h2 id="modal-title">Download this build.</h2><p className="modal-intro">Everything for <strong>{design.title}</strong>, made from the same {design.bricks.length} bricks you see in the preview.</p>{inventory.length > 0 && <div className="info-box">{allocation.totalMissing ? `${allocation.totalMissing} bricks are missing from your collection. Review Pieces before starting.` : 'Your confirmed collection covers every brick in this design.'}</div>}<div className="export-grid"><button onClick={() => exportDesign('manual.pdf')} disabled={manualBusy} aria-busy={manualBusy}>{manualBusy ? <LoaderCircle className="spin" /> : <BookOpen />}<div><strong>{manualBusy ? 'Preparing the manual…' : 'Build manual'}</strong><span>{manualBusy ? 'You can close this and keep using the studio.' : 'Illustrated PDF · exact placement maps'}</span></div>{!manualBusy && <Download size={17} />}</button><button onClick={() => exportDesign('parts.csv')}><Box /><div><strong>Parts & collection list</strong><span>CSV · quantities, colors, source sets</span></div><Download size={17} /></button><button onClick={() => exportDesign('model.usdz')}><Cuboid /><div><strong>Native 3D model</strong><span>USDZ · for Apple Quick Look</span></div><Download size={17} /></button><button onClick={() => exportDesign('model.ldr')}><Cuboid /><div><strong>LDraw model</strong><span>Editable brick placements · .ldr</span></div><Download size={17} /></button><button onClick={() => exportDesign('preview.png')}><ImagePlus /><div><strong>Design preview</strong><span>Shareable image · PNG</span></div><Download size={17} /></button></div><button className="primary-button" onClick={() => { setTab('steps'); setModal(null); }}>Follow the steps here <ArrowRight size={17} /></button><button className="phone-link text-button" onClick={saveForPhone}><MessageCircle size={15} /> Copy command to continue in iMessage</button><p className="subtle-note">Check the physical build as you go. Geometry checks don’t verify clutch strength or tipping.</p></>}
       {modal === 'inventory' && <><div className="modal-icon"><Box /></div><h2 id="modal-title">Manage your brick collection.</h2><p className="modal-intro">Add loose bricks or look up a set you own. Exact part, color, and count keep your build honest.</p>
         {estimates && <div className="estimate-panel"><strong>Review the photo estimate</strong><p>{estimateNote}</p>{estimates.map((item, index) => <div className="estimate-row" key={index}><span>{PARTS[item.partId].name} · {COLORS[item.colorId].name}</span><input aria-label={`Estimated quantity ${index + 1}`} type="number" min={0} value={item.quantity} onChange={e => setEstimates(previous => previous!.map((row, i) => i === index ? { ...row, quantity: quantityInput(e.target.value, 0, row.quantity) } : row))} /><button aria-label={`Remove estimated brick ${index + 1}`} onClick={() => setEstimates(previous => previous!.filter((_, i) => i !== index))}><X size={14} /></button></div>)}<button className="primary-button" onClick={() => { setInventory(previous => [...previous, ...estimates.filter(row => row.quantity > 0)]); setEstimates(null); setPhoto(null); setNotice('Photo estimates added after your confirmation.'); }}>Confirm these quantities <Check size={16} /></button><button className="text-button" onClick={() => setEstimates(null)}>Discard estimate</button></div>}
-        <div className="inventory-import"><label className="field-label" htmlFor="set-number">IMPORT AN EXISTING SET</label><div><input id="set-number" placeholder="Set number, e.g. 10696-1" value={setNumber} onChange={e => setSetNumber(e.target.value)} /><button className="dark-button" disabled={!setNumber || inventoryBusy} onClick={lookupSet}>{inventoryBusy ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />} Add set</button></div><small>Supported standard bricks only. Spare and specialty pieces are excluded.</small></div>
+        <div className="inventory-import"><label className="field-label" htmlFor="set-number">IMPORT AN EXISTING SET</label><div><input id="set-number" placeholder="Set number, e.g. 10696-1" value={setNumber} onChange={e => setSetNumber(e.target.value)} /><button className="dark-button" disabled={!setNumber || inventoryBusy} onClick={lookupSet}>{inventoryBusy ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />} Add set</button></div><small>Imports supported bricks, plates, and upright slopes. Spare and unsupported parts are excluded.</small></div>
         <label className="field-label">ADD LOOSE BRICKS</label><div className="inventory-form"><label>Part<select aria-label="Brick part" value={newPart} onChange={e => setNewPart(e.target.value)}>{Object.values(PARTS).map(part => <option key={part.id} value={part.id}>{part.name} · {part.id}</option>)}</select></label><label>Color<select aria-label="Brick color" value={newColor} onChange={e => setNewColor(Number(e.target.value))}>{Object.values(COLORS).map(color => <option key={color.id} value={color.id}>{color.name}</option>)}</select></label><label>Count<input aria-label="Brick quantity" type="number" min={1} value={newQuantity} onChange={e => setNewQuantity(quantityInput(e.target.value, 1, newQuantity))} /></label></div><div className="inventory-source"><input aria-label="Brick source" placeholder="Source, e.g. my red tub" value={newSource} maxLength={120} onChange={e => setNewSource(e.target.value)} /><button className="dark-button" onClick={() => setInventory(previous => [...previous, { partId: newPart, colorId: newColor, quantity: newQuantity, source: newSource.trim() || 'Loose bricks' }])}><Plus size={15} /> Add bricks</button></div>
         <div className="inventory-list-heading"><strong>{ownedCount} bricks in your collection</strong><span>{inventory.length} entries</span></div><div className="inventory-list">{inventory.length ? inventory.map((item, index) => <div className="inventory-row" key={index}><span className="color-swatch" style={{ background: COLORS[item.colorId]?.hex }} /><div><strong>{PARTS[item.partId]?.name} · {COLORS[item.colorId]?.name}</strong><small>{item.source}</small></div><input aria-label={`Quantity for collection entry ${index + 1}`} type="number" min={0} value={item.quantity} onChange={e => setInventory(previous => previous.map((row, i) => i === index ? { ...row, quantity: quantityInput(e.target.value, 0, row.quantity) } : row))} /><button aria-label={`Remove collection entry ${index + 1}`} onClick={() => setInventory(previous => previous.filter((_, i) => i !== index))}><Trash2 size={15} /></button></div>) : <div className="empty-inventory"><Box size={25} /><p>No bricks added yet.</p></div>}</div><button className="primary-button" onClick={() => setModal(null)}>Save collection <Check size={16} /></button>
       </>}
-      {(error || notice) && <div className={`modal-message ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'}>{error || notice}</div>}
+      {(error || notice) && <div className={`modal-message ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'}>{error ? <ErrorFeedback error={error} /> : notice}</div>}
     </section></div>}
   </>;
 }

@@ -4,10 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k -n api,web \"node --import tsx server/index.ts\" \"vite --host 127.0.0.1\"",
+    "dev": "concurrently -k -n api,web \"node --watch --import tsx server/index.ts\" \"vite --host 127.0.0.1\"",
     "build": "tsc --noEmit && vite build",
     "start": "node --import tsx server/index.ts",
     "test": "node --import tsx --test tests/*.test.ts",
+    "check:large-export": "node scripts/check-large-export.mjs",
     "photon": "node --import tsx server/photon.ts"
   },
   "dependencies": {

@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { PARTS, COLORS, partTopStuds, partBottomSites, SCHEMA_VERSION, COORDINATE_SYSTEM, CATALOG_VERSION, type Brick, type Design, type InventoryItem } from '../shared/model.js';
 
-export type ShapeBox = { x: number; y: number; z: number; width: number; depth: number; height: number; colorId: number };
+export type ShapeCutout = { x: number; y: number; z: number; width: number; depth: number; height: number };
+export type ShapeBox = { x: number; y: number; z: number; width: number; depth: number; height: number; colorId: number; cutouts?: ShapeCutout[] };
 export type SlopeRun = { kind: 'upright45'; x: number; y: number; z: number; width: number; rotation: 0 | 90 | 180 | 270; colorId: number };
 export type ShapeRepeat = { boxes?: ShapeBox[]; slopes?: SlopeRun[]; count: number; dx: number; dy: number; dz: number };
 export type ShapePlan = { title: string; description: string; boxes: ShapeBox[]; schemaVersion?: 2; coordinateSystem?: 'stud-xy-plate-z'; slopes?: SlopeRun[]; repeats?: ShapeRepeat[] };
@@ -12,7 +13,7 @@ const legacyParts = new Set(['3005', '3004', '3622', '3010', '3003', '3002', '30
 const validColor = (color: number) => Number.isInteger(color) && Object.hasOwn(COLORS, color);
 
 // The planner describes space and supported surface primitives. Only this compiler chooses real parts.
-export function compilePlan(plan: ShapePlan, options: { prompt: string; inventory?: InventoryItem[]; ownedOnly?: boolean; maxBricks?: number }): Design {
+export function compilePlan(plan: ShapePlan, options: { prompt: string; inventory?: InventoryItem[]; ownedOnly?: boolean; maxBricks?: number; scanOrder?: 'y-major' | 'x-major' }): Design {
   if (!plan || typeof plan.title !== 'string' || !plan.title.trim() || plan.title.length > 90 || typeof plan.description !== 'string' || !plan.description.trim() || plan.description.length > 600 || !Array.isArray(plan.boxes)) {
     throw new Error('The shape plan must include a title, description, and boxes array.');
   }
@@ -47,13 +48,27 @@ export function compilePlan(plan: ShapePlan, options: { prompt: string; inventor
   let extentX = 0, extentY = 0;
   for (const raw of expanded(plan.boxes, 'boxes')) {
     if (!raw || !['x', 'y', 'z', 'width', 'depth', 'height', 'colorId'].every(key => Number.isInteger(raw[key as keyof ShapeBox])) || !validColor(raw.colorId)) throw new Error('Each shape box needs integer dimensions and a supported color.');
+    if (legacy && raw.cutouts !== undefined) throw new Error('Box cutouts require a V2 plan with plate-height coordinates.');
+    if (raw.cutouts !== undefined && !Array.isArray(raw.cutouts)) throw new Error('Box cutouts must be an array of local volumes.');
     const box = { ...raw, z: raw.z * (legacy ? 3 : 1), height: raw.height * (legacy ? 3 : 1) };
     if (box.x < 0 || box.y < 0 || box.z < 0 || box.width < 1 || box.depth < 1 || box.height < 1 || box.x + box.width > 24 || box.y + box.depth > 24 || box.z + box.height > 72) throw new Error('Shape exceeds the 24 × 24 stud, 72 plate-height design grid.');
+    const cutouts = box.cutouts || [];
+    for (const cut of cutouts) {
+      if (!cut || typeof cut !== 'object' || Array.isArray(cut) || 'cutouts' in cut || !['x', 'y', 'z', 'width', 'depth', 'height'].every(key => Number.isInteger(cut[key as keyof ShapeCutout])) ||
+        cut.x < 0 || cut.y < 0 || cut.z < 0 || cut.width < 1 || cut.depth < 1 || cut.height < 1 || cut.x + cut.width > box.width || cut.y + cut.depth > box.depth || cut.z + cut.height > box.height) {
+        throw new Error('Each box cutout needs nonempty integer dimensions fully contained in its parent box, using local stud-x/y and plate-z coordinates.');
+      }
+    }
     extentX = Math.max(extentX, box.x + box.width);
     extentY = Math.max(extentY, box.y + box.depth);
     for (let z = box.z; z < box.z + box.height; z++) {
       layers.add(z);
-      for (let y = box.y; y < box.y + box.depth; y++) for (let x = box.x; x < box.x + box.width; x++) cells.set(keyAt(x, y, z), box.colorId);
+      for (let y = box.y; y < box.y + box.depth; y++) for (let x = box.x; x < box.x + box.width; x++) {
+        // A cutout omits this box's contribution; it never deletes earlier boxes
+        // or trims whole slope parts. Repeat translations leave local cuts unchanged.
+        if (cutouts.some(cut => x >= box.x + cut.x && x < box.x + cut.x + cut.width && y >= box.y + cut.y && y < box.y + cut.y + cut.depth && z >= box.z + cut.z && z < box.z + cut.z + cut.height)) continue;
+        cells.set(keyAt(x, y, z), box.colorId);
+      }
     }
   }
   const fixed: Brick[] = [];
@@ -146,7 +161,9 @@ export function compilePlan(plan: ShapePlan, options: { prompt: string; inventor
       for (let dz = 0; dz < candidate.part.heightPlates; dz++) for (let dy = 0; dy < candidate.depth; dy++) for (let dx = 0; dx < candidate.width; dx++) if (cells.get(keyAt(x + dx, y + dy, z + dz)) !== colorId) return false;
       return true;
     };
-    for (let y = 0; y < extentY; y++) for (let x = 0; x < extentX; x++) {
+    const xMajor = options.scanOrder === 'x-major';
+    for (let row = 0; row < (xMajor ? extentX : extentY); row++) for (let col = 0; col < (xMajor ? extentY : extentX); col++) {
+      const x = xMajor ? row : col, y = xMajor ? col : row;
       const colorId = cells.get(keyAt(x, y, z));
       if (colorId === undefined) continue;
       let chosen: typeof sizes[number] | undefined;
@@ -179,7 +196,7 @@ export function compilePlan(plan: ShapePlan, options: { prompt: string; inventor
         }
         if (z === 0) break;
       }
-      if (!chosen) throw new Error(`Cannot pack color ${COLORS[colorId].name} at (${x}, ${y}, ${z} plates) with the available inventory. Simplify the shape or change its palette.`);
+      if (!chosen) throw new Error(`Cannot pack color ${COLORS[colorId].name} at (${x}, ${y}, ${z} plates) ${options.ownedOnly ? 'with the available inventory' : 'with the supported part shapes'}. ${options.ownedOnly ? 'Adjust the shape or use parts and colors from the confirmed inventory.' : 'Adjust the dimensions to fit the supported catalog: full bricks are 3 plates high and plates are 1 plate high.'}`);
       place(candidateBrick(chosen, x, y, colorId));
       const key = `${chosen.part.id}:${colorId}`;
       if (options.ownedOnly) available.set(key, available.get(key)! - 1);

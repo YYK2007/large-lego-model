@@ -72,6 +72,15 @@ test('imported owned inventory survives a session restart and remains detached f
   assert.deepEqual(restored.handledIds, ['open-message']);
 });
 
+test('narrow-plate designs and exact stock survive the web-to-Photon handoff', () => {
+  const narrow: Design = { ...savedBuild, schemaVersion: 2, catalogVersion: 'upright-plates-slopes-1', coordinateSystem: 'stud-xy-plate-z',
+    bricks: ['3710', '3623', '3023', '3024'].map((partId, z) => ({ id: `plate-${z}`, partId, colorId: 15, x: 0, y: 0, z, rotation: 0 })) };
+  const inventory = narrow.bricks.map(brick => ({ partId: brick.partId, colorId: brick.colorId, quantity: 1, source: `Set with ${brick.partId}` }));
+  const restored = parseConversation(JSON.parse(JSON.stringify(importSavedDesign({ handledIds: [] }, { ...narrow, inventory }))));
+  assert.equal(restored.designId, narrow.id);
+  assert.deepEqual(inventoryContext(restored), { inventory, inventoryMode: 'owned' });
+});
+
 test('opening a design replaces old inventory, and absent or empty snapshots use unlimited mode', () => {
   const previous = { designId: 'older', inventory: [{ partId: '3001', colorId: 4, quantity: 3, source: 'Old set' }], handledIds: [] };
   for (const saved of [savedBuild, { ...savedBuild, inventory: [] }]) {

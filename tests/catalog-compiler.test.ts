@@ -174,13 +174,17 @@ test('the curated lookout uses all three new parts around a hollow interior and 
   assert.equal(design.bricks.filter(brick => brick.partId === '3039').length, 16);
 });
 
-test('the 1345-piece courtyard castle recompiles exactly with connected rooms, open windows and five sloped roofs', () => {
+test('the frozen 1345-piece courtyard castle recompiles with identical shape, colors and roof slopes', () => {
   const design = COMPLEX_SAMPLE;
   assert.equal(design.source, 'sample');
   assert.equal(design.bricks.length, 1345);
   const check = validateDesign(design);
   assert.equal(check.valid, true, check.errors.join('; '));
-  assert.deepEqual(compilePlan(COMPLEX_PLAN, { prompt: design.prompt }).bricks, design.bricks);
+  const recompiled = compilePlan(COMPLEX_PLAN, { prompt: design.prompt });
+  assert.equal(validateDesign(recompiled).valid, true);
+  assert.deepEqual(solidCells(recompiled), solidCells(design));
+  const slopes = (model: Design) => model.bricks.filter(brick => brick.partId === '3039').map(({ id, ...placement }) => placement);
+  assert.deepEqual(slopes(recompiled), slopes(design));
   const cells = solidCells(design);
   for (const x of [0, 18]) for (const y of [0, 18]) for (let floor = 4; floor <= 43; floor += 13) {
     for (let z = floor + 1; z < floor + 13; z++) assert.equal(cells.has(`${x + 1},${y + 1},${z}`), false, 'Tower rooms remain hollow between floors');

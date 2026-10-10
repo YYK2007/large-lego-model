@@ -43,5 +43,5 @@ export async function importSet(setNumber: string): Promise<{ items: InventoryIt
     next = body.next || null;
   }
   if (next) throw new GenerationError('This inventory is too large for the current importer.', 422);
-  return { items: [...quantities.values()], excluded, source, note: 'Standard rectangular bricks in supported colors only. Spare, special, and minifigure parts are excluded. Check the returned inventory against your physical set; alternate set inventory versions are not resolved automatically.' };
+  return { items: [...quantities.values()], excluded, source, note: 'Supported catalog bricks, plates, and upright slopes in supported colors only. Spare and unsupported parts are excluded. Check the returned inventory against your physical set; alternate set inventory versions are not resolved automatically.' };
 }

@@ -32,7 +32,15 @@ test('AI admission rejects a cap over the slopes low row rather than treating th
     { x: 0, y: 0, z: 0, width: 4, depth: 2, height: 3, colorId: 71 },
     { x: 0, y: 0, z: 6, width: 1, depth: 1, height: 3, colorId: 15 },
   ], slopes: [{ kind: 'upright45', x: 0, y: 0, z: 3, width: 4, rotation: 0, colorId: 4 }] };
-  assert.throws(() => compileGeneratedPlan(badRoof, { prompt: 'A flat roof test' }), /no stud support|disconnected/);
+  assert.throws(() => compileGeneratedPlan(badRoof, { prompt: 'A flat roof test' }), /part 3005, x=0, y=0, z=6 plates, rotation=0\) has no stud support/);
+});
+
+test('narrow plates preserve the thin clock-face trim that previously rejected the Bell Tower', () => {
+  const trim = { x: 0, y: 0, z: 9, width: 1, depth: 4, height: 4, colorId: 15 };
+  const result = compileGeneratedPlan({ ...plan(), boxes: [...plan().boxes, trim] }, { prompt: 'A clock tower' });
+  const white = result.bricks.filter(brick => brick.colorId === 15);
+  assert.ok(white.some(brick => brick.partId === '3710' && brick.z === 12));
+  assert.equal(Math.max(...white.map(brick => brick.z)), 12, 'The four-plate-high detail is preserved, not inflated to six');
 });
 
 test('previous legacy revisions validate without mutating coordinates and unknown versions get HTTP 400', () => {

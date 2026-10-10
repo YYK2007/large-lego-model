@@ -40,6 +40,11 @@ export const PARTS: Record<string, { id: string; name: string; width: number; de
   '3003': { id: '3003', name: 'Brick 2 × 2', width: 2, depth: 2, heightPlates: 3, kind: 'brick', ldrawId: '3003.dat' },
   '3002': { id: '3002', name: 'Brick 2 × 3', width: 2, depth: 3, heightPlates: 3, kind: 'brick', ldrawId: '3002.dat' },
   '3001': { id: '3001', name: 'Brick 2 × 4', width: 2, depth: 4, heightPlates: 3, kind: 'brick', ldrawId: '3001.dat' },
+  '3024': { id: '3024', name: 'Plate 1 × 1', width: 1, depth: 1, heightPlates: 1, kind: 'plate', ldrawId: '3024.dat' },
+  // LDraw's current 1 × 2 file retains Rebrickable/BrickLink part ID 3023.
+  '3023': { id: '3023', name: 'Plate 1 × 2', width: 1, depth: 2, heightPlates: 1, kind: 'plate', ldrawId: '3023b.dat' },
+  '3623': { id: '3623', name: 'Plate 1 × 3', width: 1, depth: 3, heightPlates: 1, kind: 'plate', ldrawId: '3623.dat' },
+  '3710': { id: '3710', name: 'Plate 1 × 4', width: 1, depth: 4, heightPlates: 1, kind: 'plate', ldrawId: '3710.dat' },
   '3022': { id: '3022', name: 'Plate 2 × 2', width: 2, depth: 2, heightPlates: 1, kind: 'plate', ldrawId: '3022.dat' },
   '3020': { id: '3020', name: 'Plate 2 × 4', width: 2, depth: 4, heightPlates: 1, kind: 'plate', ldrawId: '3020.dat' },
   '3039': { id: '3039', name: 'Slope 45° 2 × 2', width: 2, depth: 2, heightPlates: 3, kind: 'slope', ldrawId: '3039.dat' },

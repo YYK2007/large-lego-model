@@ -2,6 +2,29 @@
 
 Research/design checkpoint, 2026-10-10. **Implemented in checkpoint 03.** The original plan below records the source-grounded migration decision. Production now includes 3022/3020 plates and 3039 slopes, V2 plate-height coordinates, four yaw orientations, accurate high-edge slope studs, matching geometry/exports, and legacy normalization without rewriting old snapshots. See `VERIFICATION.md` for checks and remaining limits. This increment does not finish the broader part catalog.
 
+## Checkpoint 04: narrow plates implemented
+
+2026-10-10. Four narrow plates extend the catalog to **14 part types: seven bricks, six plates, and one upright slope**. They allow one-stud-wide details and thin bonds that the previous two plate sizes could not pack.
+
+| Canonical inventory ID | Plate footprint at yaw 0 | Official LDraw asset | Native body X bounds |
+| --- | --- | --- | --- |
+| 3024 | 1 × 1 studs | [3024.dat](https://library.ldraw.org/library/official/parts/3024.dat) | −10…10 LDU |
+| 3023 | 1 × 2 studs | [3023b.dat](https://library.ldraw.org/library/official/parts/3023b.dat) | −20…20 LDU |
+| 3623 | 1 × 3 studs | [3623.dat](https://library.ldraw.org/library/official/parts/3623.dat) | −30…30 LDU |
+| 3710 | 1 × 4 studs | [3710.dat](https://library.ldraw.org/library/official/parts/3710.dat) | −40…40 LDU |
+
+Each source has native body Y = 0…8 and Z = −10…10 LDU. Procedural geometry uses one plate of body height (3.2 mm), 8 mm stud pitch, and one through four top studs with matching bottom connection sites. App yaw 0 keeps the short dimension on X and the long dimension on Y; yaw 90/270 swaps the footprint. All four yaw transforms apply to geometry, connections, and export coordinates. The LDraw export accounts for its native long-X orientation. Inventory remains **3023**; only its asset mapping is **3023b.dat**, whose header explicitly identifies Rebrickable 3023.
+
+This is an additive V2 catalog change. Existing `schemaVersion: 2`, `coordinateSystem: 'stud-xy-plate-z'`, and `catalogVersion: 'upright-plates-slopes-1'` stay valid; no existing part geometry or saved revision is rewritten. Legacy brick-height normalization remains unchanged.
+
+Downstream audit found the shared renderer, PDF, native geometry, BOM/source allocation, inventory, and Photon paths already use catalog metadata. Added checks cover independent USDZ body dimensions and stud pitch at every yaw; SVG exposed-stud occlusion; PDF plate-height steps, placement footprints, and source quantities; canonical set-import IDs and spare exclusion; and saved-design/inventory preservation through the Photon handoff. **42 targeted tests and the production build passed.** The narrow-plate preview and a rendered PDF placement page were visually inspected in `output/narrow-plates/`. Photo identification now includes all six supported plate IDs. These checks are offline software evidence, not live phone delivery or a physical build.
+
+The palette still supports upright grid-aligned bricks, plates, and this single slope only. Tiles, curves, other wedges/slopes, hinges, wheels, brackets, and further connector families remain unimplemented; part/color manufacture, current stock, and physical strength are not established by geometry tests.
+
+## Historical checkpoint 03 proposal
+
+The remaining sections preserve the original proposal. Statements such as “3023 is not part of this release” and retaining a 160-part cap describe that earlier decision, not current behavior. Checkpoint 04 includes 3023; the separate complexity work removed the application piece-count cap while preserving explicit budgets and the physical workspace.
+
 ## Release decision
 
 Add three catalog entries: **3022 plate 2 × 2, 3020 plate 2 × 4, and 3039 upright 45° slope 2 × 2**. Keep the existing seven bricks. The two plates allow small infill and bonds across longer seams; one slope isolates the first directional, partially studded part. This is enough to prove mixed heights, a real inclined surface, accurate connector coverage, four orientations, inventory allocation, and matching exports. It does not finish the broader catalog objective.

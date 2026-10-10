@@ -132,6 +132,24 @@ test('stacked plates occupy 3.2 mm each and support full bricks at the canonical
   close(bodies[2].bounds.getSize(new Vector3()).y, 0.00936);
 });
 
+test('narrow plates retain their independent metric dimensions and 8 mm stud pitch in USDZ', async () => {
+  for (const [partId, length] of [['3024', 1], ['3023', 2], ['3623', 3], ['3710', 4]] as const) {
+    for (const rotation of [0, 90, 180, 270] as const) {
+      const one: Design = { ...design, ...v2, bricks: [{ ...design.bricks[0], partId, rotation }] };
+      const meshes = exportedMeshes(archiveFiles(await generateUsdz(one)));
+      const body = meshes.find(mesh => mesh.name.startsWith('Body'))!;
+      const size = body.bounds.getSize(new Vector3());
+      close(size.y, 0.0032 - 0.00024);
+      close(size.x, (rotation % 180 ? length : 1) * 0.008 - 0.00032);
+      close(size.z, (rotation % 180 ? 1 : length) * 0.008 - 0.00032);
+      const studs = meshes.filter(mesh => mesh.name.startsWith('Stud')).map(mesh => mesh.bounds.getCenter(new Vector3()));
+      assert.equal(studs.length, length);
+      studs.sort((a, b) => rotation % 180 ? a.x - b.x : a.z - b.z);
+      for (let i = 1; i < studs.length; i++) close(studs[i].distanceTo(studs[i - 1]), 0.008);
+    }
+  }
+});
+
 test('the assembled plate-and-slope specimen exports every connector at the right total height', async () => {
   const meshes = exportedMeshes(archiveFiles(await generateUsdz(ROOF_SAMPLE)));
   assert.equal(meshes.filter(mesh => mesh.name.startsWith('Body')).length, 13);

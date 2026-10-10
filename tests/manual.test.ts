@@ -208,9 +208,61 @@ test('mixed-height PDF prints actual body-bottom heights, all slope directions a
   assert.ok(!content.includes('Build layer'), 'Step indices must not be presented as full-brick heights');
 });
 
+test('narrow-plate SVG and manual retain one-plate steps, correct exposed studs and source quantities', async () => {
+  const narrow: Design = { ...mixed, id: 'narrow-plate-guide', title: 'Narrow plate stair', bricks: ['3710', '3623', '3023', '3024'].map((partId, z) => ({
+    id: `narrow-${z}`, partId, colorId: 15, x: 0, y: 0, z, rotation: 0,
+  })) };
+  assert.equal(validateDesign(narrow).valid, true);
+  const svg = renderDesignSvg(narrow);
+  assert.equal((svg.match(/data-brick-id=/g) || []).length, 4);
+  for (let z = 0; z < 4; z++) assert.equal((svg.match(new RegExp(`data-stud-owner="narrow-${z}"`, 'g')) || []).length, 1, 'Only the uncovered last stud of each plate is visible');
+  const inventory = narrow.bricks.map(brick => ({ partId: brick.partId, colorId: brick.colorId, quantity: 1, source: 'My narrow plate box' }));
+  const content = pdfText(await generateManualPdf(narrow, inventory));
+  for (const expected of ['4 PIECES', '3710', '3623', '3023', '3024', 'My narrow plate box', 'All required pieces are allocated',
+    'Body bottom: 3.2 mm (z = 1)', 'Body bottom: 6.4 mm (z = 2)', 'Body bottom: 9.6 mm (z = 3)',
+    '3710 / White / 3.2 mm', '3024 / White / 3.2 mm', '1 x 4', '1 x 3', '1 x 2', '1 x 1']) {
+    assert.ok(content.includes(expected), `Missing narrow-plate guide text: ${expected}`);
+  }
+});
+
 test('manual generation rejects invalid brick placement before exporting', async () => {
   const invalid = { ...design, bricks: [...design.bricks, { ...design.bricks[0], id: 'collision' }] };
   await assert.rejects(generateManualPdf(invalid), /invalid design.*overlap/);
+});
+
+test('PDF rendering leaves the main event loop available and shares identical pending requests', async () => {
+  let finished = false;
+  const first = generateManualPdf(design);
+  const duplicate = generateManualPdf(structuredClone(design));
+  assert.equal(first, duplicate);
+  first.then(() => { finished = true; });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(finished, false, 'other requests must be able to run before the PDF finishes');
+  assert.equal((await first).subarray(0, 5).toString(), '%PDF-');
+});
+
+test('a rejected export does not stall the queue and queued inputs retain their original snapshot', async () => {
+  const invalid = { ...design, bricks: [...design.bricks, { ...design.bricks[0], id: 'collision' }] };
+  const rejection = assert.rejects(generateManualPdf(invalid), /invalid design.*overlap/);
+  const snapshot = structuredClone(design);
+  const inventory = [{ partId: '3004', colorId: 1, quantity: 1, source: 'Original source lot' }];
+  const queued = generateManualPdf(snapshot, inventory);
+  const differentInventory = generateManualPdf(snapshot, []);
+  assert.notEqual(queued, differentInventory, 'source allocations must not share a different inventory export');
+  snapshot.title = 'Edited while queued';
+  snapshot.bricks.length = 0;
+  inventory[0].source = 'Changed while queued';
+  inventory[0].quantity = 999;
+  await rejection;
+  const content = pdfText(await queued);
+  assert.ok(content.includes('Little tower'));
+  assert.ok(content.includes('Original source lot'));
+  assert.ok(content.includes('3 bricks missing'));
+  assert.ok(!content.includes('Edited while queued'));
+  assert.ok(!content.includes('Changed while queued'));
+  const otherContent = pdfText(await differentInventory);
+  assert.ok(!otherContent.includes('Original source lot'));
+  assert.ok(otherContent.includes('4 bricks missing'));
 });
 
 test('dense layers become small numbered steps without losing any placements', async () => {

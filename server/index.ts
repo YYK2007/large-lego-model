@@ -45,7 +45,7 @@ app.post('/api/generate', async (req, res) => {
     else res.json(design);
   } catch (error) {
     if (!res.headersSent) throw error;
-    res.end(JSON.stringify({ type: 'error', error: error instanceof GenerationError ? error.message : 'The design could not be saved. Your current design is unchanged.' }) + '\n');
+    res.end(JSON.stringify({ type: 'error', error: error instanceof GenerationError ? error.message : 'The design could not be saved. Your current design is unchanged.', ...(error instanceof GenerationError && error.checks.length ? { checks: error.checks } : {}) }) + '\n');
   } finally { activeGenerations--; }
 });
 app.post('/api/inventory/photo', async (req, res) => res.json(await suggestInventory(req.body.image)));

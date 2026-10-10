@@ -24,7 +24,8 @@ const view: PartPoint = [1, 1, 2.5];
 const dot = (a: number[], b: number[]) => a.reduce((sum, value, axis) => sum + value * b[axis], 0);
 
 type Box = { x: number; y: number; z: number; w: number; d: number; h: number };
-type Drawing = { vertices: PartPoint[]; normals: PartPoint[]; svg: string };
+type Polygon = { vertices: PartPoint[]; normal: PartPoint; svg: string; clip?: boolean };
+type Drawing = { vertices: PartPoint[]; normals: PartPoint[]; svg: string; marker: string; polygons: () => Polygon[] };
 
 function boxVertices({ x, y, z, w, d, h }: Box): PartPoint[] {
   return [x, x + w].flatMap((xx) => [y, y + d].flatMap((yy) => [z, z + h].map((zz) => [xx, yy, zz] as PartPoint)));
@@ -44,9 +45,61 @@ function silhouette(vertices: PartPoint[]) {
   return [...half(points), ...half([...points].reverse())];
 }
 
+// Disjoint solids can form a painter cycle at different plate offsets. Split
+// their visible polygons with a BSP only when whole-solid ordering cannot work.
+// Clipping the original artwork avoids drawing seams along the split edges.
+function splitPolygonOrder(polygons: Polygon[]): Polygon[] {
+  if (polygons.length < 2) return polygons;
+  const epsilon = 1e-8;
+  const distance = (polygon: Polygon, plane: Polygon) => {
+    const offset = dot(plane.normal, plane.vertices[0]);
+    return polygon.vertices.map(vertex => dot(plane.normal, vertex) - offset);
+  };
+  let plane = polygons[0], best = Infinity;
+  // A balanced choice limits recursion and fragmentation on dense facades.
+  for (let sample = 0; sample < Math.min(12, polygons.length); sample++) {
+    const candidate = polygons[Math.floor(sample * polygons.length / Math.min(12, polygons.length))];
+    let front = 0, back = 0, splits = 0;
+    for (const polygon of polygons) {
+      const distances = distance(polygon, candidate);
+      const positive = distances.some(value => value > epsilon), negative = distances.some(value => value < -epsilon);
+      if (positive) front++;
+      if (negative) back++;
+      if (positive && negative) splits++;
+    }
+    const score = Math.abs(front - back) + splits * 3;
+    if (score < best) { best = score; plane = candidate; }
+  }
+  const front: Polygon[] = [], back: Polygon[] = [], coplanar: Polygon[] = [];
+  for (const polygon of polygons) {
+    const distances = distance(polygon, plane);
+    const positive = distances.some(value => value > epsilon), negative = distances.some(value => value < -epsilon);
+    if (!positive && !negative) { coplanar.push(polygon); continue; }
+    if (!negative) { front.push(polygon); continue; }
+    if (!positive) { back.push(polygon); continue; }
+    const frontVertices: PartPoint[] = [], backVertices: PartPoint[] = [];
+    polygon.vertices.forEach((vertex, index) => {
+      const next = (index + 1) % polygon.vertices.length;
+      const a = distances[index], b = distances[next];
+      if (a >= -epsilon) frontVertices.push(vertex);
+      if (a <= epsilon) backVertices.push(vertex);
+      if ((a > epsilon && b < -epsilon) || (a < -epsilon && b > epsilon)) {
+        const fraction = a / (a - b);
+        const intersection = vertex.map((value, axis) => value + fraction * (polygon.vertices[next][axis] - value)) as PartPoint;
+        frontVertices.push(intersection); backVertices.push(intersection);
+      }
+    });
+    front.push({ ...polygon, vertices: frontVertices, clip: true });
+    back.push({ ...polygon, vertices: backVertices, clip: true });
+  }
+  // Every supplied polygon faces the fixed orthographic camera, so the plane's
+  // negative half-space is farther away. Coplanar faces retain their own art.
+  return [...splitPolygonOrder(back), ...coplanar, ...splitPolygonOrder(front)];
+}
+
 // Bounding-box depth sums fail for long bricks. Only overlapping projections
 // need an order; along a viewing ray X, Y and Z all increase toward the camera.
-function painterOrder(drawings: Drawing[]) {
+function painterOrder(drawings: Drawing[], point: (...position: PartPoint) => string) {
   const outlines = drawings.map(({ vertices }) => silhouette(vertices));
   const bounds = outlines.map((points) => ({ left: Math.min(...points.map(([x]) => x)), right: Math.max(...points.map(([x]) => x)),
     top: Math.min(...points.map(([, y]) => y)), bottom: Math.max(...points.map(([, y]) => y)) }));
@@ -106,8 +159,30 @@ function painterOrder(drawings: Drawing[]) {
     ordered.push(drawings[index]);
     for (const next of edges[index]) if (--incoming[next] === 0) ready.push(next);
   }
-  if (ordered.length !== drawings.length) throw new Error('Cannot resolve illustration occlusion order');
-  return ordered.map(({ svg }) => svg).join('');
+  const prefix = ordered.map(({ svg }) => svg).join('');
+  if (ordered.length === drawings.length) return prefix;
+  const unresolved = drawings.filter((_, index) => incoming[index] > 0);
+  const fragments = splitPolygonOrder(unresolved.flatMap(drawing => drawing.polygons()));
+  return prefix + unresolved.map(drawing => drawing.marker).join('') + fragments.map((polygon, index) => {
+    if (!polygon.clip) return polygon.svg;
+    const id = `occlusion-fragment-${index}`;
+    const points = polygon.vertices.map(vertex => point(...vertex).split(',').map(Number));
+    const winding = Math.sign(points.reduce((sum, [x, y], i) => {
+      const next = points[(i + 1) % points.length]; return sum + x * next[1] - y * next[0];
+    }, 0));
+    const normals = points.map(([x, y], i) => {
+      const next = points[(i + 1) % points.length], length = Math.hypot(next[0] - x, next[1] - y);
+      return length ? [(next[1] - y) / length * winding, (x - next[0]) / length * winding] : [0, 0];
+    });
+    // Adjacent antialiased clips otherwise leave translucent hairlines. A
+    // subpixel bleed joins them; the original artwork retains the outer edge.
+    const clip = points.map(([x, y], i) => {
+      const a = normals[(i + normals.length - 1) % normals.length], b = normals[i];
+      const bleed = 0.75 / Math.max(0.1, 1 + dot(a, b));
+      return `${x + (a[0] + b[0]) * bleed},${y + (a[1] + b[1]) * bleed}`;
+    }).join(' ');
+    return `<defs><clipPath id="${id}"><polygon points="${clip}"/></clipPath></defs><g clip-path="url(#${id})">${polygon.svg}</g>`;
+  }).join('');
 }
 
 /** A fixed isometric camera fitted to the complete design, including hidden bricks. */
@@ -149,13 +224,15 @@ export function renderDesignSvg(design: Design, options: RenderOptions = {}): st
     const strokeWidth = Math.max(0.45, Math.min(1.4, scale * 0.03));
     const face = (points: string[], fill: string) => `<polygon points="${points.join(' ')}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" stroke-linejoin="round"/>`;
     const body = partSurfaces(brick);
-    const shape = body.faces.filter(({ normal }) => dot(normal, view) > 1e-8).map(({ indices, normal }) => {
+    const polygons: Polygon[] = body.faces.filter(({ normal }) => dot(normal, view) > 1e-8).map(({ indices, normal }) => {
       const metricNormal = [normal[0], normal[1], normal[2] / 0.4];
       const shade = dot(metricNormal, [-0.3, -0.15, 0.08]) / metricNormal.reduce((sum, value) => sum + Math.abs(value), 0);
-      return face(indices.map((index) => point(...body.vertices[index])), tint(color, shade));
-    }).join('');
+      return { vertices: indices.map(index => body.vertices[index]), normal,
+        svg: face(indices.map((index) => point(...body.vertices[index])), tint(color, shade)) };
+    });
+    const marker = `<g data-brick-id="${escapeXml(brick.id)}" data-highlighted="${highlighted?.has(brick.id) ?? false}">`;
     const drawings: Drawing[] = [{ vertices: body.vertices, normals: body.faces.map(({ normal }) => normal),
-      svg: `<g data-brick-id="${escapeXml(brick.id)}" data-highlighted="${highlighted?.has(brick.id) ?? false}">${shape}</g>` }];
+      svg: `${marker}${polygons.map(polygon => polygon.svg).join('')}</g>`, marker: `${marker}</g>`, polygons: () => polygons }];
     for (const { x, y, z } of partTopStuds(brick)) {
       // An attached brick encloses the stud; never draw it through that brick.
       if (occupied.has(`${x},${y},${z}`)) continue;
@@ -167,7 +244,20 @@ export function renderDesignSvg(design: Design, options: RenderOptions = {}): st
         + `<ellipse cx="${cx}" cy="${cy - rise}" rx="${rx}" ry="${ry}" fill="${tint(color, 0.16)}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
       drawings.push({ vertices: boxVertices({ x: x - 0.3, y: y - 0.3, z, w: 0.6, d: 0.6, h: 0.5 }),
         normals: [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
-        svg: `<g data-stud-owner="${escapeXml(brick.id)}">${stud}</g>` });
+        svg: `<g data-stud-owner="${escapeXml(brick.id)}">${stud}</g>`, marker: `<g data-stud-owner="${escapeXml(brick.id)}"/>`,
+        polygons: () => {
+          const ring = Array.from({ length: 32 }, (_, index): PartPoint => {
+            const angle = index * 2 * Math.PI / 32;
+            return [x + 0.3 * Math.cos(angle), y + 0.3 * Math.sin(angle), z + 0.5];
+          });
+          const surfaces: Polygon[] = [{ vertices: ring, normal: [0, 0, 1], svg: stud, clip: true }];
+          for (let index = 0; index < ring.length; index++) {
+            const a = ring[index], b = ring[(index + 1) % ring.length];
+            const normal: PartPoint = [(a[0] + b[0]) / 2 - x, (a[1] + b[1]) / 2 - y, 0];
+            if (dot(normal, view) > 1e-8) surfaces.push({ vertices: [a, [a[0], a[1], z], [b[0], b[1], z], b], normal, svg: stud, clip: true });
+          }
+          return surfaces;
+        } });
     }
     return drawings;
   };
@@ -176,5 +266,5 @@ export function renderDesignSvg(design: Design, options: RenderOptions = {}): st
     <text x="66" y="${height - 16}" stroke="none">+X</text><text x="4" y="${height - 8}" stroke="none">+Y</text>
     <text x="47" y="${height - 48}" stroke="none">UP</text><text x="${width - 12}" y="${height - 14}" text-anchor="end" stroke="none">FRONT</text>
   </g>` : '';
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeXml(design.title)} brick model"><title>${escapeXml(design.title)}</title>${painterOrder(bricks.flatMap(drawBrick))}${cue}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeXml(design.title)} brick model"><title>${escapeXml(design.title)}</title>${painterOrder(bricks.flatMap(drawBrick), point)}${cue}</svg>`;
 }
