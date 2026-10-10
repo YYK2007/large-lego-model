@@ -107,3 +107,46 @@ Performance fixtures should include dense solid bodies, hollow shells, many smal
 ## Next action
 
 Use the real Gemini key to evaluate the current pipeline on an explicitly volumetric brief and preserve the full result and ten-view contact sheet. Repair the representation/evaluation if it generates a planar object. Then implement the smallest complete V2 slice: plate units, a small plate/slope catalog with authored connector fixtures, actual meshes, and one physically reviewed model with a repeated subassembly. Run larger budget experiments after that slice is correct. Neither research availability nor this document demonstrates that those stages are already implemented.
+
+## Next assembly requirement: hanging pieces on ordinary upright studs
+
+**Proposed, not implemented, October 10 checkpoint.** Keep the current strict admission rule until ordering, clearance checks, viewer guidance, and manual instructions change together. Adding longer parts or accepting a connected final graph does not complete this work. The current 36-part palette can geometrically connect an upright piece to an underside above it using its top studs; no hinge, sideways stud, inverted part, or invented connector is needed. Whether that connection can carry a hanging load remains physically unverified.
+
+The recorded `output/complex-reliability/elephant-2/plan.json` exposes the limitation. Its trunk begins above the base at z24, tusk tips at z45, and tail tuft at z51. An offline compilation at this checkpoint produced 3,518 pieces: 131 had no stud below, while 130 of those had a matching connection above. The final graph still had 64 disconnected components, so this **is not** a valid model waiting for one rule to be removed. It combines a real restriction of our assembly subset with disconnected plan geometry and packing failures. These counts describe that recorded plan and compiler checkpoint; later packing changes can change them without changing the intended occupied volume.
+
+`validateDesign` already builds an undirected graph from actual matching stud/underside sites. Its separate requirement for a lower connection on every elevated piece implies eventual ground support. If that requirement is replaced, explicitly require both at least one z0 piece and a single connected graph containing every piece and the grounded pieces. Otherwise a completely floating but internally connected cluster could pass. Side contact and table contact must still create no stud-connection edges.
+
+The smallest useful assembly extension is a deterministic sequence of individually placed upright pieces:
+
+1. Seed the sequence with the existing ground pieces in stable z/y/x/ID order. They can remain loose on the table until later pieces join them, as current instructions explain.
+2. Consider only pieces with a real connector to an already placed piece. Allow attachment from above to a lower stud, or from below to an upper receiver. Prefer the existing order where it remains valid, then consider newly reachable hanging pieces before closing access around them.
+3. Check a conservative insertion path against the **already placed** assembly, including the part body envelope and exposed stud volumes. An approach from above must have a clear downward path. An approach from below can use a straight lateral entry from one of ±X/±Y at a disengaged height, followed by an upward seating stroke. Derive the disengagement distance from verified connector geometry; one plate is a candidate clearance, not a substitute for that check. Reject approaches through the table plane.
+4. Exempt only a matching stud/receiver during terminal seating. No exemption permits an unrelated stud or body to pass through material. An infinite upward ray would unnecessarily reject a hanging appendage over a wide base; checking only the short upward stroke would incorrectly allow teleporting into a sealed cavity. The lateral approach and seating stroke both need a check.
+5. Record the actual direction and waypoints with each placement. If no supported sequence is found, decline it with “No assembly path was found in the supported placement directions.” Do not call every such rejection physically impossible. A greedy sequence can miss a valid alternative order or a solution using separate subassemblies, rotations, or hand manipulation; those remain outside this narrow increment.
+
+The check proves only this conservative geometric path under the catalog assumptions. It does not simulate hand access, friction, clutch strength, bending, tipping, or whether intermediate states stay upright without being held. Retain those physical limitations in the output.
+
+| File or surface | Required coordinated change |
+| --- | --- |
+| New `shared/assembly.ts` | Pure connector-frontier ordering and swept-path result, with deterministic placement IDs, direction, and waypoints; spatial indexing for large builds |
+| `shared/model.ts` | Keep schema/catalog/collision checks; replace the lower-only rule only after grounded connectivity and assembly-path checks exist; make `buildSteps` use that same order |
+| `buildSteps` contract | Retain `index`, `z`, `bricks`, and `instruction`; add per-piece placement metadata. Batch only compatible consecutive placements, preserving exact sequence and coordinates |
+| `src/AssemblyView.tsx` | Show the active piece's approach and attachment direction; invalidate old saved step indices by changing the progress-storage version |
+| `src/BrickScene.tsx` | Stop showing every piece dropping from above; animate or clearly indicate the checked path, including upward attachment |
+| `shared/brick-geometry.ts` | Generalize the existing vertical offset only if the viewer displays lateral waypoints; final transforms remain unchanged |
+| `server/manual-render.ts` | Print the same sequence and attachment direction, including below-attachment callouts; diagrams and numbered placements must not independently sort by height |
+| LDraw export | Continue consuming `buildSteps` so `0 STEP` follows the same assembly sequence; preserve all part IDs, colors, final poses, and BOM |
+| Compiler diagnostics and planner prompt | Distinguish a connected hanging piece from a disconnected component. Do not claim every missing lower stud is impossible, or silently fill the appendage's empty space |
+
+Acceptance cases before enabling the new rule:
+
+- A grounded overhang with a connected hanging chain passes; the anchor is placed first and hanging pieces attach upward in a checked order.
+- A connected cluster with no ground path fails. Side-only contact and a supposed connection onto a studless tile fail.
+- A sealed-cavity fixture fails even though its final connector graph is connected; a piece cannot appear inside it without a permitted insertion path.
+- An overhead obstruction blocks downward insertion. A counterpart with a clear lateral approach and upward seating path succeeds; closing that corridor causes rejection.
+- A nonmatching stud intersecting a swept body rejects. Matched terminal seating succeeds without a blanket collision exemption.
+- The existing frozen samples retain exact instance IDs, final poses, BOMs, and their current order wherever that order passes the new checks. No fixture is silently rewritten to hide a path failure.
+- The web active placement, PDF callout, and LDraw step reconstruct the same frozen model in the same order. An upward placement must not retain a downward animation or lower-stud instruction.
+- A large connected fixture is timed with the new ordering/path checks; failures remain responsive and no path decision silently skips geometry because of model size.
+
+No part of this proposed extension establishes the current rose, elephant, or Taj Mahal generation acceptance. Reference resemblance, complete valid geometry, and usable instructions still need separate recorded evidence.

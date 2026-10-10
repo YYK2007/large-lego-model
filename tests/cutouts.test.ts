@@ -85,7 +85,7 @@ test('cutouts leave slopes whole and slope envelopes still reject remaining box 
 
 test('cutout designs use only exact confirmed part quantities and colors in owned mode', () => {
   const design = compileGeneratedPlan(HOLLOW_ROOM_PLAN, { prompt: 'A hollow furnished room' });
-  const inventory = Object.keys(PARTS).flatMap(partId => [15, 70, 14].map(colorId => ({ partId, colorId, quantity: 200, source: 'Confirmed fixture collection' })));
+  const inventory = Object.keys(PARTS).flatMap(partId => [15, 70, 14].filter(colorId => PARTS[partId].allowedColors.includes(colorId)).map(colorId => ({ partId, colorId, quantity: 200, source: 'Confirmed fixture collection' })));
   const owned = compileGeneratedPlan(HOLLOW_ROOM_PLAN, { prompt: 'The same room using only my parts', inventoryMode: 'owned', inventory });
   assert.equal(allocateInventory(owned, inventory).totalMissing, 0);
   assert.deepEqual(brickCells(owned), brickCells(design));

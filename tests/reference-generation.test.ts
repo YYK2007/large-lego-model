@@ -225,3 +225,35 @@ test('less than ten seconds remaining stops before sending a paid comparison req
   await assert.rejects(generateDesign({ prompt: 'Build this object', image: flow.uploadedImage }), (error: unknown) => error instanceof GenerationError && error.status === 504 && /not enough time left/.test(error.message));
   assert.deepEqual(flow.records.map(record => record.kind), ['plan']);
 });
+
+test('curved profile plans reach compiled render review and can be repaired without replacing their structure', async t => {
+  const curvedPlan = { ...plan, boxes: [{ x: 0, y: 0, z: 0, width: 6, depth: 6, height: 6, colorId: 4 }], profiles: [{ shape: 'ellipse', colorId: 4,
+    sections: [{ z: 6, cx: 3, cy: 3, width: 6, depth: 6 }, { z: 21, cx: 3, cy: 3, width: 6, depth: 6 }] }] };
+  const flow = await mockedFlow(t, { plans: [curvedPlan, repair('/profiles/0/sections/1/z', 24)], critics: [mismatch, matched] });
+  const result = await generateDesign({ prompt: 'A rounded real-world object', image: flow.uploadedImage });
+  assert.equal(validateDesign(result).valid, true);
+  assert.equal(result.research?.comparison.status, 'matched');
+  assert.ok(result.bricks.some(brick => brick.z >= 21), 'The second plan extends the existing curved body');
+  assert.ok(flow.records.filter(record => record.kind === 'critic').every(record => images(record).filter(image => image.mimeType === 'image/png').length === 2));
+  assert.ok(flow.records.find(record => record.kind === 'plan')!.body.generationConfig.responseJsonSchema.properties.profiles,
+    'The provider can express the same profiles accepted by compilation');
+});
+
+test('an improving structural repair gets one extra attempt within the existing deadline', async t => {
+  const staged = { ...plan, boxes: [{ x: 0, y: 0, z: 0, width: 12, depth: 4, height: 9, colorId: 4 },
+    ...[0, 3, 6, 9].map(x => ({ x, y: 1, z: 12, width: 1, depth: 1, height: 3, colorId: 15 }))] };
+  const flow = await mockedFlow(t, { plans: [staged, ...[1, 2, 3, 4].map(index => repair(`/boxes/${index}/z`, 9))], critics: [matched] });
+  const events: GenerationProgress[] = [];
+  const result = await generateDesign({ prompt: 'A building with four raised details', image: flow.uploadedImage }, event => events.push(event));
+  assert.equal(validateDesign(result).valid, true);
+  assert.equal(result.bricks.filter(brick => brick.colorId === 15).length, 4, 'All four details survive the repairs');
+  assert.equal(flow.records.filter(record => record.kind === 'plan').length, 5);
+  assert.ok(events.some(event => event.stage === 'planning' && event.attempt === 5 && event.maxAttempts === 5));
+});
+
+test('stalled structural repairs still stop after four attempts', async t => {
+  const floating = { ...plan, boxes: [...plan.boxes, { x: 0, y: 0, z: 12, width: 1, depth: 1, height: 3, colorId: 15 }] };
+  const flow = await mockedFlow(t, { plans: [floating, ...Array.from({ length: 3 }, () => repair('/boxes/1/z', 12))] });
+  await assert.rejects(generateDesign({ prompt: 'A real sculpture', image: flow.uploadedImage }), /after four attempts/);
+  assert.equal(flow.records.filter(record => record.kind === 'plan').length, 4);
+});

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { compilePlan, type ShapePlanV2 } from '../server/compiler.js';
+import { compilePlan, CompilationDeadlineError, type ShapePlanV2 } from '../server/compiler.js';
 import { compileGeneratedPlan } from '../server/generation.js';
 import { allocateInventory, footprint, partHeight, validateDesign, type Design, type InventoryItem } from '../shared/model.js';
 import { BELL_TOWER_PACKING_PLAN } from './fixtures/bell-tower-packing-plan.js';
@@ -19,7 +19,7 @@ function occupied(design: Design) {
   return cells;
 }
 
-test('an alternate scan seats the recorded Bell Tower eaves without adding or removing any colored cells', () => {
+test('local repacking seats the recorded Bell Tower eaves without adding or removing any colored cells', () => {
   const plan = structuredClone(BELL_TOWER_PACKING_PLAN);
   // Keep the palette that exposed this bug. Larger new parts can bridge the
   // original eave on the first scan, which would no longer exercise the retry.
@@ -28,16 +28,48 @@ test('an alternate scan seats the recorded Bell Tower eaves without adding or re
   const inventory: InventoryItem[] = originalParts.flatMap(partId => colors.map(colorId => ({ partId, colorId, quantity: 10000, source: 'Historical palette regression stock' })));
   const options = { prompt: plan.title, inventory, ownedOnly: true };
   const first = compilePlan(plan, options);
-  const rejected = validateDesign(first);
-  assert.equal(rejected.valid, false);
-  assert.equal(rejected.errors.length, 1);
-  assert.match(rejected.errors[0], /no stud support directly below/);
+  assert.equal(validateDesign(first).valid, true);
   const alternate = compilePlan(plan, { ...options, scanOrder: 'x-major' });
   assert.equal(validateDesign(alternate).valid, true);
   assert.deepEqual(occupied(alternate), occupied(first));
   assert.deepEqual(plan, BELL_TOWER_PACKING_PLAN);
-  assert.deepEqual(compileGeneratedPlan(plan, { prompt: plan.title, inventory, inventoryMode: 'owned' }).bricks, alternate.bricks);
+  const generated = compileGeneratedPlan(plan, { prompt: plan.title, inventory, inventoryMode: 'owned' });
+  assert.equal(validateDesign(generated).valid, true);
+  assert.deepEqual(occupied(generated), occupied(first));
+  assert.equal(allocateInventory(generated, inventory).totalMissing, 0);
+  assert.equal(allocateInventory(first, inventory).totalMissing, 0);
   assert.ok(alternate.bricks.some(brick => brick.partId === '3020' && brick.x === 8 && brick.y === 16 && brick.z === 66 && brick.rotation === 90), 'A real 2x4 plate bridges from the existing corner pier');
+});
+
+test('profile packing reaches mixed bricks when plate courses exceed a user budget or confirmed stock', () => {
+  const profile = { shape: 'rectangle' as const, colorId: 15, sections: [
+    { z: 0, cx: 2, cy: 2, width: 4, depth: 4 }, { z: 9, cx: 2, cy: 2, width: 4, depth: 4 },
+  ] };
+  const plan: ShapePlanV2 = { schemaVersion: 2, coordinateSystem: 'stud-xy-plate-z', title: 'Solid profile', description: 'A full three-dimensional profile with brick-only stock.', boxes: [], profiles: [profile] };
+  const inventory: InventoryItem[] = [{ partId: '3001', colorId: 15, quantity: 6, source: 'Confirmed brick lot' }];
+  const before = structuredClone({ plan, inventory });
+  const expected = new Map<string, number>();
+  for (let z = 0; z < 9; z++) for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) expected.set(`${x},${y},${z}`, 15);
+  // Exercise direct profiles and the same profile nested in a repeat. Both
+  // plate-first attempts must fail before the valid mixed fallback is tried.
+  for (const nested of [false, true]) {
+    const candidate = nested ? { ...plan, profiles: [], repeats: [{ count: 1, dx: 0, dy: 0, dz: 0, profiles: [profile] }] } : plan;
+    for (const options of [{ maxBricks: 6 }, { inventory, ownedOnly: true }]) {
+      for (const scanOrder of ['y-major', 'x-major'] as const) assert.throws(() => compilePlan(candidate, {
+        prompt: plan.title, ...options, repair: false, packing: 'plates', scanOrder,
+      }), /requested 6-brick budget|available inventory/);
+      const result = compileGeneratedPlan(candidate, { prompt: plan.title, ...options, inventoryMode: options.ownedOnly ? 'owned' : 'unlimited' });
+      assert.equal(validateDesign(result).valid, true);
+      assert.equal(result.bricks.length, 6);
+      assert.deepEqual(occupied(result), expected);
+      if (options.ownedOnly) assert.equal(allocateInventory(result, inventory).totalMissing, 0);
+    }
+  }
+  assert.deepEqual({ plan, inventory }, before);
+});
+
+test('an expired compiler deadline is not treated as a recoverable packing failure', () => {
+  assert.throws(() => compileGeneratedPlan(HOLLOW_ROOM_PLAN, { prompt: 'Original room' }, Date.now() - 1), CompilationDeadlineError);
 });
 
 test('default scan retains a valid original packing and alternate scan retains exact owned stock constraints', () => {

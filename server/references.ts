@@ -132,7 +132,7 @@ export async function discoverReferences(subject: ReferenceSubject, options: Opt
   const search = `${name} ${location}`.replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean).map(quote).join(' ');
   const warnings: string[] = [];
   const results = await Promise.allSettled([
-    query('en.wikipedia.org', { generator: 'search', gsrsearch: names.map(quote).join(' OR '), gsrnamespace: '0', gsrlimit: '3', prop: 'pageimages|extracts|info', piprop: 'name', pilicense: 'free', exintro: '1', explaintext: '1', exsentences: '3', inprop: 'url' }, signal),
+    query('en.wikipedia.org', { titles: names.join('|'), redirects: '1', prop: 'pageimages|extracts|info', piprop: 'name', pilicense: 'free', exintro: '1', explaintext: '1', exsentences: '3', inprop: 'url' }, signal),
     query('commons.wikimedia.org', { generator: 'search', gsrsearch: search, gsrnamespace: '6', gsrlimit: '6', ...imageInfoParams }, signal),
   ]);
   signal.throwIfAborted();
@@ -170,16 +170,24 @@ export async function loadReferenceImages(candidates: ReferenceCandidate[], opti
   if (!Number.isInteger(maxImages) || maxImages < 1 || maxImages > 3) throw new Error('Load one to three reference images.');
   const signal = AbortSignal.any([AbortSignal.timeout(15_000), ...(options.signal ? [options.signal] : [])]);
   const images: ReferenceImage[] = [];
-  for (const item of candidates.slice(0, maxImages)) {
-    const { bytes, contentType } = await boundedFetch(item.imageUrl, 'image', signal);
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(contentType)) throw new Error('Reference response is not a supported raster image.');
-    const input = sharp(bytes, { limitInputPixels: 24_000_000, animated: false });
-    const info = await input.metadata();
-    if (!['jpeg', 'png', 'webp'].includes(info.format || '') || (info.pages ?? 1) > 1) throw new Error('Reference must be a single raster photograph.');
-    signal.throwIfAborted();
-    const { data, info: output } = await input.rotate().resize({ width: 1280, height: 1280, fit: 'inside', withoutEnlargement: true }).flatten({ background: '#ffffff' }).jpeg({ quality: 85 }).toBuffer({ resolveWithObject: true });
-    signal.throwIfAborted();
-    images.push({ metadata: { ...item, width: output.width, height: output.height, fetchedAt: new Date().toISOString(), sha256: createHash('sha256').update(data).digest('hex') }, inlineData: { mimeType: 'image/jpeg', data: data.toString('base64') } });
+  let firstFailure: unknown;
+  for (const item of candidates.slice(0, 6)) {
+    try {
+      const { bytes, contentType } = await boundedFetch(item.imageUrl, 'image', signal);
+      if (!['image/jpeg', 'image/png', 'image/webp'].includes(contentType)) throw new Error('Reference response is not a supported raster image.');
+      const input = sharp(bytes, { limitInputPixels: 24_000_000, animated: false });
+      const info = await input.metadata();
+      if (!['jpeg', 'png', 'webp'].includes(info.format || '') || (info.pages ?? 1) > 1) throw new Error('Reference must be a single raster photograph.');
+      signal.throwIfAborted();
+      const { data, info: output } = await input.rotate().resize({ width: 1280, height: 1280, fit: 'inside', withoutEnlargement: true }).flatten({ background: '#ffffff' }).jpeg({ quality: 85 }).toBuffer({ resolveWithObject: true });
+      signal.throwIfAborted();
+      images.push({ metadata: { ...item, width: output.width, height: output.height, fetchedAt: new Date().toISOString(), sha256: createHash('sha256').update(data).digest('hex') }, inlineData: { mimeType: 'image/jpeg', data: data.toString('base64') } });
+      if (images.length === maxImages) break;
+    } catch (error) {
+      signal.throwIfAborted();
+      firstFailure ??= error;
+    }
   }
+  if (!images.length && firstFailure) throw firstFailure;
   return images;
 }

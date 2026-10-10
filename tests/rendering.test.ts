@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createHash } from 'node:crypto';
 import { InstancedMesh, Matrix4, Mesh, MeshStandardMaterial, Vector3 } from 'three';
 import { createBrickModel, createInstancedBrickModel } from '../shared/brick-geometry.js';
-import { CATALOG_VERSION, COORDINATE_SYSTEM, PARTS, type Design } from '../shared/model.js';
+import { CATALOG_VERSION, COORDINATE_SYSTEM, PARTS, WORKSPACE, type Design } from '../shared/model.js';
 
 const design: Design = {
   id: 'render-test', title: 'Renderer specimen', description: '', source: 'sample', prompt: '', createdAt: '2026-10-10',
@@ -15,29 +14,48 @@ function vertices(mesh: Mesh, transform: Matrix4) {
   const points = mesh.geometry.getAttribute('position'), index = mesh.geometry.index;
   return Array.from({ length: index?.count ?? points.count }, (_, i) => {
     const point = new Vector3().fromBufferAttribute(points, index ? index.getX(i) : i).applyMatrix4(transform);
-    return point.toArray().map(value => Math.round(value * 1e5)).join(',');
+    return point.toArray();
   });
 }
-const signature = (points: string[]) => createHash('sha256').update(points.sort().join(';')).digest('hex');
+function assertVerticesMatch(actual: number[][], expected: number[][], label: string) {
+  assert.equal(actual.length, expected.length, `${label}: vertex count`);
+  // Merging studs into Float32 geometry and storing instance translations adds
+  // rounding that native meshes defer until rendering. Compare distances, not
+  // rounded hashes: nearby points can lie on opposite rounding boundaries.
+  // 1e-5 stud = 0.00008 mm, including the full 384-plate workspace height.
+  for (let i = 0; i < expected.length; i++) for (let axis = 0; axis < 3; axis++) {
+    assert.ok(Math.abs(actual[i][axis] - expected[i][axis]) <= 1e-5, `${label}: vertex ${i}, axis ${axis}`);
+  }
+}
 const batches = (model: ReturnType<typeof createInstancedBrickModel>) => model.model.children.filter((item): item is InstancedMesh => item instanceof InstancedMesh && item.visible);
 
 test('instanced rendering preserves every native body/stud vertex and catalog color at all four yaws', () => {
-  for (const part of Object.values(PARTS)) for (const rotation of [0, 90, 180, 270] as const) {
-    const specimen = { ...design, bricks: [{ ...design.bricks[0], partId: part.id, rotation }] };
+  for (const part of Object.values(PARTS)) for (const rotation of [0, 90, 180, 270] as const) for (const z of [9, WORKSPACE.heightPlates - part.heightPlates]) {
+    const specimen = { ...design, bricks: [{ ...design.bricks[0], partId: part.id, rotation, z }] };
     const native = createBrickModel(specimen);
     native.updateMatrixWorld(true);
-    const nativePoints: string[] = [];
+    const nativePoints: number[][] = [];
     native.traverse(object => { if (object instanceof Mesh) nativePoints.push(...vertices(object, object.matrixWorld)); });
     const web = createInstancedBrickModel(specimen);
     const meshes = batches(web);
     assert.equal(meshes.length, 1);
     const matrix = new Matrix4();
     meshes[0].getMatrixAt(0, matrix);
-    assert.equal(signature(vertices(meshes[0], matrix)), signature(nativePoints), `${part.id} at ${rotation} degrees`);
+    assertVerticesMatch(vertices(meshes[0], matrix), nativePoints, `${part.id} at ${rotation} degrees, z=${z}`);
     const body = native.children[0].children[0] as Mesh;
     assert.equal((meshes[0].material as MeshStandardMaterial).color.getHex(), (body.material as MeshStandardMaterial).color.getHex());
     web.dispose();
   }
+});
+
+test('vertex equivalence rejects a real instance displacement', () => {
+  const web = createInstancedBrickModel(design);
+  const mesh = batches(web)[0], matrix = new Matrix4();
+  mesh.getMatrixAt(0, matrix);
+  const original = vertices(mesh, matrix);
+  matrix.elements[12] += 0.001;
+  assert.throws(() => assertVerticesMatch(vertices(mesh, matrix), original, 'Displaced instance'), /vertex 0, axis 0/);
+  web.dispose();
 });
 
 test('1,024 repeated pieces use one solid draw batch and preserve every piece instance', () => {

@@ -1,17 +1,29 @@
 import { PARTS, footprint, partHeight, partTopStuds, partBottomSites, type Brick, type Design } from '../shared/model.js';
 import type { ShapeBox, ShapePlanV2 } from './compiler.js';
+import { expandProfile, translateProfile, type ShapeProfile } from './shape-profiles.js';
 
 type Point = { x: number; y: number; z: number };
-export type PlanSource = { path: string; copy?: number; translation?: Point };
+export type PlanSource = { path: string; sections?: [number, number]; copy?: number; translation?: Point };
 type Bounds = { x: number; y: number; z: number; width: number; depth: number; height: number };
 type Primitive = { source: PlanSource; bounds: Bounds; cutouts?: ShapeBox['cutouts'] };
 const key = (x: number, y: number, z: number) => `${x},${y},${z}`;
 const contains = (box: Bounds, point: Point) => point.x >= box.x && point.x < box.x + box.width && point.y >= box.y && point.y < box.y + box.depth && point.z >= box.z && point.z < box.z + box.height;
-const sourceKey = (source: PlanSource) => `${source.path}:${source.copy ?? ''}`;
+const sourceKey = (source: PlanSource) => `${source.path}:${source.copy ?? ''}:${source.sections?.join(',') ?? ''}`;
 
 function primitives(plan: ShapePlanV2): Primitive[] {
   const result: Primitive[] = [];
-  // Match compiler order: direct boxes, expanded repeated boxes, then fixed
+  const addProfiles = (profiles: ShapeProfile[], prefix: string, translation: Point, copy?: number) => {
+    profiles.forEach((profile, index) => {
+      for (const row of expandProfile(translateProfile(profile, translation), `${prefix}/${index}`)) {
+        result.push({ source: { ...row.source, ...(copy === undefined ? {} : { copy, translation }) }, bounds: row.box });
+      }
+    });
+  };
+  addProfiles(plan.profiles || [], '/profiles', { x: 0, y: 0, z: 0 });
+  plan.repeats?.forEach((repeat, index) => {
+    for (let copy = 0; copy < repeat.count; copy++) addProfiles(repeat.profiles || [], `/repeats/${index}/profiles`, { x: copy * repeat.dx, y: copy * repeat.dy, z: copy * repeat.dz }, copy);
+  });
+  // Match compiler order: profiles, direct boxes, repeated boxes, then fixed
   // slopes and parts. Fixed envelopes never overlap boxes in a compiled plan.
   for (const field of ['boxes', 'slopes', 'parts'] as const) {
     const add = (items: NonNullable<ShapePlanV2[typeof field]>, prefix: string, translation: Point, copy?: number) => {
@@ -34,9 +46,15 @@ function primitives(plan: ShapePlanV2): Primitive[] {
 /** Explain a compiled V2 plan without recompiling, changing volume or relaxing checks. */
 export function diagnosePlanSupport(plan: ShapePlanV2, design: Design) {
   const shapes = primitives(plan);
+  const shapesByHeight = new Map<number, Primitive[]>();
+  for (const shape of shapes) for (let z = shape.bounds.z; z < shape.bounds.z + shape.bounds.height; z++) {
+    const level = shapesByHeight.get(z) || [];
+    level.push(shape); shapesByHeight.set(z, level);
+  }
   const cutsAt = (shape: Primitive, point: Point) => shape.cutouts?.flatMap((cut, index) => contains({ ...cut, x: cut.x + shape.bounds.x, y: cut.y + shape.bounds.y, z: cut.z + shape.bounds.z }, point) ? [index] : []) || [];
   const ownerAt = (point: Point): Primitive | undefined => {
-    for (let i = shapes.length - 1; i >= 0; i--) if (contains(shapes[i].bounds, point) && !cutsAt(shapes[i], point).length) return shapes[i];
+    const level = shapesByHeight.get(point.z) || [];
+    for (let i = level.length - 1; i >= 0; i--) if (contains(level[i].bounds, point) && !cutsAt(level[i], point).length) return level[i];
   };
   const studOwners = new Map<string, number>();
   const studsByHeight = new Map<number, Point[]>();
@@ -91,7 +109,7 @@ export function diagnosePlanSupport(plan: ShapePlanV2, design: Design) {
       const lowerHeights = (heightsByXY.get(key(site.x, site.y, 0)) || []).filter(z => z < brick.z);
       for (const z of lowerHeights) group.nearestAlignedStudGapPlates = Math.min(group.nearestAlignedStudGapPlates ?? Infinity, brick.z - z);
       for (const stud of studsByHeight.get(brick.z) || []) group.nearestSameHeightStudDistance = Math.min(group.nearestSameHeightStudDistance ?? Infinity, Math.abs(site.x - stud.x) + Math.abs(site.y - stud.y));
-      for (const shape of occupiedBelow ? [] : shapes) if (contains(shape.bounds, below)) for (const cut of cutsAt(shape, below)) {
+      for (const shape of occupiedBelow ? [] : shapesByHeight.get(below.z) || []) if (contains(shape.bounds, below)) for (const cut of cutsAt(shape, below)) {
         const path = `${shape.source.path}/cutouts/${cut}`;
         if (!group.cutoutsBelow.some(item => item.path === path && item.source.copy === shape.source.copy)) group.cutoutsBelow.push({ source: shape.source, path });
       }

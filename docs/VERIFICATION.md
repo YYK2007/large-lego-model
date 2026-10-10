@@ -4,9 +4,9 @@ This document distinguishes tested local behavior from live integrations that ne
 
 ## Automated checks
 
-The current suite has **203 passing tests**. `npm test` covers malformed placements and metadata, exact shape/color preservation through packing, interlocked seams, collision/support/connectivity gates, BOM/step consistency, inventory quantities and provenance, CSV escaping, LDraw units/orientation, PDF placement maps and page overflow, immutable saved revisions, and Photon message parsing/deduplication/session handling. New coverage includes uncapped piece counts, explicit budgets, bulk inventory, V2/legacy normalization, plate heights, four slope orientations and partial stud coverage, repeated-feature plans, exact web/native geometry, streaming progress, provider deadlines/errors, and the detailed castle's openings and placement order.
+The current suite has **255 passing tests**. `npm test` covers malformed placements and metadata, exact shape/color preservation through packing, interlocked seams, collision/support/connectivity gates, BOM/step consistency, inventory quantities and provenance, CSV escaping, LDraw units/orientation, PDF placement maps and page overflow, immutable saved revisions, and Photon message parsing/deduplication/session handling. New coverage includes uncapped piece counts, explicit budgets, bulk inventory, V2/legacy normalization, plate heights, four slope orientations and partial stud coverage, repeated-feature plans, exact web/native geometry, streaming progress, provider deadlines/errors, and the detailed castle's openings and placement order.
 
-`npm run build` passes its strict TypeScript check and production build. Vite still reports a bundle-size advisory for the Three.js-containing main chunk (about 992 KB minified, 250 KB gzip). At checkpoint 02, `npm audit` was reduced from 18 moderate transitive findings to zero by pinning `@opentelemetry/core` to 2.12.0; no dependency change or fresh audit was part of checkpoint 03.
+`npm run build` passes its strict TypeScript check and production build. Vite still reports a bundle-size advisory for the Three.js-containing main chunk (about 997 KB minified, 251 KB gzip). At checkpoint 02, `npm audit` was reduced from 18 moderate transitive findings to zero by pinning `@opentelemetry/core` to 2.12.0; no dependency change or fresh audit was part of checkpoint 03.
 
 ## Checkpoint 03: uncapped, more complex builds
 
@@ -92,3 +92,39 @@ This is a reviewable implementation checkpoint; its likeness and reliable-genera
 - Build a small model physically from the generated manual. Geometry checks alone do not establish mechanical stability.
 
 No credentials have been committed. No real iMessage was sent during offline verification.
+
+
+## Checkpoint 06: curved planning, support-aware packing and direct USDZ
+
+### Implemented and verified locally
+
+- The catalog now contains **36 real part types**. The ten additions include 1×8 through 1×16 bricks, 2×12/2×16 plates, and 6×12 through 16×16 plates. Rebrickable identities/colors and official LDraw bounds were checked; all prior part definitions and color records remain unchanged. See `part-catalog-increment.md`.
+- Profiles interpolate horizontal ellipse/rectangle sections in stud/plate units and compile into real pieces. Hollow ellipse sectors can represent open curved surfaces such as individual petals; omitted/full-circle sectors preserve prior cells. Profiles repeat and retain precise source paths in repair feedback. This grammar does not establish that the AI chooses a faithful shape.
+- Generation tries quick tilings before one bounded local repair. Profile plans try plate courses first. Inventory/budget failures can fall back to full bricks. Local backtracking moves seams and course boundaries without adding, deleting or recoloring occupied cells, or moving fixed pieces. It preserves strict improvements in still-invalid plans for better diagnostics; final admission still requires full validation.
+- A recorded Taj plan that previously failed now compiles into **3,768 pieces / 361 steps** with exactly the same colored cells, openings and fixed cones. Opposite renders show a pyramidal cap, so this is a packing regression, not likeness success. An ellipse and mixed-height/window-header fixtures independently exercise the repairs.
+- Four photo-backed attempts may extend to six only while structural error count decreases and time remains. This is a packing-dependent progress measure, not visual evidence. Network and cooperative compiler work share the original 90-second deadline. Higher reasoning was tested and rejected after consuming the JSON token budget and timing out. A complete leading JSON object can survive unrelated trailing provider text; incomplete JSON still fails without compilation.
+- Reference lookup now uses canonical article titles/redirects instead of broad namesake search. Concrete animals/plants receive photos too. A failed image download can fall through to another ranked candidate. Correct subject selection still needs pixel review; several Taj references are edits of one photograph, not independent viewpoints.
+
+### Actual live outcomes
+
+| Request/run | Outcome |
+| --- | --- |
+| Taj Mahal, `taj-4` | **5,910 pieces, 556 steps, 18 part types, 87.21 s**, ID `210de763-19fa-420a-af80-7ac3e176990a`. Passed geometry and reached photo comparison after two repairs. Returned **Needs refinement**. Opposite renders and the actual browser were inspected: rounded central dome and four towers are present; entrance arches and architectural proportions remain crude. The AI critic's detailed claims are not independently certified. |
+| Garden rose, `rose-3` | **1,025 pieces / 144 steps / 70.88 s**. Geometry passes; reviewed as **Needs refinement**. Thick stem, rectangular leaves and concentric bloom fail the requested organic form. |
+| Garden rose, `rose-4` | **1,493 pieces / 194 steps / 53.58 s**. Geometry passes; reviewed as **Needs refinement**. Direct inspection confirms a knob-like bloom and flat leaf ledges. |
+| Open-sector rose, `rose-5` / `rose-6` | No accepted final design. One provider completed a patch then repeated unrelated text to its token limit, motivating the closed-object recovery test. The later run failed on colliding slopes and unsupported shell/leaf pieces after four attempts in **72.78 s**. The new petal grammar is locally verified, but live petal likeness remains unproven. |
+| Elephant | Still unreliable. One attempt reached valid geometry late but could not finish comparison; other plans have real disconnected groups plus appendages attached only from above. The current bottom-up subset rejects those. The checked assembly-path extension and acceptance tests are specified in `complex-builds.md`; the support rule was not removed. |
+
+These are development runs, not a reliability benchmark. No model was hand-built. Do not describe this checkpoint as solving arbitrary realistic objects.
+
+### USDZ page and archive checks
+
+The page now exposes **Download 3D (.usdz)** below the model. The clicked revision is captured before saving/exporting; button state, completion text and errors refer to that revision. A real Chrome download of the 380-piece iPhone matches all body positions and 2,276 studs. A controlled delayed download preserves the 1,345-piece castle while the viewer switches to the rocket; a controlled HTTP 503 preserves the model and enables retry. Evidence: `output/usdz-ui/`.
+
+The 5,910-piece Taj draft was opened in the in-app browser and its page download reached the completion state. A separate actual local export-endpoint response was inspected: **67,121,817 bytes**, 33 uncompressed ZIP entries aligned to 64 bytes, all **5,910 body positions** and **160,496 studs** match, with metric Y-up coordinates. Large file size and target-phone performance need device testing before the iMessage migration. Neither native iPhone viewing nor Photon delivery was tested in this checkpoint.
+
+### Final checks and evidence
+
+**255/255 tests pass in one complete run with localhost permission; production build passes.** All 36 part families and four yaws are compared between native and instanced vertices at low and maximum heights. The previous rounded-hash comparison falsely failed equivalent Float32 geometry; direct per-coordinate comparison uses a 0.00008 mm tolerance and rejects a deliberate displacement. No production renderer change was needed.
+
+Logs and renders: `output/complex-reliability/`, `output/packing-performance/`, `output/long-parts/`, `output/reference-acceptance/`, `output/usdz-ui/`. These ignored runtime/evidence files remain local. Frozen geometry-only regression fixtures are committed. Tracked/candidate files were scanned against local credential values without printing them; none matched.

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { compilePlan, type ShapePlanV2 } from '../server/compiler.js';
 import { diagnosePlanSupport } from '../server/plan-diagnostics.js';
-import { validateDesign } from '../shared/model.js';
+import { footprint, partHeight, validateDesign } from '../shared/model.js';
 
 const base = (changes: Partial<ShapePlanV2> = {}): ShapePlanV2 => ({ schemaVersion: 2, coordinateSystem: 'stud-xy-plate-z', title: 'Diagnostics specimen', description: 'A source attribution specimen.', boxes: [], ...changes });
 const box = (x = 0, y = 0, z = 0, width = 2, depth = 2, height = 3, colorId = 4) => ({ x, y, z, width, depth, height, colorId });
@@ -65,4 +65,45 @@ test('a studless tile occupying a cutout is distinguished from a missing body be
 test('group truncation reports omissions rather than silently hiding unexamined source structures', () => {
   const result = inspect(base({ parts: Array.from({ length: 12 }, (_, i) => piece(3, i * 2)) }));
   assert.equal(result.unsupportedPieceCount, 12); assert.equal(result.groups.length, 8); assert.equal(result.omittedGroups, 4);
+});
+
+test('profile diagnostics identify the editable contour section and repeated copy rather than generated row boxes', () => {
+  const profile = { shape: 'ellipse' as const, colorId: 4, sections: [
+    { z: 4, cx: 3, cy: 3, width: 4, depth: 4 }, { z: 7, cx: 3, cy: 3, width: 4, depth: 4 },
+  ] };
+  const result = inspect(base({ boxes: [box(0, 0, 0, 12, 6)], repeats: [{ profiles: [profile], count: 2, dx: 6, dy: 0, dz: 0 }] }));
+  assert.ok(result.unsupportedPieceCount > 0);
+  for (const copy of [0, 1]) assert.ok(result.groups.some(group => group.sources.some(source =>
+    source.path === '/repeats/0/profiles/0' && source.copy === copy && source.sections?.[0] === 0 && source.sections?.[1] === 1)));
+  assert.ok(result.groups.every(group => group.nearestAlignedStudGapPlates === 1));
+});
+
+test('hollow repeated profiles, detail boxes and local cuts share exact painting order with source diagnostics', () => {
+  const profile = { shape: 'rectangle' as const, colorId: 4, sections: [
+    { z: 3, cx: 2, cy: 2, width: 4, depth: 4 }, { z: 6, cx: 2, cy: 2, width: 4, depth: 4 },
+  ] };
+  const plan = base({ profiles: [profile],
+    boxes: [{ ...box(0, 0, 3, 2, 2, 3, 1), cutouts: [{ x: 0, y: 0, z: 0, width: 1, depth: 1, height: 3 }] }],
+    repeats: [{ profiles: [{ ...profile, colorId: 15, wall: 1 }], boxes: [box(1, 1, 3, 1, 1, 3, 14)], count: 2, dx: 6, dy: 0, dz: 0 }],
+  });
+  const model = compilePlan(plan, { prompt: plan.title }), result = diagnosePlanSupport(plan, model);
+  const actual = new Map<string, number>(), expected = new Map<string, number>();
+  for (const brick of model.bricks) {
+    const size = footprint(brick);
+    for (let z = brick.z; z < brick.z + partHeight(brick); z++) for (let y = brick.y; y < brick.y + size.depth; y++) for (let x = brick.x; x < brick.x + size.width; x++) actual.set(`${x},${y},${z}`, brick.colorId);
+  }
+  for (let z = 3; z < 6; z++) {
+    for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) expected.set(`${x},${y},${z}`, 4);
+    for (const offset of [0, 6]) for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) if (!x || !y || x === 3 || y === 3) expected.set(`${x + offset},${y},${z}`, 15);
+    for (const [x, y] of [[1, 0], [0, 1], [1, 1]]) expected.set(`${x},${y},${z}`, 1);
+    for (const x of [1, 7]) expected.set(`${x},1,${z}`, 14);
+  }
+  assert.deepEqual(actual, expected, 'Holes retain earlier material, empty holes stay empty, and repeated boxes paint last');
+  const sources = (color: number) => result.groups.filter(group => group.colorId === color).flatMap(group => group.sources);
+  assert.deepEqual(sources(4), [{ path: '/profiles/0', sections: [0, 1] }]);
+  assert.deepEqual(sources(1), [{ path: '/boxes/0' }]);
+  for (const color of [15, 14]) assert.deepEqual(sources(color), [0, 1].map(copy => ({
+    path: `/repeats/0/${color === 15 ? 'profiles' : 'boxes'}/0`, ...(color === 15 ? { sections: [0, 1] } : {}), copy, translation: { x: copy * 6, y: 0, z: 0 },
+  })));
+  assert.equal(result.omittedGroups, 0);
 });

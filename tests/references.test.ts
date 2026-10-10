@@ -48,6 +48,34 @@ test('Commons discovery still works without an article, excluding missing licens
   assert.match(found.warnings[0], /503/);
 });
 
+test('article lookup requests exact canonical titles and aliases, avoiding broad Taj Mahal and Rose namesakes', async t => {
+  for (const subject of [
+    { name: 'Taj Mahal', aliases: ['Tajmahal'], location: 'Agra, India', unrelated: ['Taj Mahal (musician)', 'Taj Mahal Palace Hotel'] },
+    { name: 'Rose', aliases: ['Roses'], location: undefined, unrelated: ['Ruby Rose', 'Pete Rose', 'Axl Rose'] },
+  ]) await t.test(subject.name, async t => {
+    const calls: URL[] = [];
+    t.mock.method(globalThis, 'fetch', async (input: URL) => {
+      const url = new URL(String(input)); calls.push(url);
+      if (url.hostname === 'en.wikipedia.org') {
+        const names = url.searchParams.has('generator') ? subject.unrelated : [subject.name];
+        return json(names.map(name => ({ title: name, pageimage: `${name}.jpg`, fullurl: `https://en.wikipedia.org/wiki/${name}`, extract: `The target ${subject.name}${subject.location ? ` in ${subject.location}` : ''}.` })));
+      }
+      if (url.searchParams.has('titles')) return json(url.searchParams.get('titles')!.split('|').map(title => photo(title)));
+      return json([photo(`File:${subject.name} alternate view.jpg`)]);
+    });
+    const found = await discoverReferences(subject);
+    const articleRequest = calls.find(url => url.hostname === 'en.wikipedia.org')!;
+    assert.equal(articleRequest.searchParams.get('titles'), [subject.name, ...subject.aliases].join('|'));
+    assert.equal(articleRequest.searchParams.get('redirects'), '1');
+    assert.equal(articleRequest.searchParams.has('generator'), false);
+    assert.equal(articleRequest.searchParams.has('gsrsearch'), false);
+    assert.equal(found.candidates[0].articleTitle, subject.name);
+    assert.ok(found.candidates.some(item => item.matchedBy === 'commons-search'), 'Exact lookup keeps the Commons alternate-view fallback');
+    assert.ok(found.candidates.every(item => !subject.unrelated.includes(item.articleTitle || '')));
+    if (subject.location) assert.match(found.candidates[0].articleExtract!, /Agra, India/);
+  });
+});
+
 test('subject-named photographs rank above campus views without claiming visual verification', async t => {
   t.mock.method(globalThis, 'fetch', async (input: URL) => new URL(String(input)).hostname === 'en.wikipedia.org' ? json([]) : json([
     photo('File:UNC Pit campus panorama.jpg'), photo('File:The Morehead Patterson Bell Tower.jpg'), photo('File:Memorial at the Bell Tower.jpg'),
@@ -73,6 +101,42 @@ test('reference pixels are real decoded JPEGs, resized and hashed separately fro
   assert.equal(result.metadata.artist, 'Photographer');
   assert.equal('inlineData' in result.metadata, false);
   assert.equal('data' in result.metadata, false);
+});
+
+test('failed reference images fall through to later ranked candidates and retain the successful source', async t => {
+  const bytes = await sharp({ create: { width: 30, height: 40, channels: 3, background: '#345' } }).jpeg().toBuffer();
+  const candidates = Array.from({ length: 5 }, (_, index) => ({ ...sample(`https://upload.wikimedia.org/${index}.jpg`), fileTitle: `File:Reference ${index}.jpg`, artist: `Photographer ${index}` }));
+  const calls: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (input: URL) => {
+    const url = String(input); calls.push(url);
+    if (url.endsWith('/0.jpg')) return new Response('', { status: 404 });
+    if (url.endsWith('/1.jpg')) return new Response('not a raster', { headers: { 'content-type': 'image/jpeg' } });
+    return new Response(new Uint8Array(bytes), { headers: { 'content-type': 'image/jpeg' } });
+  });
+  const images = await loadReferenceImages(candidates);
+  assert.deepEqual(calls, candidates.slice(0, 4).map(item => item.imageUrl), 'Stop after two successes, rather than fetch all candidates');
+  assert.deepEqual(images.map(item => item.metadata.fileTitle), ['File:Reference 2.jpg', 'File:Reference 3.jpg']);
+  assert.deepEqual(images.map(item => item.metadata.artist), ['Photographer 2', 'Photographer 3']);
+  assert.ok(images.every(item => item.metadata.sha256.length === 64 && item.metadata.height === 40));
+});
+
+test('failed image fallback is bounded to six candidates and preserves the original failure', async t => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => new Response('', { status: ++calls === 1 ? 404 : 503 }));
+  await assert.rejects(loadReferenceImages(Array.from({ length: 10 }, () => sample())), /request failed \(404\)/);
+  assert.equal(calls, 6);
+});
+
+test('cancellation during failed-image fallback stops before another candidate is fetched', async t => {
+  const controller = new AbortController();
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    controller.abort(new Error('Cancelled during reference fetch'));
+    return new Response('', { status: 404 });
+  });
+  await assert.rejects(loadReferenceImages([sample(), sample()], { signal: controller.signal }), /Cancelled during reference fetch/);
+  assert.equal(calls, 1);
 });
 
 test('image network policy blocks private, lookalike, credential, port and redirected destinations', async t => {

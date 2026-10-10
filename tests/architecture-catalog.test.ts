@@ -21,7 +21,7 @@ export const architecturePlan = plan({ parts: [
 ] });
 
 test('catalog metadata has a verified nonempty color list and correct round-plate identity', () => {
-  assert.equal(Object.keys(PARTS).length, 26);
+  assert.equal(Object.keys(PARTS).length, 36);
   assert.equal(Object.keys(COLORS).length, 13);
   assert.deepEqual(Object.keys(PARTS).sort(), Object.keys(partColors.parts).sort());
   for (const item of Object.values(PARTS)) {

@@ -61,6 +61,30 @@ test('an explicitly requested large piece limit reaches the provider unchanged',
   assert.equal(Object.hasOwn(brief, 'budget'), false);
 });
 
+test('a token-truncated provider response is reported without compiling or repairing partial JSON', async t => {
+  isolateCredentials(t);
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+    calls++;
+    const classification = originalSubject(init); if (classification) return classification;
+    return new Response(JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: '{"boxes":[' }] }, finishReason: 'MAX_TOKENS' }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+  });
+  await assert.rejects(generateDesign({ prompt: 'A red sculpture' }), error => error instanceof GenerationError && error.status === 502 && /before completing/.test(error.message) && /token budget/.test(error.checks.at(-1)!));
+  assert.equal(calls, 2);
+});
+
+test('a complete leading JSON object survives provider garbage after it, including braces inside strings', async t => {
+  isolateCredentials(t);
+  const plan = { ...validPlan, description: 'A sculpture with a "quoted" {detail} and a \\ marker.' };
+  t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+    const classification = originalSubject(init); if (classification) return classification;
+    return new Response(JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: JSON.stringify(plan) + 'Back to top``` - - -' }] }, finishReason: 'MAX_TOKENS' }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+  });
+  const result = await generateDesign({ prompt: 'A red sculpture' });
+  assert.equal(result.description, plan.description);
+  assert.equal(validateDesign(result).valid, true);
+});
+
 test('the provider can return repeated structural groups which become connected, occupied geometry', async t => {
   isolateCredentials(t);
   const repeatedPlan = { ...validPlan, title: 'Courtyard piers', boxes: [{ x: 0, y: 0, z: 0, width: 10, depth: 6, height: 6, colorId: 71 }], repeats: [{
@@ -236,4 +260,22 @@ test('thinking settings are not imposed on an unverified alternative model', asy
   t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => { const classification = originalSubject(init); if (classification) return classification; requestBody = JSON.parse(String(init.body)); return responseFor(validPlan); });
   await generateDesign({ prompt: 'A red sculpture' });
   assert.equal(requestBody.generationConfig.thinkingConfig, undefined);
+});
+
+test('a deadline reached while arranging bricks becomes a 504 without another provider request', async t => {
+  isolateCredentials(t);
+  let compiling = false, compileClockReads = 0, calls = 0;
+  const events: GenerationProgress[] = [];
+  t.mock.method(Date, 'now', () => compiling && ++compileClockReads > 4 ? 90_000 : 0);
+  t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+    calls++;
+    return originalSubject(init) || responseFor(validPlan);
+  });
+  await assert.rejects(generateDesign({ prompt: 'A red sculpture' }, event => {
+    events.push(event);
+    if (event.stage === 'checking') compiling = true;
+  }), error => error instanceof GenerationError && error.status === 504 && /while arranging the bricks/.test(error.message));
+  assert.ok(compileClockReads > 4, 'Compilation began before its deadline expired');
+  assert.equal(calls, 2, 'Only subject identification and the first plan reached the provider');
+  assert.deepEqual(events.map(event => event.stage), ['researching', 'planning', 'checking']);
 });
