@@ -3,7 +3,7 @@ import test from 'node:test';
 import { repairPacking } from '../server/packing-repair.js';
 import { compilePlan, repairCompiledPlan, CompilationDeadlineError } from '../server/compiler.js';
 import { compileGeneratedPlan } from '../server/generation.js';
-import { PARTS, allocateInventory, footprint, partHeight, validateDesign, CATALOG_VERSION, type Brick, type Design, type InventoryItem } from '../shared/model.js';
+import { PARTS, allocateInventory, buildSteps, footprint, partHeight, validateDesign, CATALOG_VERSION, type Brick, type Design, type InventoryItem } from '../shared/model.js';
 import { ELLIPSE_GREEDY_BRICKS } from './fixtures/ellipse-greedy-packing.js';
 
 const design = (bricks: Brick[]): Design => ({ id: 'packing-test', title: 'Packing specimen', description: 'A structural packing regression.', prompt: 'A three dimensional specimen', source: 'ai', createdAt: '2026-10-10T00:00:00Z', schemaVersion: 2, coordinateSystem: 'stud-xy-plate-z', catalogVersion: CATALOG_VERSION, bricks });
@@ -97,7 +97,7 @@ test('truly floating volume remains rejected and a failed search leaves its cell
   assert.match(validateDesign(input).errors.join(';'), /no stud support/);
   assert.equal(repairPacking(input, { fixedIds: new Set() }), null);
   assert.deepEqual(input, before);
-  assert.throws(() => compileGeneratedPlan(plan, { prompt: plan.title }), /no stud support/);
+  assert.throws(() => compileGeneratedPlan(plan, { prompt: plan.title }), /disconnected groups/);
 });
 
 test('a useful local repair survives an unrelated floating region with exact stock and fixed parts intact', () => {
@@ -108,13 +108,14 @@ test('a useful local repair survives an unrelated floating region with exact sto
     { partId: '4589', colorId: 15, quantity: 1, source: 'Confirmed lot' }, { partId: '3005', colorId: 4, quantity: 2, source: 'Confirmed lot' },
   ];
   const before = structuredClone({ input, inventory });
-  assert.equal(validateDesign(input).errors.filter(error => /no stud support/.test(error)).length, 2);
+  assert.equal(validateDesign({ ...input, bricks: input.bricks.filter(brick => brick.x < 20) }).valid, false);
   const partial = repairPacking(input, { fixedIds: new Set(['base', 'cone']), inventory, ownedOnly: true, maxBricks: 5 });
   assert.ok(partial);
   const check = validateDesign(partial);
   assert.equal(check.valid, false);
   const remote = partial.bricks.find(brick => brick.x === 20 && brick.z === 4)!;
-  assert.deepEqual(check.errors.filter(error => /no stud support/.test(error)), [`Brick ${remote.id} has no stud support directly below it.`]);
+  assert.ok(check.errors.some(error => error.startsWith(`Brick ${remote.id} has no stud support`)));
+  assert.equal(validateDesign({ ...partial, bricks: partial.bricks.filter(brick => brick.x < 20) }).valid, true, 'The repaired local assembly now joins while the unrelated cap remains disconnected');
   assert.deepEqual(occupied(partial), occupied(input));
   assert.equal(allocateInventory(partial, inventory).totalMissing, 0);
   assert.ok(partial.bricks.length <= 5);
@@ -136,15 +137,58 @@ test('generation still rejects the unrepaired region after retaining a supported
   assert.equal(check.errors.filter(error => /no stud support/.test(error)).length, 1);
   assert.ok(compiled.bricks.some(brick => brick.z === 24 && partHeight(brick) === 1));
   assert.throws(() => compileGeneratedPlan(plan, { prompt: plan.title }), error => {
-    assert.match(String(error), /x=20, y=0, z=4 plates/);
-    assert.doesNotMatch(String(error).split('Plan support diagnostics:')[0], /z=25 plates/);
+    assert.match(String(error), /disconnected groups/);
+    assert.match(String(error), /"x":20,"y":0,"z":4/);
+    assert.doesNotMatch(String(error), /"bottomZ":25/);
     return true;
   });
+});
+
+test('plate-course search repairs a split projecting edge without spending its budget on unchanged lower studs', () => {
+  const bricks: Brick[] = [];
+  const add = (partId: string, x: number, y: number, z: number) => bricks.push({ id: `b${bricks.length + 1}`, partId, colorId: 15, x, y, z, rotation: 0 });
+  for (let z = 0; z < 3; z++) add('91405', 16, 16, z);
+  for (let x = 16; x < 32; x += 2) { add('3022', x, 14, 3); add('3022', x, 16, 3); }
+  const input = design(bricks), before = structuredClone(input);
+  assert.ok(validateDesign(input).errors.some(error => /disconnected groups/.test(error)));
+  const inventory: InventoryItem[] = [ ['91405', 3], ['3022', 16], ['3020', 8] ].map(([partId, quantity]) => ({ partId: String(partId), quantity: Number(quantity), colorId: 15, source: 'Confirmed plates' }));
+  const repaired = repairPacking(input, { fixedIds: new Set(), allowedPartIds: new Set(inventory.map(item => item.partId)), inventory, ownedOnly: true, maxBricks: 11 });
+  assert.ok(repaired);
+  assert.equal(validateDesign(repaired).valid, true);
+  assert.deepEqual(occupied(repaired), occupied(input));
+  assert.equal(allocateInventory(repaired, inventory).totalMissing, 0);
+  assert.ok(repaired.bricks.length <= 11);
+  assert.deepEqual(input, before);
 });
 
 test('already connected packing is retained unchanged', () => {
   const input = design([brick('base', '3005', 0, 0), brick('top', '3005', 0, 3)]);
   assert.equal(repairPacking(input, { fixedIds: new Set() }), input);
+});
+
+test('a hanging edge can be repacked onto real upper mates while retaining exact stock and an upward assembly path', () => {
+  const input = design([
+    brick('ground', '3005', 0, 0), { ...brick('beam', '3004', 0, 3), rotation: 90 },
+    brick('attached', '3024', 1, 2), brick('edge', '3024', 2, 2),
+  ]), before = structuredClone(input);
+  const inventory: InventoryItem[] = [ ['3005', 1], ['3004', 1], ['3024', 2], ['3023', 1] ].map(([partId, quantity]) => ({ partId: String(partId), quantity: Number(quantity), colorId: 15, source: 'Confirmed hanging-edge parts' }));
+  const options = { fixedIds: new Set(['ground', 'beam']), allowedPartIds: new Set(['3024', '3023']), inventory, ownedOnly: true, maxBricks: 3 };
+  assert.ok(validateDesign(input).errors.some(error => /disconnected groups/.test(error)));
+  const repaired = repairPacking(input, options);
+  assert.ok(repaired);
+  assert.equal(validateDesign(repaired).valid, true);
+  assert.equal(repaired.bricks.length, 3);
+  assert.deepEqual(occupied(repaired), occupied(input));
+  assert.equal(allocateInventory(repaired, inventory).totalMissing, 0);
+  const hanging = repaired.bricks.find(brick => brick.partId === '3023')!;
+  assert.deepEqual({ x: hanging.x, y: hanging.y, z: hanging.z, rotation: hanging.rotation }, { x: 1, y: 0, z: 2, rotation: 90 });
+  const placement = buildSteps(repaired).flatMap(step => step.placements).find(placement => placement.brickId === hanging.id)!;
+  assert.equal(placement.approach, '+X');
+  assert.deepEqual(placement.attachedTo, [repaired.bricks.find(brick => brick.partId === '3004')!.id]);
+  assert.equal(repairPacking(repaired, { ...options, fixedIds: new Set(repaired.bricks.filter(brick => brick.partId !== '3023').map(brick => brick.id)) }), repaired, 'A grounded hanging assembly is already connected and must not be repacked again');
+  assert.equal(repairPacking(input, { ...options, inventory: inventory.filter(item => item.partId !== '3023') }), null);
+  assert.equal(repairPacking(input, { ...options, fixedIds: new Set(['ground', 'beam', 'attached']) }), null);
+  assert.deepEqual(input, before);
 });
 
 test('a delayed repair uses the quick compile stock, budget and fixed-piece snapshot rather than mutated caller options', () => {

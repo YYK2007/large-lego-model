@@ -6,6 +6,7 @@ import { generateManualPdf } from '../server/manual';
 import { renderDesignSvg } from '../shared/illustration';
 import { partSurfaces } from '../shared/part-surfaces';
 import { buildSteps, validateDesign, type Design } from '../shared/model';
+import { hangingDesign } from './fixtures/hanging-design';
 
 const design: Design = {
   id: 'manual-test', title: 'Little tower', description: 'A four-brick test model.', source: 'sample',
@@ -65,6 +66,17 @@ test('PDF text extraction preserves a final carriage-return byte in compressed d
   const pdf = Buffer.concat([Buffer.from(`1 0 obj\n<< /Length ${bytes.length} /Filter /FlateDecode >>\nstream\n`), bytes,
     Buffer.from('\nendstream\nendobj\n')]);
   assert.equal(pdfText(pdf).trim(), 'Little tower');
+});
+
+test('hanging-piece PDF follows the anchor-first order and prints exact upward entry instructions', async () => {
+  const pdf = await generateManualPdf(hangingDesign), content = pdfText(pdf);
+  assert.equal((content.match(/ATTACH FROM BELOW/g) || []).length, 2);
+  assert.ok(content.indexOf('28.8 mm (z = 9)') < content.indexOf('ATTACH FROM BELOW'), 'The overhead beam must be assembled before the hanging steps');
+  assert.match(content, /Enter from \+X/);
+  assert.match(content, /17\.6 mm above the table/);
+  assert.match(content, /8\.0 mm above the table/);
+  assert.equal((content.match(/then raise it 1\.6 mm/g) || []).length, 2);
+  assert.equal((content.match(/Body bottom:/g) || []).length, 6);
 });
 
 test('layer illustrations retain the full-model camera and exact geometry', () => {

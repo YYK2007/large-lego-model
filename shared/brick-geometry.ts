@@ -184,12 +184,13 @@ export function createInstancedBrickModel(input: Design) {
     selected.visible = !!active;
     if (active) { selected.geometry = active.shape.edges; selected.position.copy(active.position); }
   };
-  const setLift = (lift: number) => {
+  const setOffset = (x: number, y: number, z: number) => {
     if (!active?.mesh) return;
-    active.mesh.setMatrixAt(active.index, matrix.makeTranslation(active.position.x, active.position.y + lift, active.position.z));
+    active.mesh.setMatrixAt(active.index, matrix.makeTranslation(active.position.x + x, active.position.y + y, active.position.z + z));
     active.mesh.instanceMatrix.needsUpdate = true;
-    selected.position.y = active.position.y + lift;
+    selected.position.set(active.position.x + x, active.position.y + y, active.position.z + z);
   };
+  const setLift = (lift: number) => setOffset(0, lift, 0);
   update();
   const dispose = () => {
     for (const shape of shapes.values()) { shape.geometry.dispose(); shape.edges.dispose(); }
@@ -198,5 +199,5 @@ export function createInstancedBrickModel(input: Design) {
     }
     edgeGeometry.dispose(); outlines.material.dispose(); selected.material.dispose();
   };
-  return { model, update, setLift, dispose };
+  return { model, update, setLift, setOffset, dispose };
 }

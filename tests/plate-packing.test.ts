@@ -66,6 +66,6 @@ test('plate courses cannot fill a missing support layer', () => {
   ] };
   const result = compilePlan(plan, { prompt: plan.title, packing: 'plates' });
   assert.equal(validateDesign(result).valid, false);
-  assert.ok(validateDesign(result).errors.some(error => /no stud support/.test(error)));
+  assert.ok(validateDesign(result).errors.some(error => /disconnected groups/.test(error)));
   for (const cell of occupied(result).keys()) assert.notEqual(Number(cell.split(',')[2]), 3);
 });

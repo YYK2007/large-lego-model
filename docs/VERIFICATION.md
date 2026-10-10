@@ -2,9 +2,46 @@
 
 This document distinguishes tested local behavior from live integrations that need account/device access.
 
+## Checkpoint 07: general repairs and checked hanging assembly
+
+This checkpoint improves the general pipeline. It does **not** complete broad, accurate generation or the unrestricted part-catalog requirement.
+
+- Plans can explicitly replace filler volume with whole catalog parts. Fixed pieces still cannot intersect, and legacy plans remain strict.
+- Invalid packings are compared using connected-component counts. Local repair can use real upper mates already connected to the table; it never invents occupied cells or changes requested colors.
+- Assembly checks require real mates, grounding, one connected graph and clear body/stud insertion paths. A bounded retry changes the order of neighboring hanging pieces when a lower course would trap them. The viewer, printed steps and LDraw share that sequence; preview animation follows the checked waypoints. It is a conservative single-piece planner, not exhaustive subassembly search or a strength simulation.
+- Reference selection excludes derivative photo families and near-identical decoded images. Bounded successful-response caches and serialized requests reduce repeated Wikimedia requests; rate limits are honored. Distinct files still do not guarantee different viewing angles or correct identity.
+- Repair receives actual compiled views after a likeness mismatch, indexed geometry paths, and current connection feedback. No named-subject templates were added. The maintained live harness is `scripts/check-generation.ts`.
+- On the frozen wall plan, mixed packing decreased from 23.6 to 8.94 seconds, with all 6,164 placements unchanged. Plate packing decreased from 3.99 to 2.38 seconds, with all 2,430 placements unchanged. These are local development measurements, not service latency guarantees.
+
+### Live evaluation, October 10
+
+All prompts below used the ordinary service, reference retrieval and paid Gemini flow. A draft passing geometry is counted separately from likeness. Each row is one attempt through the complete service, not a repeated success-rate study.
+
+| Run / prompt | Outcome | Seconds | Visual assessment |
+| --- | --- | ---: | --- |
+| Before changes / A sunflower | Failed geometry after four attempts | 71.0 | No admitted model |
+| Before changes / The Great Wall of China | Ran out of repair time after slow packing | ~90 | No admitted model |
+| general-01 / A red apple | 811 pieces, 90 steps, 18 part types | 32.1 | AI matched; opposite views inspected. Recognizable apple, crude flat leaf and stepped surface. |
+| general-01 / A sunflower | Failed: disconnected sections and malformed final patch | 32.8 | No admitted model |
+| general-01 / A sea turtle | Failed: disconnected sections, invalid edit and fixed-piece collision | 52.8 | No admitted model |
+| general-01 / The Matterhorn | 3,905-piece valid draft; later repair timed out | 91.1 | Needs refinement: symmetric stepped pyramid, missing natural ridges/snowfields. Opposite views confirm the mismatch. |
+| general-01 / The Great Wall of China | 2,102-piece valid draft with hanging details | 84.3 | Needs refinement: isolated pavilions and terraces, missing continuous winding ramparts. Opposite views confirm the mismatch. |
+| general-01 / The Sydney Opera House | 1,872-piece valid draft; later repair timed out | 93.5 | AI marked inaccurate shell geometry, podium and glazing. |
+| general-02 / A sunflower | Reference retrieval failed | 19.7 | No model planned |
+| general-02 / A sea turtle | Reached one component, failed greedy assembly order; next patch regressed to disconnected eyes | 75.4 | No model admitted in this live run |
+| general-02 / An African elephant | Improved from eight to four components; next provider request timed out | 90.0 | No admitted model |
+
+The `general-02` turtle's fifth plan was then replayed **offline** after the local-order fix: the same 925 placements now validate and form 165 build steps. The formerly blocked sequence seats the two neighboring hanging pieces before their lower plate. This is a regression fix, not a fresh end-to-end live success. Opposite renders show a recognizable shell/head but exaggerated, angular flat flippers; likeness still needs work. The six-piece minimal regression and full frozen geometry are in `tests/assembly.test.ts` and `tests/fixtures/turtle-assembly.json`. The fixture is test data only.
+
+PDF and website inspection of the hanging-chain fixture confirmed the entry direction, pre-seating height, upward seating distance, part callout and placement map. Animation interpolation and final geometry restoration are tested; live animation timing has not been independently verified on a phone. The 2,102-piece live Wall draft also opened in the studio; step 186 showed the expected +X entry, 142.4 mm pre-seat height and 1.6 mm upward motion instruction. Assembly steps are memoized per revision and reused between the main page and step viewer, so typing or switching tabs does not repeat the planner. No iMessage or physical assembly was tested.
+
+Evidence stays in ignored `output/complex-reliability/`, `output/packing-performance/`, `output/generation-evaluation/`, and `output/assembly-qa/`. The final live failures remain recorded rather than being replaced by the successful offline replay. The Wall run exposed an inaccurate warning describing earlier failures as a later failed repair; that warning has a regression fix and does not rewrite old saved revisions.
+
+The next acceptance work is better asymmetric contour planning, more reliable repair within the time budget, and real catalog/geometry/connector resolution. The engine still has **36 part types and 13 colors**, and a 96×96-stud, 384-plate workspace. See `GENERAL-GENERATION.md` for the full purchasable-part data path and acceptance test.
+
 ## Automated checks
 
-The current suite has **255 passing tests**. `npm test` covers malformed placements and metadata, exact shape/color preservation through packing, interlocked seams, collision/support/connectivity gates, BOM/step consistency, inventory quantities and provenance, CSV escaping, LDraw units/orientation, PDF placement maps and page overflow, immutable saved revisions, and Photon message parsing/deduplication/session handling. New coverage includes uncapped piece counts, explicit budgets, bulk inventory, V2/legacy normalization, plate heights, four slope orientations and partial stud coverage, repeated-feature plans, exact web/native geometry, streaming progress, provider deadlines/errors, and the detailed castle's openings and placement order.
+The current suite has **285 passing tests**. `npm test` covers malformed placements and metadata, exact shape/color preservation through packing, interlocked seams, collision/support/connectivity gates, BOM/step consistency, inventory quantities and provenance, CSV escaping, LDraw units/orientation, PDF placement maps and page overflow, immutable saved revisions, and Photon message parsing/deduplication/session handling. New coverage includes uncapped piece counts, explicit budgets, bulk inventory, V2/legacy normalization, plate heights, four slope orientations and partial stud coverage, repeated-feature plans, exact web/native geometry, streaming progress, provider deadlines/errors, and the detailed castle's openings and placement order.
 
 `npm run build` passes its strict TypeScript check and production build. Vite still reports a bundle-size advisory for the Three.js-containing main chunk (about 997 KB minified, 251 KB gzip). At checkpoint 02, `npm audit` was reduced from 18 moderate transitive findings to zero by pinning `@opentelemetry/core` to 2.12.0; no dependency change or fresh audit was part of checkpoint 03.
 

@@ -76,6 +76,14 @@ test('1,024 repeated pieces use one solid draw batch and preserve every piece in
   solid.getMatrixAt(0, after); faded.getMatrixAt(0, fadedAfter);
   assert.equal(after.elements[13] - before.elements[13], 2);
   assert.deepEqual(fadedAfter.elements, fadedBefore.elements, 'Only the active piece moves');
+  web.setOffset(1.5, -0.2, 2);
+  solid.getMatrixAt(0, after);
+  assert.equal(after.elements[12] - before.elements[12], 1.5);
+  assert.ok(Math.abs(after.elements[13] - before.elements[13] + 0.2) < 1e-7);
+  assert.equal(after.elements[14] - before.elements[14], 2);
+  web.setOffset(0, 0, 0);
+  solid.getMatrixAt(0, after);
+  assert.deepEqual(after.elements, before.elements, 'Checked placement animation restores the exact canonical pose');
   web.update();
   assert.equal(batches(web)[0].count, 1024);
   web.dispose();

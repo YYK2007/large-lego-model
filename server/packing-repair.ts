@@ -12,16 +12,18 @@ function connections(bricks: Brick[]) {
     for (const stud of partTopStuds(brick)) studs.set(key(stud.x, stud.y, stud.z), index);
     for (const site of partBottomSites(brick)) undersides.set(key(site.x, site.y, site.z), index);
   });
-  const unsupported: Brick[] = [];
+  const withoutLower: { brick: Brick; index: number }[] = [];
   bricks.forEach((brick, index) => {
     let supported = brick.z === 0;
     for (const site of partBottomSites(brick)) {
       const lower = studs.get(key(site.x, site.y, site.z));
       if (lower !== undefined) { parents[root(index)] = root(lower); supported = true; }
     }
-    if (!supported) unsupported.push(brick);
+    if (!supported) withoutLower.push({ brick, index });
   });
-  return { root, studs, undersides, unsupported, count: new Set(parents.map((_, index) => root(index))).size };
+  const grounded = new Set(bricks.flatMap((brick, index) => brick.z === 0 ? [root(index)] : []));
+  const unsupported = withoutLower.filter(({ index }) => !grounded.has(root(index))).map(({ brick }) => brick);
+  return { root, studs, undersides, grounded, unsupported, count: new Set(parents.map((_, index) => root(index))).size };
 }
 
 /** Bounded local exact-cover search. It changes seams across nearby courses, never their
@@ -70,7 +72,10 @@ export function repairPacking(design: Design, options: Options): Design | null {
       });
     }
     let improved = false;
-    const modes = graph.unsupported.length ? ['vertical', 'course', 'mixed'] : ['course', 'mixed', 'vertical'];
+    // Retiling lower one-plate courses cannot create new studs: each already
+    // occupies every grid site of its cells. Spend this search on the current
+    // course's seams; mixed-height packing still needs the vertical pass.
+    const modes = sizes.every(candidate => candidate.part.heightPlates === 1) ? ['course'] : graph.unsupported.length ? ['vertical', 'course', 'mixed'] : ['course', 'mixed', 'vertical'];
     for (const mode of modes) for (const target of targets) {
       if (improved || attempts >= 24 || regions >= 96 || visits >= 20_000 || expired()) break;
       const size = footprint(target), height = partHeight(target);
@@ -126,11 +131,17 @@ export function repairPacking(design: Design, options: Options): Design | null {
           }
           let below = 0n;
           for (const site of partBottomSites(brick)) { const index = pointIndices.get(key(Math.floor(site.x), Math.floor(site.y), site.z - 1)); if (index !== undefined) below |= 1n << BigInt(index); }
-          if (!supported && !below) continue;
           for (const stud of partTopStuds(brick)) {
             const upper = outsideGraph.undersides.get(key(stud.x, stud.y, stud.z));
-            if (upper !== undefined) joins.add(groupIndices.get(outsideGraph.root(upper))!);
+            if (upper !== undefined) {
+              if (outsideGraph.grounded.has(outsideGraph.root(upper))) supported = true;
+              joins.add(groupIndices.get(outsideGraph.root(upper))!);
+            }
           }
+          // A real outside upper mate can anchor a hanging course. This does
+          // not assume an insertion path or invent a future attachment: final
+          // validation still checks grounding, connectivity and assembly motion.
+          if (!supported && !below) continue;
           const choice = { brick, mask, stock, joins: [...joins], area: indices.length, supported, below,
             bottom: partBottomSites(brick).map(site => key(site.x, site.y, site.z)), top: partTopStuds(brick).map(stud => key(stud.x, stud.y, stud.z)) };
           for (const index of indices) covering[index].push(choice);

@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyPlanRepair, repairSchema, type PlanRepairEdit } from '../server/plan-repair.js';
+import { applyPlanRepair, describeRepairPlan, repairSchema, type PlanRepairEdit } from '../server/plan-repair.js';
 import { compileGeneratedPlan } from '../server/generation.js';
-import type { ShapePlanV2 } from '../server/compiler.js';
-import { validateDesign } from '../shared/model.js';
+import { compilePlan, type ShapePlanV2 } from '../server/compiler.js';
+import { partHeight, validateDesign } from '../shared/model.js';
 
 const plan: ShapePlanV2 & { observations: { usedImages: number[]; silhouette: string } } = {
   schemaVersion: 2, coordinateSystem: 'stud-xy-plate-z', title: 'Tower geometry repair specimen', description: 'A solid shaft and a cap with an accidental one-plate gap.',
@@ -14,8 +14,28 @@ const plan: ShapePlanV2 & { observations: { usedImages: number[]; silhouette: st
 };
 const edit = (path: string, value: unknown, op: PlanRepairEdit['op'] = 'replace'): PlanRepairEdit => ({ op, path, valueJson: JSON.stringify(value) });
 
+test('repair context identifies actual nested indices and part fields without truncating later geometry', () => {
+  const source: ShapePlanV2 = { ...plan,
+    parts: Array.from({ length: 60 }, (_, x) => ({ partId: '3024', colorId: 4, x, y: 0, z: 0, rotation: 0 })),
+    repeats: [{ count: 2, dx: 6, dy: 0, dz: 0, profiles: [{ shape: 'ellipse', colorId: 4,
+      sections: [{ z: 0, cx: 3, cy: 3, width: 6, depth: 6 }, { z: 9, cx: 3, cy: 3, width: 4, depth: 4 }] }] }],
+  };
+  const before = JSON.stringify(source), context = describeRepairPlan(source);
+  const lastPart = context.split('\n').find(line => line.startsWith('/parts/59: '))!;
+  assert.deepEqual(JSON.parse(lastPart.slice('/parts/59: '.length)), source.parts![59]);
+  assert.doesNotMatch(lastPart, /width|depth|height/);
+  assert.match(context, /\/parts: array with 60 items; append with \/parts\/-/);
+  assert.match(context, /\/repeats\/0\/profiles\/0\/sections\/1: .*"z":9/);
+  assert.equal(JSON.stringify(source), before);
+});
+
 test('one scalar correction repairs a floating cap without resending the plan or changing observations', () => {
-  assert.throws(() => compileGeneratedPlan(plan, { prompt: 'A tower' }), /no stud support/);
+  const floating = compilePlan(plan, { prompt: 'A tower' });
+  const shaftTop = Math.max(...floating.bricks.filter(brick => brick.colorId === 15).map(brick => brick.z + partHeight(brick)));
+  const capBottom = Math.min(...floating.bricks.filter(brick => brick.colorId === 4).map(brick => brick.z));
+  assert.equal(capBottom - shaftTop, 1, 'The cap is separated from the grounded shaft by one plate of air');
+  assert.equal(validateDesign(floating).valid, false);
+  assert.throws(() => compileGeneratedPlan(plan, { prompt: 'A tower' }), /disconnected groups/);
   const before = JSON.stringify(plan);
   const repaired = applyPlanRepair(plan, [edit('/boxes/1/z', 12)]);
   const design = compileGeneratedPlan(repaired, { prompt: 'A tower' });

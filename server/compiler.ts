@@ -8,7 +8,7 @@ export type ShapeBox = { x: number; y: number; z: number; width: number; depth: 
 export type SlopeRun = { kind: 'upright45'; x: number; y: number; z: number; width: number; rotation: 0 | 90 | 180 | 270; colorId: number };
 export type ShapePart = Omit<Brick, 'id'>;
 export type ShapeRepeat = { boxes?: ShapeBox[]; profiles?: ShapeProfile[]; slopes?: SlopeRun[]; parts?: ShapePart[]; count: number; dx: number; dy: number; dz: number };
-export type ShapePlan = { title: string; description: string; boxes: ShapeBox[]; profiles?: ShapeProfile[]; schemaVersion?: 2; coordinateSystem?: 'stud-xy-plate-z'; slopes?: SlopeRun[]; parts?: ShapePart[]; repeats?: ShapeRepeat[] };
+export type ShapePlan = { title: string; description: string; boxes: ShapeBox[]; profiles?: ShapeProfile[]; schemaVersion?: 2; coordinateSystem?: 'stud-xy-plate-z'; slopes?: SlopeRun[]; parts?: ShapePart[]; repeats?: ShapeRepeat[]; partPlacement?: 'replace-volume' };
 export type ShapePlanV2 = ShapePlan & { schemaVersion: 2; coordinateSystem: 'stud-xy-plate-z' };
 
 const keyAt = (x: number, y: number, z: number) => `${x},${y},${z}`;
@@ -37,7 +37,8 @@ export function compilePlan(plan: ShapePlan, options: { prompt: string; inventor
   }
   const legacy = plan.schemaVersion === undefined && plan.coordinateSystem === undefined;
   if (legacy && options.packing === 'plates') throw new Error('Plate-course packing requires a V2 plan.');
-  if ((!legacy && (plan.schemaVersion !== SCHEMA_VERSION || plan.coordinateSystem !== COORDINATE_SYSTEM)) || (legacy && (plan.profiles !== undefined || plan.slopes !== undefined || plan.parts !== undefined || plan.repeats !== undefined))) throw new Error('Label new plans with schemaVersion 2 and coordinateSystem stud-xy-plate-z. Profiles, slopes, explicit parts and repeated features require a V2 plan.');
+  if ((!legacy && (plan.schemaVersion !== SCHEMA_VERSION || plan.coordinateSystem !== COORDINATE_SYSTEM)) || (legacy && (plan.profiles !== undefined || plan.slopes !== undefined || plan.parts !== undefined || plan.repeats !== undefined || plan.partPlacement !== undefined))) throw new Error('Label new plans with schemaVersion 2 and coordinateSystem stud-xy-plate-z. Profiles, slopes, explicit parts and repeated features require a V2 plan.');
+  if (plan.partPlacement !== undefined && plan.partPlacement !== 'replace-volume') throw new Error('Part placement must be omitted for strict envelopes or use replace-volume in a V2 plan.');
   const workspace = legacy ? { width: 24, depth: 24, heightPlates: 72 } : WORKSPACE;
   if (plan.parts !== undefined && !Array.isArray(plan.parts)) throw new Error('Explicit parts must be an array.');
   if (plan.slopes !== undefined && !Array.isArray(plan.slopes)) throw new Error('Slope runs must be an array.');
@@ -117,7 +118,11 @@ export function compilePlan(plan: ShapePlan, options: { prompt: string; inventor
     if (run.x < 0 || run.y < 0 || run.z < 0 || run.x + width > workspace.width || run.y + depth > workspace.depth || run.z + 3 > workspace.heightPlates) throw new Error('Slope run exceeds the design grid.');
     for (let z = run.z; z < run.z + 3; z++) for (let y = run.y; y < run.y + depth; y++) for (let x = run.x; x < run.x + width; x++) {
       const key = keyAt(x, y, z);
-      if (cells.has(key) || reservations.has(key)) throw new Error(`A slope envelope overlaps a box or another slope run at (${x}, ${y}, ${z} plates). Slope starts at (${run.x}, ${run.y}, ${run.z} plates), width ${run.width}, rotation ${run.rotation}. Keep its whole 2-stud-depth, 3-plate-height envelope clear.`);
+      if (reservations.has(key) || (cells.has(key) && plan.partPlacement !== 'replace-volume')) throw new Error(`A slope envelope overlaps a box or another slope run at (${x}, ${y}, ${z} plates). Slope starts at (${run.x}, ${run.y}, ${run.z} plates), width ${run.width}, rotation ${run.rotation}. Keep its whole 2-stud-depth, 3-plate-height envelope clear.`);
+      // This is an explicit plan operation, not a packing repair. Whole real
+      // parts replace filler; their empty wedges stay empty and fixed parts
+      // still cannot overwrite one another.
+      if (plan.partPlacement === 'replace-volume') cells.delete(key);
       reservations.add(key);
     }
     for (let offset = 0; offset < run.width; offset += 2) {
@@ -135,7 +140,8 @@ export function compilePlan(plan: ShapePlan, options: { prompt: string; inventor
     if (brick.x < 0 || brick.y < 0 || brick.z < 0 || brick.x + width > workspace.width || brick.y + depth > workspace.depth || brick.z + height > workspace.heightPlates) throw new Error('Explicit part exceeds the design grid.');
     for (let z = brick.z; z < brick.z + height; z++) for (let y = brick.y; y < brick.y + depth; y++) for (let x = brick.x; x < brick.x + width; x++) {
       const key = keyAt(x, y, z);
-      if (cells.has(key) || reservations.has(key)) throw new Error(`An explicit part envelope overlaps a box, slope or another explicit part at (${x}, ${y}, ${z} plates). Part ${raw.partId} starts at (${raw.x}, ${raw.y}, ${raw.z} plates), rotation ${raw.rotation}. Keep its entire footprint and height clear.`);
+      if (reservations.has(key) || (cells.has(key) && plan.partPlacement !== 'replace-volume')) throw new Error(`An explicit part envelope overlaps a box, slope or another explicit part at (${x}, ${y}, ${z} plates). Part ${raw.partId} starts at (${raw.x}, ${raw.y}, ${raw.z} plates), rotation ${raw.rotation}. Keep its entire footprint and height clear.`);
+      if (plan.partPlacement === 'replace-volume') cells.delete(key);
       reservations.add(key);
     }
     fixed.push(brick);
@@ -253,6 +259,7 @@ export function compilePlan(plan: ShapePlan, options: { prompt: string; inventor
         let score = z === 0 ? 0 : supports.size - 1;
         if (z > 0 && score >= 0) {
           // A short prefix lets the next part bridge a seam; reserve its inventory in this lookahead.
+          const connected = supports.size === 1 && componentSizes.get(supports.values().next().value!) === bricks.length;
           let nextBenefit = 0;
           let unsupportedNext = 0;
           for (const [nextX, nextY] of [[x + candidate.width, y], [x, y + candidate.depth]]) {
@@ -263,6 +270,10 @@ export function compilePlan(plan: ShapePlan, options: { prompt: string; inventor
               if (nextGroups.size) canSupportNext = true;
               const joined = [...nextGroups].filter(group => supports.has(group)).length;
               nextBenefit = Math.max(nextBenefit, nextGroups.size - Math.max(0, joined - 1) - 1);
+              // With only one existing component, any supported next part has
+              // the same zero connection benefit. Further choices cannot beat
+              // it, including when exact stock removes some candidates.
+              if (connected && canSupportNext) break;
             }
             if (!canSupportNext) unsupportedNext++;
           }

@@ -34,7 +34,8 @@ test('AI admission rejects a cap over the slopes low row rather than treating th
   ], slopes: [{ kind: 'upright45', x: 0, y: 0, z: 3, width: 4, rotation: 0, colorId: 4 }] };
   assert.throws(() => compileGeneratedPlan(badRoof, { prompt: 'A flat roof test' }), (error: unknown) => {
     assert.ok(error instanceof Error);
-    assert.match(error.message, /part 3005, x=0, y=0, z=6 plates, rotation=0\).*has no stud support/);
+    assert.match(error.message, /disconnected groups/);
+    assert.match(error.message, /"x":0,"y":0,"z":6/);
     assert.match(error.message, /"nearestAlignedStudGapPlates":3/,
       'The empty low row of the slope is not mistaken for a stud at z6');
     return true;

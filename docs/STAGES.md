@@ -38,6 +38,8 @@ Later: ElevenLabs incoming/outgoing voice notes, physical stability solver and r
 
 ## Checkpoints
 
+- Checkpoint 07 (`checkpoint-07-general-assembly`): generic part overlays, faster exact packing, connection-aware local repair, checked hanging assembly with one bounded ordering retry, matching animation/manual/CAD sequence, distinct-reference selection/cache, and indexed visual repair context. A varied six-prompt live batch yielded four valid drafts; only the apple received an AI likeness match. A later turtle failure was fixed by replaying its unchanged 925-piece geometry through the improved assembly order. Organic reliability and broad likeness remain unresolved; the catalog is still 36 types, not unrestricted. See `VERIFICATION.md` for all failures and the full-catalog acceptance path in `GENERAL-GENERATION.md`.
+
 - Baseline: existing research preserved; staged plan recorded. Implementation not started.
 - Repository: private `https://github.com/YYK2007/sprout-hacknc2026`, `main` baseline and `feat/brick-studio` review branch. JSA30 now has write access, confirmed through the GitHub collaborator permission endpoint.
 - Checkpoint 01 (`checkpoint-01-studio`): local studio, geometric validation, exact BOM/source allocation, cumulative steps, PDF/CSV/LDraw/PNG exports, and USDZ export implemented. The 97-brick rocket is volumetric. 50 automated checks and the production build pass; PDF and desktop UI inspected. Gemini/image and Photon adapters exist but await live credentials. Broader sample complexity and mobile QA continue on the feature branch.

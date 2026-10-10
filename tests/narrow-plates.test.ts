@@ -126,10 +126,22 @@ test('the original live Bell Tower clock details become tileable without conceal
   assert.deepEqual(billOfMaterials(result).filter(row => narrow.some(part => part.id === row.partId)), [{ partId: '3023', colorId: 15, quantity: 4 }]);
   const check = validateDesign(result);
   assert.equal(check.valid, false, 'The original plan has a one-plate air gap below all four clocks');
-  const unsupported = result.bricks.filter(brick => check.errors.includes(`Brick ${brick.id} has no stud support directly below it.`));
-  assert.equal(unsupported.length, 4);
-  assert.ok(unsupported.every(brick => brick.colorId === 15 && brick.z === 61));
-  assert.ok(unsupported.every(brick => partBottomSites(brick).every(site => !occupied.has(`${site.x - 0.5},${site.y - 0.5},${site.z - 1}`))));
+  assert.match(check.errors.join(' '), /disconnected groups/);
+  const clocks = result.bricks.filter(brick => brick.partId === '3004' && brick.colorId === 15 && brick.z === 61);
+  assert.equal(clocks.length, 4);
+  const key = (site: { x: number; y: number; z: number }) => `${site.x},${site.y},${site.z}`;
+  const studs = new Map(result.bricks.flatMap(brick => partTopStuds(brick).map(site => [key(site), brick] as const)));
+  const receivers = new Map(result.bricks.flatMap(brick => partBottomSites(brick).map(site => [key(site), brick] as const)));
+  for (const clock of clocks) {
+    assert.ok(partBottomSites(clock).every(site => !studs.has(key(site))), 'The clock has no connection below');
+    assert.ok(partBottomSites(clock).every(site => !occupied.has(`${site.x - 0.5},${site.y - 0.5},${site.z - 1}`)));
+    const caps = new Set(partTopStuds(clock).map(site => receivers.get(key(site))));
+    assert.equal(caps.size, 1, 'Each clock connects to one narrow plate above');
+    const cap = [...caps][0]!;
+    assert.equal(cap.partId, '3023');
+    assert.ok(partBottomSites(cap).every(site => studs.get(key(site))?.id === clock.id));
+    assert.ok(partTopStuds(cap).every(site => !receivers.has(key(site))), 'The two-piece clock group has no connection to the tower');
+  }
 });
 
 test('additive narrow plates retain existing V2 metadata and never enter legacy brick-only plans', () => {

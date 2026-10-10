@@ -4,15 +4,16 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RotateCcw, Rotate3D, Grid2X2, Focus, AlertCircle } from 'lucide-react';
 import { footprint, normalizeDesign, partHeight, type Design } from '../shared/model';
 import { createInstancedBrickModel, STUD_UNITS_PER_PLATE } from '../shared/brick-geometry';
+import { placementOffset, type Placement } from '../shared/assembly';
 import { frameDistance } from './scene-framing';
 
-export function BrickScene({ design, visibleIds, highlightIds, activeId, replayKey }: { design: Design; visibleIds?: string[]; highlightIds?: string[]; activeId?: string; replayKey?: number }) {
+export function BrickScene({ design, visibleIds, highlightIds, activeId, replayKey, placement }: { design: Design; visibleIds?: string[]; highlightIds?: string[]; activeId?: string; replayKey?: number; placement?: Placement }) {
   const host = useRef<HTMLDivElement>(null);
   const actions = useRef<{ reset(): void; front(): void; top(): void; rotate(value: boolean): void } | null>(null);
   const [rotating, setRotating] = useState(false);
   const [error, setError] = useState(false);
-  const visibility = useRef({ visibleIds, highlightIds, activeId });
-  visibility.current = { visibleIds, highlightIds, activeId };
+  const visibility = useRef({ visibleIds, highlightIds, activeId, placement });
+  visibility.current = { visibleIds, highlightIds, activeId, placement };
   const placementAnimation = useRef({ id: activeId, start: 0 });
   useEffect(() => { placementAnimation.current = { id: activeId, start: performance.now() }; }, [activeId, replayKey, design]);
 
@@ -134,26 +135,25 @@ export function BrickScene({ design, visibleIds, highlightIds, activeId, replayK
     observer.observe(container);
     let animationFrame = 0;
     let lastVisibility: typeof visibility.current | undefined;
-    let previousLift = -1;
-    const heights = new Map(canonical.bricks.map(brick => [brick.id, partHeight(brick)]));
+    let previousOffset = '';
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     const animate = () => {
       animationFrame = requestAnimationFrame(animate);
-      const { visibleIds, highlightIds, activeId } = visibility.current;
+      const { visibleIds, highlightIds, activeId, placement } = visibility.current;
       if (lastVisibility !== visibility.current) {
         instances.update(visibleIds, highlightIds, activeId);
         lastVisibility = visibility.current;
-        previousLift = -1;
+        previousOffset = '';
         renderer.shadowMap.needsUpdate = true;
         dirty = true;
       }
-      const elapsed = Math.min(1, (performance.now() - placementAnimation.current.start) / 550);
-      // A display cue only: this does not simulate or certify an insertion path.
-      const lift = activeId && !reducedMotion.matches && placementAnimation.current.id === activeId
-        ? ((heights.get(activeId) ?? 0) + 2) * STUD_UNITS_PER_PLATE * (1 - elapsed) ** 3 : 0;
-      if (lift !== previousLift) {
-        instances.setLift(lift);
-        previousLift = lift;
+      const elapsed = Math.min(1, (performance.now() - placementAnimation.current.start) / (placement?.approach === 'above' ? 700 : 1400));
+      const offset = activeId && placement && !reducedMotion.matches && placementAnimation.current.id === activeId
+        ? placementOffset(placement, elapsed) : { x: 0, y: 0, z: 0 };
+      const offsetKey = `${offset.x},${offset.y},${offset.z}`;
+      if (offsetKey !== previousOffset) {
+        instances.setOffset(offset.x, offset.z * STUD_UNITS_PER_PLATE, offset.y);
+        previousOffset = offsetKey;
         renderer.shadowMap.needsUpdate = true;
         dirty = true;
       }

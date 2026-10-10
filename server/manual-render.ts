@@ -183,7 +183,7 @@ export async function renderManualPdf(design: Design, inventory?: InventoryItem[
     ['3. Read the footprint', 'Each placement lists the body height in mm, then width x depth in studs after rotation. Width follows +X and depth follows +Y. All studs point upward. Slope arrows point down the ramp; dots mark its high stud row.'],
     ['4. Add only the vivid pieces', 'The assembly view shows all earlier steps in pale colors. Add the vivid pieces labeled on the top-down map. Labels restart at 1 for each step and match that step\'s placement list.'],
     ['5. Check the body-bottom height', 'Place each piece at the printed height above the table. Z counts plate heights: z = 1 is 3.2 mm; z = 3 is 9.6 mm. A step can mix part heights. A step number is not a physical layer height.'],
-    ['6. Support pieces as you build', 'Base-layer bricks can begin as separate pieces on the table and be joined by the next layer. A support check does not prove strength; keep loose pieces aligned until connected.'],
+    ['6. Support pieces as you build', 'Keep loose base pieces aligned until joined. Some later steps attach from below: follow the printed entry side and height, then raise the piece. Hold the built section as needed. These paths do not verify strength or hand clearance.'],
   ];
   guide.forEach(([heading, description], index) => {
     const yy = 139 + index * 92;
@@ -199,7 +199,7 @@ export async function renderManualPdf(design: Design, inventory?: InventoryItem[
     page(doc, `Step ${step.index} / ${steps.length}`, `Build step ${step.index}`, `${step.bricks.length} new pieces  /  Body bottom: ${(step.z * 3.2).toFixed(1)} mm (z = ${step.z})  /  ${visibleIds.length} of ${design.bricks.length} placed`);
     doc.roundedRect(36, 123, 523, 256, 15).fill('#f3f9fc');
     illustration(doc, design, 42, 126, 330, 245, [...visibleIds], newIds);
-    text(doc, 'ADD THESE PIECES', 390, 146, 145, 9, BLUE, true);
+    text(doc, step.placements[0].approach === 'above' ? 'ADD THESE PIECES' : 'ATTACH FROM BELOW', 390, 146, 145, 9, BLUE, true);
     text(doc, step.instruction, 390, 171, 145, 11, INK);
     text(doc, 'Vivid = new pieces\nPale = previous steps', 390, 329, 145, 9, MUTED);
     text(doc, 'TOP-DOWN PLACEMENT MAP', 36, 404, 310, 9, BLUE, true);

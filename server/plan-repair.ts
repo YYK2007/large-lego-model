@@ -20,6 +20,22 @@ const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
 type Container = Record<string, unknown> | unknown[];
 const isContainer = (value: unknown): value is Container => value !== null && typeof value === 'object';
 
+/** Explicit indices spare the repair model from counting long JSON arrays. */
+export function describeRepairPlan(plan: ShapePlanV2): string {
+  const lines: string[] = [];
+  const visit = (value: unknown, path: string) => {
+    if (Array.isArray(value)) {
+      lines.push(`${path}: array with ${value.length} items; append with ${path}/-`);
+      value.forEach((item, index) => visit(item, `${path}/${index}`));
+    } else if (isContainer(value)) {
+      lines.push(`${path}: ${JSON.stringify(Object.fromEntries(Object.entries(value).filter(([, field]) => !Array.isArray(field))))}`);
+      for (const [field, items] of Object.entries(value)) if (Array.isArray(items)) visit(items, `${path}/${field}`);
+    }
+  };
+  for (const root of roots) if (plan[root as keyof ShapePlanV2] !== undefined) visit(plan[root as keyof ShapePlanV2], `/${root}`);
+  return lines.join('\n');
+}
+
 function pointer(path: string): string[] {
   if (!path.startsWith('/') || /~(?![01])/.test(path)) throw new Error('Repair path must be a valid JSON pointer.');
   const segments = path.slice(1).split('/').map(segment => segment.replace(/~1/g, '/').replace(/~0/g, '~'));

@@ -1,5 +1,6 @@
 import partColors from './part-colors.json';
 import { isDesignResearch, type DesignResearch } from './references';
+import { planAssembly, placementInstruction, type AssemblyPart, type Placement } from './assembly';
 export type Brick = {
   id: string;
   partId: string;
@@ -152,7 +153,11 @@ export function partBottomSites(brick: Brick): { x: number; y: number; z: number
   return points;
 }
 
-export function validateDesign(design: Design): { valid: boolean; errors: string[]; warnings: string[] } {
+function assemblyParts(bricks: Brick[]): AssemblyPart[] {
+  return bricks.map(brick => ({ id: brick.id, x: brick.x, y: brick.y, z: brick.z, ...footprint(brick), height: partHeight(brick), studs: partTopStuds(brick), receivers: partBottomSites(brick) }));
+}
+
+export function validateDesign(design: Design): { valid: boolean; errors: string[]; warnings: string[]; connectedComponents?: number } {
   const errors: string[] = [];
   const warnings = ['Physical stability has not been verified. Connection checks do not measure strength or tipping.'];
   if (!design || typeof design !== 'object') return { valid: false, errors: ['Design must be an object.'], warnings };
@@ -227,19 +232,30 @@ export function validateDesign(design: Design): { valid: boolean; errors: string
       if (target !== undefined && usable[target].z !== stud.z) errors.push(`Studs on ${brick.id} intersect ${usable[target].id} without a matching underside connection.`);
     }
   });
+  const hanging = usable.some((brick, i) => brick.z > 0 && !supported.has(i));
   usable.forEach((brick, i) => {
-    if (brick.z > 0 && !supported.has(i)) errors.push(`Brick ${brick.id} has no stud support directly below it.`);
+    if (brick.z > 0 && !supported.has(i) && neighbors[i].length === 0) errors.push(`Brick ${brick.id} has no stud support directly below it or mating connection above it.`);
   });
-  if (usable.length > 0) {
-    const reached = new Set<number>([0]);
-    const queue = [0];
+  if (usable.length && !usable.some(brick => brick.z === 0)) errors.push('The model has no grounded piece. Every connected assembly must reach the table.');
+  let connectedComponents = 0;
+  const reached = new Set<number>();
+  for (let start = 0; start < usable.length; start++) {
+    if (reached.has(start)) continue;
+    connectedComponents++;
+    reached.add(start);
+    const queue = [start];
     for (let i = 0; i < queue.length; i++) {
       for (const next of neighbors[queue[i]]) if (!reached.has(next)) { reached.add(next); queue.push(next); }
     }
-    if (reached.size !== usable.length) errors.push('The model contains disconnected groups. Side-to-side contact does not connect studs.');
+  }
+  if (connectedComponents > 1) errors.push('The model contains disconnected groups. Side-to-side contact does not connect studs.');
+  if (hanging && errors.length === 0) {
+    const assembly = planAssembly(assemblyParts(usable));
+    if (!assembly.valid) errors.push(`${assembly.error} Blocked pieces: ${assembly.blockedIds.slice(0, 10).join(', ')}.`);
+    else warnings.push('Some pieces attach from below. Follow the checked entry path and hold the assembly as needed; hanging strength is unverified.');
   }
   if (usable.filter((brick) => brick.z === 0).length > 1) warnings.push('Position the separate first-layer bricks on a flat surface; the following layers join them.');
-  return { valid: errors.length === 0, errors, warnings };
+  return { valid: errors.length === 0, errors, warnings, connectedComponents };
 }
 
 export function billOfMaterials(design: Design): { partId: string; colorId: number; quantity: number }[] {
@@ -253,21 +269,22 @@ export function billOfMaterials(design: Design): { partId: string; colorId: numb
   return [...rows.values()].sort((a, b) => a.partId.localeCompare(b.partId) || a.colorId - b.colorId);
 }
 
-export function buildSteps(design: Design): { index: number; z: number; bricks: Brick[]; instruction: string }[] {
+export type BuildStep = { index: number; z: number; bricks: Brick[]; placements: Placement[]; instruction: string };
+
+export function buildSteps(design: Design): BuildStep[] {
   design = normalizeDesign(design);
-  const layers = new Map<number, Brick[]>();
-  for (const brick of design.bricks) {
-    if (!layers.has(brick.z)) layers.set(brick.z, []);
-    layers.get(brick.z)!.push(brick);
-  }
-  const steps: { index: number; z: number; bricks: Brick[]; instruction: string }[] = [];
-  for (const [z, layer] of [...layers].sort(([a], [b]) => a - b)) {
-    layer.sort((a, b) => a.y - b.y || a.x - b.x || a.id.localeCompare(b.id));
-    for (let offset = 0; offset < layer.length; offset += 12) steps.push({
-      index: steps.length + 1,
-      z,
-      bricks: layer.slice(offset, offset + 12),
-      instruction: z === 0
+  const assembly = planAssembly(assemblyParts(design.bricks));
+  if (!assembly.valid) throw new Error(assembly.error);
+  const byId = new Map(design.bricks.map(brick => [brick.id, brick]));
+  const steps: BuildStep[] = [];
+  for (const placement of assembly.placements) {
+    const brick = byId.get(placement.brickId)!, z = brick.z, previous = steps.at(-1);
+    // Upward attachments get their own page/map and exact entry callout.
+    if (placement.approach === 'above' && previous?.z === z && previous.bricks.length < 12 && previous.placements[0].approach === 'above') {
+      previous.bricks.push(brick); previous.placements.push(placement); continue;
+    }
+    steps.push({ index: steps.length + 1, z, bricks: [brick], placements: [placement],
+      instruction: placement.approach !== 'above' ? placementInstruction(placement) : z === 0
         ? 'Arrange these bricks on a flat table at the marked stud coordinates. Keep the loose bricks in position; the following layers join them.'
         : `Place these pieces at the marked stud coordinates, ${(z * 3.2).toFixed(1)} mm above the table. Match their underside connections to the supporting studs; slopes have studs only on their high edge.`,
     });

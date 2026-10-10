@@ -1,9 +1,12 @@
-import test, { type TestContext } from 'node:test';
+import test, { beforeEach, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import dotenv from 'dotenv';
 import sharp from 'sharp';
 import { generateDesign, GenerationError, type GenerationProgress } from '../server/generation.js';
 import { validateDesign } from '../shared/model.js';
+import { resetReferenceStateForTests } from '../server/references.js';
+
+beforeEach(resetReferenceStateForTests);
 
 const observations = { usedImages: [0], silhouette: 'A slender tower.', proportions: 'Height is several shaft widths.', features: ['Clock below belfry'], colors: ['Red'], limitations: ['Hidden rear details unknown'] };
 const plan = { schemaVersion: 2, coordinateSystem: 'stud-xy-plate-z', title: 'Reference specimen', description: 'A supported solid specimen for provider-flow tests.',
@@ -112,6 +115,7 @@ test('likeness feedback reaches one repair attempt, whose new renders are checke
   assert.ok(flow.records[3].body.generationConfig.responseJsonSchema.properties.edits);
   assert.equal(flow.records[3].body.generationConfig.maxOutputTokens, 6000);
   assert.notEqual(images(flow.records[2]).at(-1)?.data, images(flow.records[4]).at(-1)?.data, 'Critic receives newly rendered geometry after repair');
+  assert.deepEqual(images(flow.records[3]).filter(image => image.mimeType === 'image/png'), images(flow.records[2]).filter(image => image.mimeType === 'image/png'), 'The repair planner sees the exact draft being criticized, not just a verbal critique');
   assert.equal(result.research?.comparison.status, 'matched');
   assert.equal(validateDesign(result).valid, true);
   assert.equal(result.source, 'ai');
@@ -140,7 +144,9 @@ test('a failed patch preserves the full base plan and patch schema for the next 
   assert.equal(requests[2].body.generationConfig.maxOutputTokens, 6000);
   const correction = requests[2].body.contents[0].parts[0].text || '';
   assert.match(correction, /Repair parent path does not exist.*\/boxes\/0\/missing\/z/);
-  assert.deepEqual(JSON.parse(correction.split('. Previous plan: ')[1]), plan, 'The partial edit and failed patch never replace the full base plan');
+  const boxContext = correction.split('\n').find(line => line.startsWith('/boxes/0: '))!;
+  assert.deepEqual(JSON.parse(boxContext.slice('/boxes/0: '.length)), plan.boxes[0], 'The partially applied patch never replaces the original geometry');
+  assert.equal(result.research?.observations.silhouette, plan.observations.silhouette);
   assert.equal(validateDesign(result).valid, true);
   assert.equal(result.research?.comparison.status, 'matched');
   assert.ok(result.bricks.some(brick => brick.z === 12), 'The final successful patch raises the original shaft');
@@ -256,4 +262,14 @@ test('stalled structural repairs still stop after four attempts', async t => {
   const flow = await mockedFlow(t, { plans: [floating, ...Array.from({ length: 3 }, () => repair('/boxes/1/z', 12))] });
   await assert.rejects(generateDesign({ prompt: 'A real sculpture', image: flow.uploadedImage }), /after four attempts/);
   assert.equal(flow.records.filter(record => record.kind === 'plan').length, 4);
+});
+
+test('a final valid draft does not describe earlier rejected attempts as a later failed repair', async t => {
+  const floating = { ...plan, boxes: [...plan.boxes, { x: 0, y: 0, z: 12, width: 1, depth: 1, height: 3, colorId: 15 }] };
+  const flow = await mockedFlow(t, { plans: [floating, repair('/boxes/1/z', 12), repair('/boxes/1/z', 12), repair('/boxes/1/z', 9)], critics: [mismatch] });
+  const result = await generateDesign({ prompt: 'A real sculpture', image: flow.uploadedImage });
+  assert.equal(result.research?.comparison.status, 'needs-work');
+  assert.equal(result.research?.warnings.some(warning => /later repair/.test(warning)), false);
+  assert.equal(flow.records.filter(record => record.kind === 'plan').length, 4);
+  assert.equal(validateDesign(result).valid, true);
 });

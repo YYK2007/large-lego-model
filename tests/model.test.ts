@@ -20,7 +20,9 @@ test('all curated samples have a connected supported model and truthful provenan
 
 test('rejects malformed designs without crashing on unknown or prototype-named parts', () => {
   for (const value of [null, {}, { bricks: {} }, { ...design([]), bricks: [null] }]) {
-    assert.equal(validateDesign(value as Design).valid, false);
+    const check = validateDesign(value as Design);
+    assert.equal(check.valid, false);
+    assert.equal(check.connectedComponents, undefined, 'Pre-geometry rejections do not report a connection count');
   }
   for (const overrides of [
     { partId: 'no-such-part' }, { partId: 'toString' }, { colorId: 999999 },

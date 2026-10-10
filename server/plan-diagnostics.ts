@@ -71,15 +71,19 @@ export function diagnosePlanSupport(plan: ShapePlanV2, design: Design) {
   });
   const parents = design.bricks.map((_, index) => index);
   const root = (index: number): number => { while (parents[index] !== index) { parents[index] = parents[parents[index]]; index = parents[index]; } return index; };
-  const unsupported: Brick[] = [];
+  const withoutLower: { brick: Brick; index: number }[] = [];
   design.bricks.forEach((brick, index) => {
     let supported = brick.z === 0;
     for (const site of partBottomSites(brick)) {
       const below = studOwners.get(key(site.x, site.y, site.z));
       if (below !== undefined && below !== index) { supported = true; parents[root(index)] = root(below); }
     }
-    if (!supported) unsupported.push(brick);
+    if (!supported) withoutLower.push({ brick, index });
   });
+  const groundedRoots = new Set(design.bricks.flatMap((brick, index) => brick.z === 0 ? [root(index)] : []));
+  // A hanging piece may connect to the table through studs above it. Do not
+  // tell the repair planner to fill beneath a legal hanging feature.
+  const unsupported = withoutLower.filter(({ index }) => !groundedRoots.has(root(index))).map(({ brick }) => brick);
   type Group = { sources: PlanSource[]; bottomZ: number; colorId: number; pieceCount: number; bounds: Bounds; examples: Omit<Brick, 'id' | 'colorId'>[];
     attachmentSites: number; occupiedBodyEnvelopeSitesBelow: number; nearestAlignedStudGapPlates: number | null; nearestSameHeightStudDistance: number | null;
     cutoutsBelow: { source: PlanSource; path: string }[] };
@@ -119,5 +123,5 @@ export function diagnosePlanSupport(plan: ShapePlanV2, design: Design) {
   return { unsupportedPieceCount: unsupported.length, disconnectedComponents: new Set(parents.map((_, index) => root(index))).size,
     catalogMaxHorizontalSpanStuds: Math.max(...Object.values(PARTS).map(part => Math.max(part.width, part.depth))),
     groups: ordered.slice(0, 8), omittedGroups: Math.max(0, ordered.length - 8),
-    note: 'These are current-packing observations. Body envelopes are conservative. A lower stud can be enclosed by another part; an aligned gap is not proof of empty air. A missing support may be a plan or packing issue. Preserve the requested silhouette and do not silently fill cutouts.' };
+    note: 'These are current-packing observations. Groups list missing lower studs in assemblies that do not reach the table; a grounded piece may legally hang from a connector above it. Body envelopes are conservative. A lower stud can be enclosed by another part; an aligned gap is not proof of empty air. A missing connection may be a plan or packing issue. Preserve the requested silhouette and do not silently fill cutouts.' };
 }

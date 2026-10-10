@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowDownToLine, ChevronLeft, ChevronRight, RotateCcw } from 'lucide-react';
-import { billOfMaterials, buildSteps, COLORS, footprint, PARTS, type Design } from '../shared/model';
+import { billOfMaterials, COLORS, footprint, PARTS, type BuildStep, type Design } from '../shared/model';
 import { renderDesignSvg } from '../shared/illustration';
 import { BrickScene } from './BrickScene';
+import { placementInstruction } from '../shared/assembly';
 
-export function AssemblyView({ design, downloadManual }: { design: Design; downloadManual(): void }) {
-  const steps = useMemo(() => buildSteps(design), [design]);
-  const storageKey = `sprout-build-progress:v3:${design.id}`;
+export function AssemblyView({ design, steps, downloadManual }: { design: Design; steps: BuildStep[]; downloadManual(): void }) {
+  const storageKey = `sprout-build-progress:v4:${design.id}`;
   const [progress, setProgress] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
@@ -18,6 +18,7 @@ export function AssemblyView({ design, downloadManual }: { design: Design; downl
   useEffect(() => { localStorage.setItem(storageKey, JSON.stringify(progress)); }, [storageKey, progress]);
   const current = steps[progress.step];
   const active = current.bricks[progress.piece];
+  const placement = current.placements[progress.piece];
   const size = footprint(active);
   const visibleIds = useMemo(() => [...steps.slice(0, progress.step).flatMap(step => step.bricks), ...current.bricks.slice(0, progress.piece + 1)].map(brick => brick.id), [steps, current, progress.step, progress.piece]);
   const tray = useMemo(() => billOfMaterials({ ...design, bricks: current.bricks }).map(part => {
@@ -34,7 +35,7 @@ export function AssemblyView({ design, downloadManual }: { design: Design; downl
   const moveStep = (step: number) => setProgress({ step, piece: 0 });
 
   return <>
-    <BrickScene design={design} visibleIds={visibleIds} activeId={active.id} replayKey={replay} />
+    <BrickScene design={design} visibleIds={visibleIds} activeId={active.id} replayKey={replay} placement={placement} />
     <div className="step-controls">
       <div className="step-navigation">
         <button aria-label="Previous build step" disabled={progress.step === 0} onClick={() => moveStep(progress.step - 1)}><ChevronLeft size={19} /></button>
@@ -53,6 +54,7 @@ export function AssemblyView({ design, downloadManual }: { design: Design; downl
         </button>;
       })}</div>
       <div className="placement-heading" aria-live="polite"><h3>Place piece {progress.piece + 1} of {current.bricks.length}</h3><p>{COLORS[active.colorId].name} {PARTS[active.partId].name.toLowerCase()} · {size.width} across × {size.depth} deep</p></div>
+      <p className="placement-note">{placementInstruction(placement)}{placement.approach !== 'above' && ' Hold the built section while attaching this piece. Physical strength is unverified.'}</p>
       <div className="placement-list" aria-label="Placements in this step">{current.bricks.map((brick, index) => <button key={brick.id} aria-label={`Show placement ${index + 1}`} aria-pressed={index === progress.piece} className={`placement-button ${index === progress.piece ? 'selected' : ''}`} onClick={() => setProgress({ ...progress, piece: index })}>{index + 1}</button>)}</div>
       <div className="placement-map">
         <svg viewBox={`0 0 ${(width + 2) * cell} ${(depth + 2) * cell}`} role="img" aria-label={`Top view: piece ${progress.piece + 1} starts at X ${active.x}, Y ${active.y}. Blue border marks the current piece.`}>
