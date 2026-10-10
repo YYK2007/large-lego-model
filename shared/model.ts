@@ -5,10 +5,17 @@ export type Brick = {
   x: number;
   y: number;
   z: number;
-  rotation: 0 | 90;
+  rotation: 0 | 90 | 180 | 270;
 };
 
+export const SCHEMA_VERSION = 2;
+export const CATALOG_VERSION = 'upright-plates-slopes-1';
+export const COORDINATE_SYSTEM = 'stud-xy-plate-z';
+
 export type Design = {
+  schemaVersion?: 2;
+  catalogVersion?: typeof CATALOG_VERSION;
+  coordinateSystem?: typeof COORDINATE_SYSTEM;
   id: string;
   title: string;
   description: string;
@@ -25,14 +32,17 @@ export type InventoryItem = {
   source: string;
 };
 
-export const PARTS: Record<string, { id: string; name: string; width: number; depth: number; ldrawId: string }> = {
-  '3005': { id: '3005', name: 'Brick 1 × 1', width: 1, depth: 1, ldrawId: '3005.dat' },
-  '3004': { id: '3004', name: 'Brick 1 × 2', width: 1, depth: 2, ldrawId: '3004.dat' },
-  '3622': { id: '3622', name: 'Brick 1 × 3', width: 1, depth: 3, ldrawId: '3622.dat' },
-  '3010': { id: '3010', name: 'Brick 1 × 4', width: 1, depth: 4, ldrawId: '3010.dat' },
-  '3003': { id: '3003', name: 'Brick 2 × 2', width: 2, depth: 2, ldrawId: '3003.dat' },
-  '3002': { id: '3002', name: 'Brick 2 × 3', width: 2, depth: 3, ldrawId: '3002.dat' },
-  '3001': { id: '3001', name: 'Brick 2 × 4', width: 2, depth: 4, ldrawId: '3001.dat' },
+export const PARTS: Record<string, { id: string; name: string; width: number; depth: number; heightPlates: 1 | 3; kind: 'brick' | 'plate' | 'slope'; ldrawId: string }> = {
+  '3005': { id: '3005', name: 'Brick 1 × 1', width: 1, depth: 1, heightPlates: 3, kind: 'brick', ldrawId: '3005.dat' },
+  '3004': { id: '3004', name: 'Brick 1 × 2', width: 1, depth: 2, heightPlates: 3, kind: 'brick', ldrawId: '3004.dat' },
+  '3622': { id: '3622', name: 'Brick 1 × 3', width: 1, depth: 3, heightPlates: 3, kind: 'brick', ldrawId: '3622.dat' },
+  '3010': { id: '3010', name: 'Brick 1 × 4', width: 1, depth: 4, heightPlates: 3, kind: 'brick', ldrawId: '3010.dat' },
+  '3003': { id: '3003', name: 'Brick 2 × 2', width: 2, depth: 2, heightPlates: 3, kind: 'brick', ldrawId: '3003.dat' },
+  '3002': { id: '3002', name: 'Brick 2 × 3', width: 2, depth: 3, heightPlates: 3, kind: 'brick', ldrawId: '3002.dat' },
+  '3001': { id: '3001', name: 'Brick 2 × 4', width: 2, depth: 4, heightPlates: 3, kind: 'brick', ldrawId: '3001.dat' },
+  '3022': { id: '3022', name: 'Plate 2 × 2', width: 2, depth: 2, heightPlates: 1, kind: 'plate', ldrawId: '3022.dat' },
+  '3020': { id: '3020', name: 'Plate 2 × 4', width: 2, depth: 4, heightPlates: 1, kind: 'plate', ldrawId: '3020.dat' },
+  '3039': { id: '3039', name: 'Slope 45° 2 × 2', width: 2, depth: 2, heightPlates: 3, kind: 'slope', ldrawId: '3039.dat' },
 };
 
 // Keys are Rebrickable color IDs. Keep the explicit LDraw mapping even where IDs match.
@@ -51,16 +61,49 @@ export const COLORS: Record<number, { id: number; name: string; hex: string; ldr
 export function footprint(brick: Brick): { width: number; depth: number } {
   const part = Object.hasOwn(PARTS, brick.partId) ? PARTS[brick.partId] : undefined;
   if (!part) throw new Error(`Unknown part ${brick.partId}.`);
-  return brick.rotation === 90
+  return brick.rotation === 90 || brick.rotation === 270
     ? { width: part.depth, depth: part.width }
     : { width: part.width, depth: part.depth };
 }
 
-function overlaps(a: Brick, b: Brick): boolean {
-  const af = footprint(a);
-  const bf = footprint(b);
-  return a.x < b.x + bf.width && b.x < a.x + af.width
-    && a.y < b.y + bf.depth && b.y < a.y + af.depth;
+/** Convert legacy full-brick heights once, without changing the saved source. */
+export function normalizeDesign(design: Design): Design {
+  if (!design || typeof design !== 'object' || !Array.isArray(design.bricks)) throw new Error('Design bricks must be an array.');
+  if (design.schemaVersion === SCHEMA_VERSION) {
+    if (design.catalogVersion !== CATALOG_VERSION || design.coordinateSystem !== COORDINATE_SYSTEM) throw new Error('Unsupported design catalog or coordinate system.');
+    return { ...design, bricks: design.bricks.map(brick => ({ ...brick })) };
+  }
+  if (design.schemaVersion !== undefined || design.catalogVersion !== undefined || design.coordinateSystem !== undefined) throw new Error('Unsupported design version or incomplete coordinate metadata.');
+  const bricks = design.bricks.map(brick => {
+    if (!brick || !Object.hasOwn(PARTS, brick.partId) || PARTS[brick.partId].kind !== 'brick') throw new Error('Legacy design contains an unsupported part.');
+    if (!Number.isInteger(brick.z) || brick.z < 0 || brick.z >= 24) throw new Error('Legacy brick z must be an integer from 0 to 23.');
+    if (brick.rotation !== 0 && brick.rotation !== 90) throw new Error('Legacy brick rotation must be 0 or 90.');
+    return { ...brick, z: brick.z * 3 };
+  });
+  return { ...design, schemaVersion: SCHEMA_VERSION, catalogVersion: CATALOG_VERSION, coordinateSystem: COORDINATE_SYSTEM, bricks };
+}
+
+export const partHeight = (brick: Brick): number => PARTS[brick.partId].heightPlates;
+
+/** Rotate a local stud-space point and anchor it at the minimum footprint corner. */
+export function partPoint(brick: Brick, u: number, v: number): { x: number; y: number } {
+  const { width: w, depth: d } = PARTS[brick.partId];
+  const [x, y] = brick.rotation === 0 ? [u, v] : brick.rotation === 90 ? [d - v, u] : brick.rotation === 180 ? [w - u, d - v] : [v, w - u];
+  return { x: brick.x + x, y: brick.y + y };
+}
+
+export function partTopStuds(brick: Brick): { x: number; y: number; z: number }[] {
+  const part = PARTS[brick.partId];
+  const points = [];
+  for (let y = part.kind === 'slope' ? 1 : 0; y < part.depth; y++) for (let x = 0; x < part.width; x++) points.push({ ...partPoint(brick, x + 0.5, y + 0.5), z: brick.z + part.heightPlates });
+  return points;
+}
+
+export function partBottomSites(brick: Brick): { x: number; y: number; z: number }[] {
+  const part = PARTS[brick.partId];
+  const points = [];
+  for (let y = 0; y < part.depth; y++) for (let x = 0; x < part.width; x++) points.push({ ...partPoint(brick, x + 0.5, y + 0.5), z: brick.z });
+  return points;
 }
 
 export function validateDesign(design: Design): { valid: boolean; errors: string[]; warnings: string[] } {
@@ -79,7 +122,8 @@ export function validateDesign(design: Design): { valid: boolean; errors: string
   if (design.source !== 'sample' && design.source !== 'ai') errors.push('Design source must be sample or ai.');
   if (!Array.isArray(design.bricks)) return { valid: false, errors: [...errors, 'Design bricks must be an array.'], warnings };
   if (design.bricks.length === 0) errors.push('Design must contain at least one brick.');
-  if (design.bricks.length > 160) return { valid: false, errors: [...errors, 'Design exceeds the limit of 160 bricks.'], warnings };
+
+  try { design = normalizeDesign(design); } catch (error) { return { valid: false, errors: [...errors, (error as Error).message], warnings }; }
 
   const usable: Brick[] = [];
   const ids = new Set<string>();
@@ -92,31 +136,49 @@ export function validateDesign(design: Design): { valid: boolean; errors: string
     else ids.add(brick.id);
     if (typeof brick.partId !== 'string' || !Object.hasOwn(PARTS, brick.partId)) errors.push(`${label} has an unsupported part.`);
     if (!Number.isInteger(brick.colorId) || !Object.hasOwn(COLORS, brick.colorId)) errors.push(`${label} has an unsupported color.`);
-    if (brick.rotation !== 0 && brick.rotation !== 90) errors.push(`${label} rotation must be 0 or 90.`);
+    if (![0, 90, 180, 270].includes(brick.rotation)) errors.push(`${label} rotation must be 0, 90, 180, or 270.`);
     for (const axis of ['x', 'y', 'z'] as const) {
-      if (!Number.isInteger(brick[axis]) || brick[axis] < 0 || brick[axis] >= 24) errors.push(`${label} ${axis} must be an integer from 0 to 23.`);
+      const limit = axis === 'z' ? 72 : 24;
+      if (!Number.isInteger(brick[axis]) || brick[axis] < 0 || brick[axis] >= limit) errors.push(`${label} ${axis} must be an integer from 0 to ${limit - 1}.`);
     }
     if (errors.length !== before) return;
     const { width, depth } = footprint(brick);
     if (brick.x + width > 24 || brick.y + depth > 24) { errors.push(`${label} extends beyond the 24 × 24 stud workspace.`); return; }
+    if (brick.z + partHeight(brick) > 72) { errors.push(`${label} extends beyond the vertical workspace.`); return; }
     usable.push(brick);
   });
 
   const neighbors = usable.map(() => [] as number[]);
   const supported = new Set<number>();
-  for (let i = 0; i < usable.length; i++) {
-    for (let j = i + 1; j < usable.length; j++) {
-      const a = usable[i];
-      const b = usable[j];
-      if (!overlaps(a, b)) continue;
-      if (a.z === b.z) errors.push(`Bricks ${a.id} and ${b.id} overlap.`);
-      if (Math.abs(a.z - b.z) === 1) {
-        neighbors[i].push(j);
-        neighbors[j].push(i);
-        supported.add(a.z > b.z ? i : j);
-      }
+  // Integer cells keep checks local as designs grow. Slopes reserve their full
+  // body envelope; this upright palette does not permit nesting in the ramp.
+  const key = (x: number, y: number, z: number) => `${x},${y},${z}`;
+  const bodies = new Map<string, number>();
+  const studs = new Map<string, number>();
+  usable.forEach((brick, i) => {
+    const { width, depth } = footprint(brick);
+    const collisions = new Set<number>();
+    for (let z = brick.z; z < brick.z + partHeight(brick); z++) for (let y = brick.y; y < brick.y + depth; y++) for (let x = brick.x; x < brick.x + width; x++) {
+      const cell = key(x, y, z);
+      const existing = bodies.get(cell);
+      if (existing !== undefined) collisions.add(existing);
+      else bodies.set(cell, i);
     }
-  }
+    for (const other of collisions) errors.push(`Bricks ${usable[other].id} and ${brick.id} overlap their body envelopes.`);
+    for (const stud of partTopStuds(brick)) studs.set(key(stud.x, stud.y, stud.z), i);
+  });
+  usable.forEach((brick, upper) => {
+    const supports = new Set<number>();
+    for (const site of partBottomSites(brick)) {
+      const lower = studs.get(key(site.x, site.y, site.z));
+      if (lower !== undefined && lower !== upper) supports.add(lower);
+    }
+    for (const lower of supports) { neighbors[lower].push(upper); neighbors[upper].push(lower); supported.add(upper); }
+    for (const stud of partTopStuds(brick)) {
+      const target = bodies.get(key(Math.floor(stud.x), Math.floor(stud.y), stud.z));
+      if (target !== undefined && usable[target].z !== stud.z) errors.push(`Studs on ${brick.id} intersect ${usable[target].id} without a matching underside connection.`);
+    }
+  });
   usable.forEach((brick, i) => {
     if (brick.z > 0 && !supported.has(i)) errors.push(`Brick ${brick.id} has no stud support directly below it.`);
   });
@@ -144,15 +206,25 @@ export function billOfMaterials(design: Design): { partId: string; colorId: numb
 }
 
 export function buildSteps(design: Design): { index: number; z: number; bricks: Brick[]; instruction: string }[] {
-  const levels = [...new Set(design.bricks.map((brick) => brick.z))].sort((a, b) => a - b);
-  return levels.map((z, i) => ({
-    index: i + 1,
-    z,
-    bricks: design.bricks.filter((brick) => brick.z === z).sort((a, b) => a.y - b.y || a.x - b.x || a.id.localeCompare(b.id)),
-    instruction: z === 0
-      ? 'Arrange these bricks on a flat table at the marked stud coordinates. Keep the loose bricks in position; the following layers join them.'
-      : `Add layer ${z + 1} at the marked stud coordinates. Press each new brick onto the studs of the layer directly below.`,
-  }));
+  design = normalizeDesign(design);
+  const layers = new Map<number, Brick[]>();
+  for (const brick of design.bricks) {
+    if (!layers.has(brick.z)) layers.set(brick.z, []);
+    layers.get(brick.z)!.push(brick);
+  }
+  const steps: { index: number; z: number; bricks: Brick[]; instruction: string }[] = [];
+  for (const [z, layer] of [...layers].sort(([a], [b]) => a - b)) {
+    layer.sort((a, b) => a.y - b.y || a.x - b.x || a.id.localeCompare(b.id));
+    for (let offset = 0; offset < layer.length; offset += 12) steps.push({
+      index: steps.length + 1,
+      z,
+      bricks: layer.slice(offset, offset + 12),
+      instruction: z === 0
+        ? 'Arrange these bricks on a flat table at the marked stud coordinates. Keep the loose bricks in position; the following layers join them.'
+        : `Place these pieces at the marked stud coordinates, ${(z * 3.2).toFixed(1)} mm above the table. Match their underside connections to the supporting studs; slopes have studs only on their high edge.`,
+    });
+  }
+  return steps;
 }
 
 export function allocateInventory(design: Design, inventory: InventoryItem[]): {
@@ -183,9 +255,14 @@ export function exportLDraw(design: Design): string {
       const part = PARTS[brick.partId];
       const color = COLORS[brick.colorId];
       const { width, depth } = footprint(brick);
-      // Standard LDraw bricks have the long axis along X and the origin at top-center.
-      const matrix = brick.rotation === 0 ? '0 0 1 0 1 0 -1 0 0' : '1 0 0 0 1 0 0 0 1';
-      lines.push(`1 ${color.ldrawId} ${(brick.x + width / 2) * 20} ${-(brick.z + 1) * 24} ${(brick.y + depth / 2) * 20} ${matrix} ${part.ldrawId}`);
+      const cos = [1, 0, -1, 0][brick.rotation / 90], sin = [0, 1, 0, -1][brick.rotation / 90];
+      // Rectangular DATs have their long axis along X. 3039 instead has a
+      // rear-row origin: native bounds X[-20,20], Z[-30,10], with top at Y0.
+      const matrix = part.kind === 'slope'
+        ? [cos, 0, -sin, 0, 1, 0, sin, 0, cos]
+        : [sin, 0, cos, 0, 1, 0, -cos, 0, sin];
+      const origin = part.kind === 'slope' ? partPoint(brick, 1, 1.5) : { x: brick.x + width / 2, y: brick.y + depth / 2 };
+      lines.push(`1 ${color.ldrawId} ${origin.x * 20} ${-(brick.z + partHeight(brick)) * 8} ${origin.y * 20} ${matrix.join(' ')} ${part.ldrawId}`);
     }
   }
   return lines.join('\r\n') + '\r\n';

@@ -1,6 +1,6 @@
 # Plate and upright-slope increment
 
-Research/design checkpoint, 2026-10-10. **Proposed, not implemented.** This follows the updated `AGENTS.md` and `OBJECTIVE.md` requirement that Large Lego Model support usable parts beyond rectangular bricks. No production code changed for this investigation.
+Research/design checkpoint, 2026-10-10. **Implemented in checkpoint 03.** The original plan below records the source-grounded migration decision. Production now includes 3022/3020 plates and 3039 slopes, V2 plate-height coordinates, four yaw orientations, accurate high-edge slope studs, matching geometry/exports, and legacy normalization without rewriting old snapshots. See `VERIFICATION.md` for checks and remaining limits. This increment does not finish the broader part catalog.
 
 ## Release decision
 

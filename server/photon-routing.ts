@@ -55,7 +55,7 @@ function inventorySnapshot(value: unknown): InventoryItem[] | undefined {
   return value.map(item => {
     if (!item || typeof item !== 'object' || typeof item.partId !== 'string' || !Object.hasOwn(PARTS, item.partId)
       || !Number.isInteger(item.colorId) || !Object.hasOwn(COLORS, item.colorId)
-      || !Number.isInteger(item.quantity) || item.quantity < 0 || item.quantity > 10000
+      || !Number.isSafeInteger(item.quantity) || item.quantity < 0
       || typeof item.source !== 'string' || item.source.length > 120) {
       throw new PhotonInputError('The saved inventory is invalid. Save a corrected inventory in the web app first.');
     }

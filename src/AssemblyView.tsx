@@ -1,12 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ArrowDownToLine, ChevronLeft, ChevronRight, RotateCcw } from 'lucide-react';
 import { billOfMaterials, buildSteps, COLORS, footprint, PARTS, type Design } from '../shared/model';
 import { renderDesignSvg } from '../shared/illustration';
 import { BrickScene } from './BrickScene';
 
 export function AssemblyView({ design, downloadManual }: { design: Design; downloadManual(): void }) {
-  const steps = buildSteps(design);
-  const storageKey = `sprout-build-progress:${design.id}`;
+  const steps = useMemo(() => buildSteps(design), [design]);
+  const storageKey = `sprout-build-progress:v3:${design.id}`;
   const [progress, setProgress] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
@@ -19,21 +19,26 @@ export function AssemblyView({ design, downloadManual }: { design: Design; downl
   const current = steps[progress.step];
   const active = current.bricks[progress.piece];
   const size = footprint(active);
-  const visible = [...steps.slice(0, progress.step).flatMap(step => step.bricks), ...current.bricks.slice(0, progress.piece + 1)];
-  const tray = billOfMaterials({ ...design, bricks: current.bricks });
-  const minX = Math.min(...design.bricks.map(brick => brick.x));
-  const minY = Math.min(...design.bricks.map(brick => brick.y));
-  const width = Math.max(...design.bricks.map(brick => brick.x + footprint(brick).width)) - minX;
-  const depth = Math.max(...design.bricks.map(brick => brick.y + footprint(brick).depth)) - minY;
+  const visibleIds = useMemo(() => [...steps.slice(0, progress.step).flatMap(step => step.bricks), ...current.bricks.slice(0, progress.piece + 1)].map(brick => brick.id), [steps, current, progress.step, progress.piece]);
+  const tray = useMemo(() => billOfMaterials({ ...design, bricks: current.bricks }).map(part => {
+    const firstIndex = current.bricks.findIndex(brick => brick.partId === part.partId && brick.colorId === part.colorId);
+    const thumbnail = { ...design, title: `${COLORS[part.colorId].name} ${PARTS[part.partId].name}`, bricks: [{ ...current.bricks[firstIndex], x: 0, y: 0, z: 0, rotation: 0 as const }] };
+    return { ...part, firstIndex, svg: renderDesignSvg(thumbnail, { width: 76, height: 55 }) };
+  }), [design, current]);
+  const { minX, minY, width, depth } = useMemo(() => {
+    const minX = Math.min(...design.bricks.map(brick => brick.x)), minY = Math.min(...design.bricks.map(brick => brick.y));
+    return { minX, minY, width: Math.max(...design.bricks.map(brick => brick.x + footprint(brick).width)) - minX,
+      depth: Math.max(...design.bricks.map(brick => brick.y + footprint(brick).depth)) - minY };
+  }, [design]);
   const cell = 20;
   const moveStep = (step: number) => setProgress({ step, piece: 0 });
 
   return <>
-    <BrickScene design={design} visibleIds={visible.map(brick => brick.id)} activeId={active.id} replayKey={replay} />
+    <BrickScene design={design} visibleIds={visibleIds} activeId={active.id} replayKey={replay} />
     <div className="step-controls">
       <div className="step-navigation">
         <button aria-label="Previous build step" disabled={progress.step === 0} onClick={() => moveStep(progress.step - 1)}><ChevronLeft size={19} /></button>
-        <div><span>STEP {progress.step + 1} OF {steps.length}</span><strong>{current.bricks.length} pieces · layer {current.z + 1}</strong></div>
+        <div><span>STEP {progress.step + 1} OF {steps.length}</span><strong>{current.bricks.length} pieces · {(current.z * 3.2).toFixed(1)} mm from base</strong></div>
         <button aria-label="Next build step" disabled={progress.step === steps.length - 1} onClick={() => moveStep(progress.step + 1)}><ChevronRight size={19} /></button>
       </div>
       <input aria-label="Build step" type="range" min={0} max={steps.length - 1} value={progress.step} onChange={event => moveStep(Number(event.target.value))} />
@@ -42,10 +47,8 @@ export function AssemblyView({ design, downloadManual }: { design: Design; downl
     <section className="assembly-guide" aria-label="Piece placement guide">
       <div className="assembly-heading"><h3>Gather these pieces</h3><span>{current.bricks.length} for this step</span></div>
       <div className="part-tray">{tray.map(part => {
-        const firstIndex = current.bricks.findIndex(brick => brick.partId === part.partId && brick.colorId === part.colorId);
-        const thumbnail = { ...design, title: `${COLORS[part.colorId].name} ${PARTS[part.partId].name}`, bricks: [{ ...current.bricks[firstIndex], x: 0, y: 0, z: 0, rotation: 0 as const }] };
-        return <button key={`${part.partId}:${part.colorId}`} className={`part-chip ${active.partId === part.partId && active.colorId === part.colorId ? 'selected' : ''}`} aria-pressed={active.partId === part.partId && active.colorId === part.colorId} onClick={() => setProgress({ ...progress, piece: firstIndex })}>
-          <span className="part-thumb" aria-hidden="true" dangerouslySetInnerHTML={{ __html: renderDesignSvg(thumbnail, { width: 76, height: 55 }) }} />
+        return <button key={`${part.partId}:${part.colorId}`} className={`part-chip ${active.partId === part.partId && active.colorId === part.colorId ? 'selected' : ''}`} aria-pressed={active.partId === part.partId && active.colorId === part.colorId} onClick={() => setProgress({ ...progress, piece: part.firstIndex })}>
+          <span className="part-thumb" aria-hidden="true" dangerouslySetInnerHTML={{ __html: part.svg }} />
           <span className="part-count">×{part.quantity}</span><strong>{PARTS[part.partId].name}</strong><small>{COLORS[part.colorId].name} · #{part.partId}</small>
         </button>;
       })}</div>

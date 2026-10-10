@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
 import { SAMPLE_DESIGNS } from '../shared/examples.js';
-import { PARTS, COLORS, exportCsv, exportLDraw, validateDesign } from '../shared/model.js';
+import { PARTS, COLORS, exportCsv, exportLDraw, validateDesign, normalizeDesign } from '../shared/model.js';
 import { renderDesignSvg } from '../shared/illustration.js';
 import { generateManualPdf } from './manual.js';
 import { generateUsdz } from './native-model.js';
@@ -33,10 +33,19 @@ let activeGenerations = 0;
 app.post('/api/generate', async (req, res) => {
   if (activeGenerations >= 2) throw new GenerationError('Two builds are already being planned. Please try again shortly.', 429);
   activeGenerations++;
+  const streaming = req.get('Accept') === 'application/x-ndjson';
+  const progress = streaming ? (event: { stage: string; attempt: number; maxAttempts: number }) => {
+    if (!res.headersSent) { res.type('application/x-ndjson'); res.setHeader('Cache-Control', 'no-store'); res.flushHeaders(); }
+    res.write(JSON.stringify({ type: 'progress', ...event }) + '\n');
+  } : undefined;
   try {
-    const design = await generateDesign(req.body);
+    const design = await generateDesign(req.body, progress);
     await saveDesign({ ...design, inventory: req.body.inventory || [] });
-    res.json(design);
+    if (streaming) res.end(JSON.stringify({ type: 'design', design }) + '\n');
+    else res.json(design);
+  } catch (error) {
+    if (!res.headersSent) throw error;
+    res.end(JSON.stringify({ type: 'error', error: error instanceof GenerationError ? error.message : 'The design could not be saved. Your current design is unchanged.' }) + '\n');
   } finally { activeGenerations--; }
 });
 app.post('/api/inventory/photo', async (req, res) => res.json(await suggestInventory(req.body.image)));
@@ -47,7 +56,7 @@ app.post('/api/designs', async (req, res) => {
   if (!check.valid) throw new GenerationError('Cannot save an invalid design: ' + check.errors.join('; '), 400);
   validateInventory(req.body.inventory || []);
   // An export freezes this exact collection and geometry. Existing shared links never change.
-  const snapshot = { ...design, id: randomUUID(), inventory: req.body.inventory || [] };
+  const snapshot = { ...normalizeDesign(design), id: randomUUID(), inventory: req.body.inventory || [] };
   await saveDesign(snapshot);
   res.json({ id: snapshot.id });
 });

@@ -1,6 +1,6 @@
 # Large Lego Model
 
-Turn an idea and existing LEGO bricks into a small brick sculpture, exact parts list, and illustrated instructions. **Large Lego Model** is the architecture name. **Sprout** is a provisional product name.
+Turn an idea and existing LEGO bricks into a detailed three-dimensional build, exact parts list, and illustrated instructions. **Large Lego Model** is the architecture name. **Sprout** is a provisional product name.
 
 HackNC 2026 · React / TypeScript / Three.js / Node · Gemini · Photon Spectrum
 
@@ -16,7 +16,9 @@ npm run dev
 
 Open [http://127.0.0.1:5173](http://127.0.0.1:5173). The API runs on port 3001. The website updates automatically during frontend edits; restart `npm run dev` after server/shared-code changes. Credentials are re-read from `.env` when used.
 
-The four curated sample builds work without API keys. They are labeled samples; they are never substituted for an AI response. Start with a sample, rotate it, open **Build steps** and **Pieces**, add some owned bricks, then use **Let's build** to download the matching PDF, CSV, LDraw model, native USDZ, and preview. The build guide includes per-piece navigation, exact part/color quantities, a top-down placement map, replay, and saved viewing progress.
+The six curated sample builds work without API keys. Start with the [1,345-piece courtyard castle](http://127.0.0.1:5173/?design=sample-castle): hollow towers, a central keep, furnished rooms, window openings, and five sloped roofs. Samples are labeled and are never substituted for an AI response. Rotate the model, open **Build steps** and **Pieces**, add owned bricks, then use **Let's build** for the matching PDF, CSV, LDraw model, USDZ, and preview. Assembly steps contain at most 12 new pieces with per-piece navigation, exact part/color quantities, a top-down placement map, replay, and saved viewing progress.
+
+There is no application piece-count ceiling or default small-piece budget. Explicit API budgets and owned-only stock still apply. Review this checkpoint with `npm test` and the castle's 127-step guide; additional pieces alone do not establish good design.
 
 ## Connect the real services
 
@@ -47,17 +49,17 @@ flowchart LR
   F --> J[Photon feedback loop]
 ```
 
-Gemini describes occupied colored space. The compiler chooses real catalog brick placements, interlocks neighboring layers where possible, and enforces exact stock in owned-only mode. No overlap, floating brick, or disconnected final assembly passes the geometry gate. Rejected generations receive up to two repair attempts; persistent failure preserves the user's current design.
+Gemini describes occupied colored space, directional slope runs, and repeated feature groups. Its planning instructions prioritize actual openings, interiors, floors, roofs, and connected sections. The compiler chooses real catalog pieces, interlocks neighboring layers where possible, and enforces exact stock in owned-only mode. No overlap, unsupported elevated piece, or disconnected final assembly passes the geometry gate. A request gets one initial plan and at most one repair within a shared 60-second provider deadline. The UI reports progress; failure preserves the current design. These checks do not yet verify every requested semantic feature.
 
 All outputs derive from the same placements. Exported/shared snapshots receive new IDs and cannot overwrite earlier revisions. Source allocations retain exact part/color and the set instance or loose-brick lot. An inventory photo produces suggestions that the user must confirm.
 
 ## Current boundaries
 
-- Seven ordinary upright rectangular brick sizes, nine colors, quarter-turn rotation, a 24 × 24 × 24 grid, and at most 160 bricks. The compiler is a heuristic and may reject a feasible inventory rather than find an optimal packing.
+- Ten real part IDs: seven upright bricks, 3022 and 3020 plates, and 3039 upright slopes; nine colors and four yaw orientations. Coordinates use studs horizontally and plate heights vertically. The physical workspace remains 24 × 24 studs × 72 plate heights; there is no piece-count ceiling. Request size, provider output, and execution-time limits still apply. The heuristic compiler may reject feasible geometry or inventory instead of finding an optimal packing.
 - Geometric support and connectivity are checked. Clutch strength, torque, tipping, material wear, and intermediate physical stability are **not simulated**. A real hand-build remains part of demo validation.
-- A broader catalog is a required next increment: plates and upright slopes first, then tiles, curves, wedges, and verified moving/connector families. Current production generation still supports only the seven rectangular brick sizes. Minifigures, arbitrary mesh conversion, and collaborative assembly remain unimplemented.
+- Tiles, curves, wedges, and verified moving/connector families remain required catalog expansions. Current parts stay upright on the stud grid; slope collision envelopes are conservative. Specific part/color availability has not been checked against current catalogs. Minifigures, arbitrary mesh conversion, and collaborative assembly remain unimplemented.
 - Rebrickable imports the endpoint's available set inventory. It excludes spares/unsupported parts and does not automatically resolve alternate historical inventory versions. Verify counts against the physical set.
-- Live Gemini text generation and one exact recolor revision passed; the 71-piece rocket retained every part placement while its red pieces became green. After fixing a checker issue exposed by the first owned-stock run, a repeat produced the requested four-layer pyramid with zero shortages; see the verification record for both outcomes. Rebrickable, Photon delivery, and target-iPhone behavior still need live verification.
+- Earlier live Gemini text/recolor and owned-only checks passed. The new complex-generation path has only deterministic/offline verification: a live test timed out, then a second returned the project's exhausted daily free-tier quota (20 requests for this model). The castle is curated. Complex AI quality and improved successful latency remain unverified; see the verification record. Rebrickable, Photon delivery, and target-iPhone behavior also need live checks.
 - The API binds to localhost by default. Before public hosting, add user authentication, quotas, durable shared storage, and deployment-specific origin controls. This checkpoint is a local/team prototype.
 
 ## Team workflow

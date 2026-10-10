@@ -1,6 +1,6 @@
 # Large Lego Model: reviewable build stages
 
-Architecture: **Large Lego Model**. Provisional product name: Sprout. Turn an idea and existing bricks into a small brick sculpture, a parts list, and illustrated assembly steps.
+Architecture: **Large Lego Model**. Provisional product name: Sprout. Turn an idea and existing bricks into a detailed three-dimensional build, a parts list, and illustrated assembly steps.
 
 ## Branch and review process
 
@@ -12,11 +12,11 @@ Review: open the local studio; choose a genuinely volumetric sample; orbit/zoom 
 
 Verification: schema validation, no overlapping brick volumes, supported upper layers, one connected final assembly, exact counts, consistent instruction order, browser and PDF visual checks. These are geometric checks, not physical load/stability certification.
 
-Design acceptance: Windows XP is the leading visual reference for the Frutiger Aero / Y2K workshop and manual: blue rounded window frames, sky/grass colors, gloss, friendly icons, and depth. Compare the assembly workflow to observed LEGO Builder app screens and official walkthroughs; improve piece callouts, orientation, placement clarity, and progress based on that evidence. Record what was inspected, and do not claim a hands-on mobile-app test from a marketing page alone.
+Design acceptance: use a calm, playful Frutiger Aero / Y2K workshop with sky/grass colors, selective gloss, and depth. Windows XP is an influence; the literal window-chrome treatment was rejected. Compare the assembly workflow to observed LEGO Builder screens and official walkthroughs, with precise part callouts, orientation, placement, and progress.
 
 ## Required catalog expansion
 
-The finished objective includes more than rectangular bricks. After validating the first volumetric generator, add plates, tiles, and upright slopes; then curved pieces and wedges; then verified wheels, hinges, brackets, and connector families. For each increment, review a model that actually uses those parts and verify the same geometry and connections in generation, inventory, viewer, exports, and instructions. Preserve exact part/color IDs and counts. See `docs/complex-builds.md` for the coordinate, connection, and assembly requirements. The current seven-brick catalog does not satisfy this goal by itself.
+The finished objective includes more than rectangular bricks. After validating the first volumetric generator, add plates, tiles, and upright slopes; then curved pieces and wedges; then verified wheels, hinges, brackets, and connector families. For each increment, review a model that actually uses those parts and verify the same geometry and connections in generation, inventory, viewer, exports, and instructions. Preserve exact part/color IDs and counts. See `docs/complex-builds.md` for the coordinate, connection, and assembly requirements. The current ten-part catalog is an increment toward this goal.
 
 ## 2. AI, image inspiration, and owned inventory
 
@@ -43,3 +43,5 @@ Later: ElevenLabs incoming/outgoing voice notes, physical stability solver and r
 - Checkpoint 01 (`checkpoint-01-studio`): local studio, geometric validation, exact BOM/source allocation, cumulative steps, PDF/CSV/LDraw/PNG exports, and USDZ export implemented. The 97-brick rocket is volumetric. 50 automated checks and the production build pass; PDF and desktop UI inspected. Gemini/image and Photon adapters exist but await live credentials. Broader sample complexity and mobile QA continue on the feature branch.
 
 - Checkpoint 02 (`checkpoint-02-xp-assembly`): XP-inspired workshop and manual; four volumetric samples (flower 118, rocket 97, tree 119, duck 91 pieces); per-piece assembly tray, replay, placement map, and saved viewing progress; corrected SVG occlusion. 57 tests and the production build pass; desktop, 390-pixel mobile, and exported PDF inspected. Live Gemini text generation, exact recolor, and a corrected owned-only four-layer pyramid passed. Two image-inspired attempts failed (geometry rejection and provider failure); reliability work remains. Plates/slopes have a source-checked implementation plan and are not yet enabled.
+
+- Checkpoint 03 (`checkpoint-03-complex-builds`): piece-count/default-small-budget removal, repeated-feature grammar, mixed-height plates and directional slopes, faster large-model validation/rendering, and six curated samples. The 1,345-piece castle has 19 furnished rooms and 127 assembly steps. Its geometry, openings, exports, browser assembly, and representative PDF pages were checked. 109 tests and production build pass. The website uses the calmer Y2K direction. Gemini progress and a shared 60-second deadline are implemented; successful complex AI generation remains blocked by exhausted provider quota. Photon setup remains paused for the user's complexity priority.

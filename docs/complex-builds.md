@@ -1,6 +1,6 @@
 # Complex, genuinely three-dimensional builds
 
-Research and proposed next increment, checked 2026-10-10. **This is a design proposal, not an implemented capability or a claim that a generated model has been physically built.** First validate the current generator with a real Gemini request, save its exact output, and inspect a full turntable. No external generation was executed for this research.
+Research and proposed next increment, checked 2026-10-10. **Historical proposal with checkpoint 03 progress:** the piece cap is removed; plates/slopes, repeated-feature plans, and a curated 1,345-piece castle are implemented and checked. The live complex Gemini request produced no plan because the project's quota was exhausted. No generated model has been physically built. The original research below records the broader directions that remain to be validated; see `VERIFICATION.md` for current evidence.
 
 ## The immediate correction
 

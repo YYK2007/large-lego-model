@@ -1,6 +1,6 @@
 import PDFDocument from 'pdfkit';
 import SVGtoPDF from 'svg-to-pdfkit';
-import { allocateInventory, billOfMaterials, buildSteps, COLORS, footprint, PARTS, validateDesign, type Brick, type Design, type InventoryItem } from '../shared/model';
+import { allocateInventory, billOfMaterials, buildSteps, COLORS, footprint, normalizeDesign, partHeight, partPoint, partTopStuds, PARTS, validateDesign, type Brick, type Design, type InventoryItem } from '../shared/model';
 import { renderDesignSvg } from '../shared/illustration';
 
 const INK = '#133a50';
@@ -9,7 +9,6 @@ const GREEN = '#55b584';
 const MUTED = '#577384';
 const PAGE_WIDTH = 595.28;
 const MARGIN = 36;
-const ROWS_PER_STEP = 12;
 
 function text(doc: PDFKit.PDFDocument, value: string, x: number, y: number, width: number, size = 10, color = INK, bold = false) {
   doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(size).fillColor(color).text(value, x, y, { width, lineGap: 2 });
@@ -36,13 +35,13 @@ function illustration(doc: PDFKit.PDFDocument, design: Design, x: number, y: num
   SVGtoPDF(doc, renderDesignSvg(design, { width, height, visibleIds, highlightIds }), x, y, { width, height, assumePt: true });
 }
 
-function placementRows(doc: PDFKit.PDFDocument, bricks: Brick[], x: number, y: number, width: number, offset = 0) {
+function placementRows(doc: PDFKit.PDFDocument, bricks: Brick[], x: number, y: number, width: number) {
   bricks.forEach((brick, index) => {
     const yy = y + index * 24;
     const size = footprint(brick);
     doc.roundedRect(x, yy, 20, 18, 5).fill('#e5f3f5');
-    text(doc, String(offset + index + 1), x + 3, yy + 4, 17, 8, BLUE, true);
-    text(doc, `${brick.partId} / ${COLORS[brick.colorId].name}`, x + 27, yy, width - 27, 8, INK, true);
+    text(doc, String(index + 1), x + 3, yy + 4, 17, 8, BLUE, true);
+    text(doc, `${brick.partId} / ${COLORS[brick.colorId].name} / ${(partHeight(brick) * 3.2).toFixed(1)} mm`, x + 27, yy, width - 27, 8, INK, true);
     text(doc, `(${brick.x}, ${brick.y})  ${size.width} x ${size.depth}  /  ${brick.rotation} deg`, x + 27, yy + 11, width - 27, 8, MUTED);
   });
 }
@@ -65,6 +64,20 @@ function placementMap(doc: PDFKit.PDFDocument, design: Design, bricks: Brick[], 
     const by = originY + brick.y * cell;
     doc.rect(bx + 0.8, by + 0.8, size.width * cell - 1.6, size.depth * cell - 1.6)
       .fillAndStroke(COLORS[brick.colorId].hex, INK);
+    if (PARTS[brick.partId].kind === 'slope') {
+      const mapPoint = (u: number, v: number) => {
+        const point = partPoint(brick, u, v);
+        return [originX + point.x * cell, originY + point.y * cell];
+      };
+      const [ax, ay] = mapPoint(0, 1), [bx, by] = mapPoint(2, 1);
+      doc.moveTo(ax, ay).lineTo(bx, by).lineWidth(0.7).strokeColor('#ffffff').stroke();
+      // The arrow points down the ramp; dots mark the two high-row studs.
+      const tail = mapPoint(1, 0.75), tip = mapPoint(1, 0.2);
+      const left = mapPoint(0.77, 0.44), right = mapPoint(1.23, 0.44);
+      doc.moveTo(tail[0], tail[1]).lineTo(tip[0], tip[1]).stroke();
+      doc.moveTo(left[0], left[1]).lineTo(tip[0], tip[1]).lineTo(right[0], right[1]).stroke();
+      for (const stud of partTopStuds(brick)) doc.circle(originX + stud.x * cell, originY + stud.y * cell, cell * 0.13).fillAndStroke('#ffffff', INK);
+    }
     const labelSize = Math.min(10, cell * 0.68);
     const cx = bx + size.width * cell / 2;
     const cy = by + size.depth * cell / 2;
@@ -82,6 +95,7 @@ function placementMap(doc: PDFKit.PDFDocument, design: Design, bricks: Brick[], 
 export async function generateManualPdf(design: Design, inventory?: InventoryItem[]): Promise<Buffer> {
   const validation = validateDesign(design);
   if (!validation.valid) throw new Error(`Cannot create instructions for an invalid design: ${validation.errors.join('; ')}`);
+  design = normalizeDesign(design);
   const doc = new PDFDocument({ autoFirstPage: false, size: 'A4', margin: MARGIN, bufferPages: true,
     info: { Title: `${design.title} - Building instructions`, Author: 'Sprout', Subject: `Design ${design.id}` } });
   const chunks: Buffer[] = [];
@@ -111,9 +125,9 @@ export async function generateManualPdf(design: Design, inventory?: InventoryIte
   doc.fillOpacity(0.78).roundedRect(53, 211, 489, 314, 13).fill('#ffffff');
   doc.restore();
   illustration(doc, design, 46, 203, 503, 323);
-  text(doc, `${design.bricks.length} BRICKS     ${steps.length} BUILD STEPS     ${bom.length} PART / COLOR TYPES`, MARGIN, 558, 523, 11, BLUE, true);
+  text(doc, `${design.bricks.length} PIECES     ${steps.length} BUILD STEPS     ${bom.length} PART / COLOR TYPES`, MARGIN, 558, 523, 11, BLUE, true);
   text(doc, 'Your parts and assembly steps.', MARGIN, 595, 510, 22, INK, true);
-  text(doc, 'Gather your parts, follow the numbered layers, and keep the front of your model facing you. Each diagram and placement is generated from this exact design.', MARGIN, 632, 500, 12, MUTED);
+  text(doc, 'Gather your parts, follow the numbered steps, and keep the front of your model facing you. Each diagram and placement is generated from this exact design.', MARGIN, 632, 500, 12, MUTED);
   if (allocation) text(doc, allocation.totalMissing
     ? `COLLECTION CHECK: ${allocation.totalMissing} ${allocation.totalMissing === 1 ? 'brick' : 'bricks'} missing. Gather the missing pieces before building.`
     : 'COLLECTION CHECK: All required pieces are allocated from your saved inventory.', MARGIN, 692, 515, 9, allocation.totalMissing ? '#a14826' : '#238154', true);
@@ -162,13 +176,13 @@ export async function generateManualPdf(design: Design, inventory?: InventoryIte
     }
   }
 
-  page(doc, 'Before you start', 'How to read your guide', 'One grid square equals one stud. One layer equals one standard brick body.');
+  page(doc, 'Before you start', 'How to read your guide', 'One grid square = one stud (8 mm). One Z unit = one plate height (3.2 mm).');
   const guide = [
     ['1. Keep the same front', 'The isometric view keeps one camera for every step. +X points down-right; +Y points down-left. The top-down map has +X to the right and +Y downward.'],
     ['2. Count from zero', 'The green dot is grid origin (0, 0). A placement such as (2, 3) starts two studs right and three studs down from that origin. Coordinates mark the smallest X and Y corner of the brick body.'],
-    ['3. Read the footprint', 'Each placement lists its width x depth in studs, after rotation. Width follows +X and depth follows +Y. Match this rectangle on the map; all studs point upward.'],
-    ['4. Add only the vivid pieces', 'The assembly view shows all earlier layers in pale colors. Add the vivid pieces labeled on the top-down map. Labels restart at 1 for each layer and match that layer\'s placement list.'],
-    ['5. Check the layer height', 'Layer 1 rests on the table (z = 0). Layer 2 starts one brick body higher (z = 1). Place each piece at the stated layer, then check the full assembly before continuing.'],
+    ['3. Read the footprint', 'Each placement lists the body height in mm, then width x depth in studs after rotation. Width follows +X and depth follows +Y. All studs point upward. Slope arrows point down the ramp; dots mark its high stud row.'],
+    ['4. Add only the vivid pieces', 'The assembly view shows all earlier steps in pale colors. Add the vivid pieces labeled on the top-down map. Labels restart at 1 for each step and match that step\'s placement list.'],
+    ['5. Check the body-bottom height', 'Place each piece at the printed height above the table. Z counts plate heights: z = 1 is 3.2 mm; z = 3 is 9.6 mm. A step can mix part heights. A step number is not a physical layer height.'],
     ['6. Support pieces as you build', 'Base-layer bricks can begin as separate pieces on the table and be joined by the next layer. A support check does not prove strength; keep loose pieces aligned until connected.'],
   ];
   guide.forEach(([heading, description], index) => {
@@ -176,33 +190,24 @@ export async function generateManualPdf(design: Design, inventory?: InventoryIte
     text(doc, heading, MARGIN, yy, 523, 14, BLUE, true);
     text(doc, description, MARGIN, yy + 25, 515, 11, MUTED);
   });
-  text(doc, 'Rotation: 0 deg uses the catalog width along X; 90 deg swaps width and depth. The printed footprint is the final placement size.', MARGIN, 716, 518, 10, MUTED);
+  text(doc, 'Slope high edge: 0 deg = +Y; 90 deg = -X; 180 deg = -Y; 270 deg = +X. Rectangular parts use catalog width along X at 0 deg; 90 / 270 deg swap width and depth.', MARGIN, 716, 518, 10, MUTED);
 
   const visibleIds: string[] = [];
   for (const step of steps) {
     const newIds = step.bricks.map((brick) => brick.id);
     visibleIds.push(...newIds);
-    page(doc, `Step ${step.index} / ${steps.length}`, `Build layer ${step.z + 1}`, `${step.bricks.length} new bricks  /  Body bottom: z = ${step.z}  /  ${visibleIds.length} of ${design.bricks.length} placed`);
+    page(doc, `Step ${step.index} / ${steps.length}`, `Build step ${step.index}`, `${step.bricks.length} new pieces  /  Body bottom: ${(step.z * 3.2).toFixed(1)} mm (z = ${step.z})  /  ${visibleIds.length} of ${design.bricks.length} placed`);
     doc.roundedRect(36, 123, 523, 256, 15).fill('#f3f9fc');
     illustration(doc, design, 42, 126, 330, 245, [...visibleIds], newIds);
-    text(doc, 'ADD THIS LAYER', 390, 146, 145, 9, BLUE, true);
+    text(doc, 'ADD THESE PIECES', 390, 146, 145, 9, BLUE, true);
     text(doc, step.instruction, 390, 171, 145, 11, INK);
-    text(doc, 'Vivid = new bricks\nPale = previous layers', 390, 308, 145, 9, MUTED);
+    text(doc, 'Vivid = new pieces\nPale = previous steps', 390, 329, 145, 9, MUTED);
     text(doc, 'TOP-DOWN PLACEMENT MAP', 36, 404, 310, 9, BLUE, true);
-    text(doc, 'PART / COLOR', 366, 404, 191, 9, BLUE, true);
+    text(doc, 'PART / COLOR / BODY HEIGHT', 366, 404, 191, 9, BLUE, true);
     text(doc, '(X, Y)  footprint / rotation', 393, 421, 164, 8, MUTED);
     placementMap(doc, design, step.bricks, 36, 436, 300, 275);
-    placementRows(doc, step.bricks.slice(0, ROWS_PER_STEP), 366, 443, 190);
-    text(doc, step.bricks.length > ROWS_PER_STEP
-      ? `Placements 1-${ROWS_PER_STEP} of ${step.bricks.length}. Remaining placements follow on the next page.`
-      : 'Map numbers match the placement list. Keep the same front before adding the next layer.', 36, 744, 523, 9, MUTED);
-    for (let offset = ROWS_PER_STEP; offset < step.bricks.length; offset += 44) {
-      page(doc, `Step ${step.index} / placements`, `Layer ${step.z + 1}, continued`, 'Use the numbered top-down map on this layer\'s assembly page.');
-      const remaining = step.bricks.slice(offset, offset + 44);
-      text(doc, 'PART / COLOR - (X, Y), FOOTPRINT, ROTATION', MARGIN, 133, 523, 9, BLUE, true);
-      placementRows(doc, remaining.slice(0, 22), 36, 161, 250, offset);
-      placementRows(doc, remaining.slice(22), 308, 161, 250, offset + 22);
-    }
+    placementRows(doc, step.bricks, 366, 443, 190);
+    text(doc, 'Map numbers match the placement list. Keep the same front before adding the next step.', 36, 744, 523, 9, MUTED);
   }
 
   const range = doc.bufferedPageRange();

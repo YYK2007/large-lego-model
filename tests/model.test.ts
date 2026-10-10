@@ -7,12 +7,12 @@ const brick = (id: string, overrides: Partial<Brick> = {}): Brick => ({ id, part
 const design = (bricks: Brick[]): Design => ({ id: 'test', title: 'Test build', description: 'A test build.', bricks, source: 'ai', prompt: 'Build a test.', createdAt: '2026-10-10T12:00:00.000Z' });
 
 test('all curated samples have a connected supported model and truthful provenance', () => {
-  assert.equal(SAMPLE_DESIGNS.length, 4);
+  assert.equal(SAMPLE_DESIGNS.length, 6);
   for (const sample of SAMPLE_DESIGNS) {
     const result = validateDesign(sample);
     assert.equal(result.valid, true, `${sample.id}: ${result.errors.join('; ')}`);
     assert.equal(sample.source, 'sample');
-    assert.ok(sample.bricks.length >= 30 && sample.bricks.length <= 160);
+    assert.ok(sample.bricks.length >= 30);
     assert.match(result.warnings.join(' '), /stability has not been verified/);
     assert.equal(billOfMaterials(sample).reduce((sum, item) => sum + item.quantity, 0), sample.bricks.length);
   }
@@ -29,7 +29,7 @@ test('rejects malformed designs without crashing on unknown or prototype-named p
   assert.equal(validateDesign({ ...design([brick('a')]), source: 'generated' } as unknown as Design).valid, false);
   assert.equal(validateDesign({ ...design([brick('a')]), createdAt: 'yesterday' }).valid, false);
   assert.equal(validateDesign(design([])).valid, false);
-  assert.match(validateDesign(design(Array.from({ length: 161 }, (_, i) => brick(String(i))))).errors.join(' '), /160 bricks/);
+  assert.match(validateDesign(design(Array.from({ length: 161 }, (_, i) => brick(String(i))))).errors.join(' '), /overlap/);
 });
 
 test('metadata accepts documented limits and rejects oversized strings before export', () => {
@@ -93,7 +93,8 @@ test('steps are ordered, contain each original brick exactly once, and preserve 
   const before = sample.bricks.map((b) => b.id);
   const steps = buildSteps(sample);
   assert.deepEqual(steps.map((step) => step.index), steps.map((_, index) => index + 1));
-  assert.ok(steps.every((step, i) => i === 0 || step.z > steps[i - 1].z));
+  assert.ok(steps.every((step, i) => i === 0 || step.z >= steps[i - 1].z));
+  assert.ok(steps.every(step => step.bricks.length <= 12));
   assert.deepEqual(steps.flatMap((step) => step.bricks.map((b) => b.id)).sort(), [...before].sort());
   assert.deepEqual(billOfMaterials({ ...sample, bricks: steps.flatMap((step) => step.bricks) }), billOfMaterials(sample));
   assert.deepEqual(sample.bricks.map((b) => b.id), before, 'building steps does not mutate the saved design');

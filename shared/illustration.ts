@@ -1,4 +1,5 @@
-import { COLORS, footprint, type Brick, type Design } from './model';
+import { COLORS, footprint, normalizeDesign, partBottomSites, partHeight, partTopStuds, type Brick, type Design } from './model';
+import { partSurfaces, type PartPoint } from './part-surfaces';
 
 type RenderOptions = {
   visibleIds?: string[];
@@ -17,42 +18,84 @@ function tint(hex: string, amount: number) {
     ? channel + (255 - channel) * amount : channel * (1 + amount)).toString(16).padStart(2, '0')).join('');
 }
 
-// One stud is 20 LDU; one brick body is 24 LDU. The map's +Y runs down-left.
-const project = (x: number, y: number, z: number) => [(x - y) * Math.sqrt(3) / 2, (x + y) / 2 - z * 1.2];
+// One stud is 20 LDU; one plate body is 8 LDU. The map's +Y runs down-left.
+const project = (x: number, y: number, z: number) => [(x - y) * Math.sqrt(3) / 2, (x + y) / 2 - z * 0.4];
+const view: PartPoint = [1, 1, 2.5];
+const dot = (a: number[], b: number[]) => a.reduce((sum, value, axis) => sum + value * b[axis], 0);
 
 type Box = { x: number; y: number; z: number; w: number; d: number; h: number };
-type Drawing = { box: Box; svg: string };
+type Drawing = { vertices: PartPoint[]; normals: PartPoint[]; svg: string };
 
-function silhouette({ x, y, z, w, d, h }: Box) {
-  return [project(x, y, z + h), project(x + w, y, z + h), project(x + w, y, z),
-    project(x + w, y + d, z), project(x, y + d, z), project(x, y + d, z + h)];
+function boxVertices({ x, y, z, w, d, h }: Box): PartPoint[] {
+  return [x, x + w].flatMap((xx) => [y, y + d].flatMap((yy) => [z, z + h].map((zz) => [xx, yy, zz] as PartPoint)));
+}
+
+function silhouette(vertices: PartPoint[]) {
+  const points = vertices.map((point) => project(...point)).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (a: number[], b: number[], c: number[]) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  const half = (sequence: number[][]) => {
+    const result: number[][] = [];
+    for (const point of sequence) {
+      while (result.length > 1 && cross(result.at(-2)!, result.at(-1)!, point) <= 1e-8) result.pop();
+      result.push(point);
+    }
+    return result.slice(0, -1);
+  };
+  return [...half(points), ...half([...points].reverse())];
 }
 
 // Bounding-box depth sums fail for long bricks. Only overlapping projections
 // need an order; along a viewing ray X, Y and Z all increase toward the camera.
 function painterOrder(drawings: Drawing[]) {
-  const outlines = drawings.map(({ box }) => silhouette(box));
+  const outlines = drawings.map(({ vertices }) => silhouette(vertices));
   const bounds = outlines.map((points) => ({ left: Math.min(...points.map(([x]) => x)), right: Math.max(...points.map(([x]) => x)),
     top: Math.min(...points.map(([, y]) => y)), bottom: Math.max(...points.map(([, y]) => y)) }));
   const edges = drawings.map(() => [] as number[]);
   const incoming = drawings.map(() => 0);
-  const overlaps = (a: number[][], b: number[][]) => [...a, ...b].every((point, index) => {
-    const polygon = index < a.length ? a : b;
-    const next = polygon[(index % a.length + 1) % polygon.length];
-    const nx = point[1] - next[1], ny = next[0] - point[0];
-    const aa = a.map(([x, y]) => x * nx + y * ny);
-    const bb = b.map(([x, y]) => x * nx + y * ny);
-    return Math.min(Math.max(...aa), Math.max(...bb)) - Math.max(Math.min(...aa), Math.min(...bb)) > 1e-8;
-  });
-  for (let i = 0; i < drawings.length; i++) for (let j = i + 1; j < drawings.length; j++) {
-    const a = drawings[i].box, b = drawings[j].box;
+  const range = (vertices: number[][], normal: number[]) => {
+    let min = Infinity, max = -Infinity;
+    for (const vertex of vertices) { const value = dot(vertex, normal); min = Math.min(min, value); max = Math.max(max, value); }
+    return [min, max];
+  };
+  const normals: PartPoint[] = [];
+  const normalIds = new Map<string, number>();
+  const planes = drawings.map(drawing => drawing.normals.map(normal => {
+    const key = normal.join(',');
+    if (!normalIds.has(key)) { normalIds.set(key, normals.length); normals.push(normal); }
+    return normalIds.get(key)!;
+  }));
+  // A body is tested against many neighbors along the same few planes. Compute
+  // its projection interval once rather than allocating vertex arrays per pair.
+  const intervals = drawings.map(drawing => normals.map(normal => range(drawing.vertices, normal)));
+  const overlaps = (a: number[][], b: number[][]) => [a, b].every((polygon) => polygon.every((point, index) => {
+    const next = polygon[(index + 1) % polygon.length];
+    const normal = [point[1] - next[1], next[0] - point[0]];
+    const aa = range(a, normal), bb = range(b, normal);
+    return Math.min(aa[1], bb[1]) - Math.max(aa[0], bb[0]) > 1e-8;
+  }));
+  // Sweep projected X first. Distant pieces never need polygon/plane tests;
+  // every overlapping pair still receives the same exact ordering checks.
+  const sweep = bounds.map((_, index) => index).sort((a, b) => bounds[a].left - bounds[b].left);
+  for (let aIndex = 0; aIndex < sweep.length; aIndex++) for (let bIndex = aIndex + 1; bIndex < sweep.length; bIndex++) {
+    if (bounds[sweep[bIndex]].left >= bounds[sweep[aIndex]].right) break;
+    const i = Math.min(sweep[aIndex], sweep[bIndex]), j = Math.max(sweep[aIndex], sweep[bIndex]);
     const aa = bounds[i], bb = bounds[j];
     if (aa.right <= bb.left || bb.right <= aa.left || aa.bottom <= bb.top || bb.bottom <= aa.top) continue;
     if (!overlaps(outlines[i], outlines[j])) continue;
-    const before = a.x + a.w <= b.x || a.y + a.d <= b.y || a.z + a.h <= b.z;
-    const after = b.x + b.w <= a.x || b.y + b.d <= a.y || b.z + b.h <= a.z;
-    if (before === after) continue;
-    const from = before ? i : j, to = before ? j : i;
+    // A slope's empty wedge is not solid. Use separating body planes rather
+    // than an AABB depth sum, which can put its rear studs behind its ramp.
+    let direction = 0;
+    for (const normalId of [...planes[i], ...planes[j]]) {
+      const normal = normals[normalId];
+      const towardCamera = dot(normal, view);
+      if (Math.abs(towardCamera) < 1e-8) continue;
+      const aa = intervals[i][normalId], bb = intervals[j][normalId];
+      if (aa[1] <= bb[0] + 1e-8) direction = Math.sign(towardCamera);
+      else if (bb[1] <= aa[0] + 1e-8) direction = -Math.sign(towardCamera);
+      if (direction) break;
+    }
+    if (!direction) continue;
+    const from = direction > 0 ? i : j, to = direction > 0 ? j : i;
     edges[from].push(to);
     incoming[to]++;
   }
@@ -69,13 +112,14 @@ function painterOrder(drawings: Drawing[]) {
 
 /** A fixed isometric camera fitted to the complete design, including hidden bricks. */
 export function renderDesignSvg(design: Design, options: RenderOptions = {}): string {
+  design = normalizeDesign(design);
   const width = options.width ?? 1000;
   const height = options.height ?? 650;
   const showCue = width >= 300 && height >= 200;
   const corners = design.bricks.flatMap((brick) => {
     const size = footprint(brick);
     return [brick.x, brick.x + size.width].flatMap((x) => [brick.y, brick.y + size.depth]
-      .flatMap((y) => [brick.z, brick.z + 1.18].map((z) => project(x, y, z))));
+      .flatMap((y) => [brick.z, brick.z + partHeight(brick) + 0.5].map((z) => project(x, y, z))));
   });
   if (!corners.length) return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"/>`;
   const left = Math.min(...corners.map(([x]) => x));
@@ -96,34 +140,33 @@ export function renderDesignSvg(design: Design, options: RenderOptions = {}): st
   const visible = options.visibleIds ? new Set(options.visibleIds) : null;
   const highlighted = options.highlightIds ? new Set(options.highlightIds) : null;
   const bricks = design.bricks.filter((brick) => !visible || visible.has(brick.id));
-  const occupied = new Set(bricks.flatMap((brick) => {
-    const { width, depth } = footprint(brick);
-    return Array.from({ length: width * depth }, (_, i) => `${brick.x + i % width},${brick.y + Math.floor(i / width)},${brick.z}`);
-  }));
+  const occupied = new Set(bricks.flatMap((brick) => partBottomSites(brick).map(({ x, y, z }) => `${x},${y},${z}`)));
   const drawBrick = (brick: Brick) => {
-    const { width: w, depth: d } = footprint(brick);
-    const { x, y, z } = brick;
     const faded = highlighted !== null && !highlighted.has(brick.id);
     const base = COLORS[brick.colorId].hex;
     const color = faded ? tint(base, 0.77) : base;
     const stroke = faded ? '#b2c8cf' : tint(color, -0.43);
     const strokeWidth = Math.max(0.45, Math.min(1.4, scale * 0.03));
     const face = (points: string[], fill: string) => `<polygon points="${points.join(' ')}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" stroke-linejoin="round"/>`;
-    let shape = face([point(x, y + d, z), point(x + w, y + d, z), point(x + w, y + d, z + 1), point(x, y + d, z + 1)], tint(color, -0.15));
-    shape += face([point(x + w, y, z), point(x + w, y + d, z), point(x + w, y + d, z + 1), point(x + w, y, z + 1)], tint(color, -0.3));
-    shape += face([point(x, y, z + 1), point(x + w, y, z + 1), point(x + w, y + d, z + 1), point(x, y + d, z + 1)], tint(color, 0.08));
-    const drawings: Drawing[] = [{ box: { x, y, z, w, d, h: 1 },
+    const body = partSurfaces(brick);
+    const shape = body.faces.filter(({ normal }) => dot(normal, view) > 1e-8).map(({ indices, normal }) => {
+      const metricNormal = [normal[0], normal[1], normal[2] / 0.4];
+      const shade = dot(metricNormal, [-0.3, -0.15, 0.08]) / metricNormal.reduce((sum, value) => sum + Math.abs(value), 0);
+      return face(indices.map((index) => point(...body.vertices[index])), tint(color, shade));
+    }).join('');
+    const drawings: Drawing[] = [{ vertices: body.vertices, normals: body.faces.map(({ normal }) => normal),
       svg: `<g data-brick-id="${escapeXml(brick.id)}" data-highlighted="${highlighted?.has(brick.id) ?? false}">${shape}</g>` }];
-    for (let row = 0; row < d; row++) for (let column = 0; column < w; column++) {
+    for (const { x, y, z } of partTopStuds(brick)) {
       // An attached brick encloses the stud; never draw it through that brick.
-      if (occupied.has(`${x + column},${y + row},${z + 1}`)) continue;
-      const [cx, cy] = screen(x + column + 0.5, y + row + 0.5, z + 1);
-      const rx = scale * 0.3;
-      const ry = scale * 0.173;
-      const rise = scale * 0.16;
+      if (occupied.has(`${x},${y},${z}`)) continue;
+      const [cx, cy] = screen(x, y, z);
+      const rx = scale * 0.3 * Math.sqrt(1.5);
+      const ry = scale * 0.3 * Math.sqrt(0.5);
+      const rise = scale * 0.2;
       const stud = `<path d="M ${cx - rx} ${cy - rise} L ${cx - rx} ${cy} A ${rx} ${ry} 0 0 0 ${cx + rx} ${cy} L ${cx + rx} ${cy - rise} Z" fill="${tint(color, -0.15)}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`
         + `<ellipse cx="${cx}" cy="${cy - rise}" rx="${rx}" ry="${ry}" fill="${tint(color, 0.16)}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
-      drawings.push({ box: { x: x + column + 0.2, y: y + row + 0.2, z: z + 1, w: 0.6, d: 0.6, h: 0.16 / 1.2 },
+      drawings.push({ vertices: boxVertices({ x: x - 0.3, y: y - 0.3, z, w: 0.6, d: 0.6, h: 0.5 }),
+        normals: [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
         svg: `<g data-stud-owner="${escapeXml(brick.id)}">${stud}</g>` });
     }
     return drawings;

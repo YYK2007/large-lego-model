@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after } from 'node:test';
@@ -79,4 +79,20 @@ test('unsafe IDs cannot write or read outside the design store', async () => {
   }
   assert.deepEqual(await readdir(sandbox), before);
   assert.equal(await store.loadDesign('missing-valid-id'), null);
+});
+
+test('legacy snapshots migrate in memory and can be saved again without changing their original bytes', async () => {
+  const expected = snapshot('legacy-revision');
+  const legacy = structuredClone(expected);
+  delete legacy.schemaVersion;
+  delete legacy.catalogVersion;
+  delete legacy.coordinateSystem;
+  legacy.bricks.forEach(brick => { brick.z /= 3; });
+  const file = join(sandbox, 'data', 'designs', `${legacy.id}.json`);
+  await mkdir(join(sandbox, 'data', 'designs'), { recursive: true });
+  const originalBytes = JSON.stringify(legacy);
+  await writeFile(file, originalBytes);
+  assert.deepEqual(await store.loadDesign(legacy.id), expected);
+  await store.saveDesign(expected);
+  assert.equal(await readFile(file, 'utf8'), originalBytes);
 });
