@@ -113,6 +113,11 @@ main{max-width:1580px;padding:0 4.2%;margin:auto}
 .palette-dots i{display:block;width:9px;height:9px;border:1px solid #fffef9;border-radius:50%;margin-left:-3px}
 .build-actions{display:flex;flex-wrap:wrap;align-items:center;gap:11px}
 .model-download{justify-content:center;white-space:nowrap}
+.model-file{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:12px 15px;margin-bottom:16px;border:1px solid #d1e3eb;border-radius:9px;background:#f5fafc;color:#4f7b90;font-size:12px}
+.model-file>span{flex:1;min-width:180px;overflow-wrap:anywhere}
+.model-file small{display:block;margin-top:4px;font-size:11px;color:#7894a4}
+.model-file a{display:flex;align-items:center;gap:6px;color:#286888;text-decoration:underline;white-space:nowrap}
+.model-file button{display:flex;color:#578ba4}
 .refine-button{display:flex;align-items:center;gap:5px;font-size:11px;color:#578ba4;background:linear-gradient(#fff,#f5fafc);border:1px solid #d1e3eb;border-radius:9px;padding:10px 13px;box-shadow:inset 0 1px #fff}
 .dark-button{display:flex;align-items:center;justify-content:center;gap:8px;background:linear-gradient(#91c386,#71ab66 49%,#5d9855 52%,#7db274);border:1px solid #619254;box-shadow:inset 0 1px #c7e0bd,0 3px 6px #557d471a;border-radius:10px;color:white;font-size:11px;padding:10px 13px;white-space:nowrap;text-shadow:0 1px #4d7a4055;font-weight:600}
 .dark-button:hover{background:linear-gradient(#a2d395,#83be78 49%,#71aa66 52%,#8fc783)}

@@ -65,6 +65,7 @@ export function App() {
   const [inventoryBusy, setInventoryBusy] = useState(false);
   const [manualBusy, setManualBusy] = useState(false);
   const [modelBusy, setModelBusy] = useState(false);
+  const [modelDownload, setModelDownload] = useState<{ url: string; title: string; size: number } | null>(null);
   const [estimates, setEstimates] = useState<InventoryItem[] | null>(null);
   const [estimateNote, setEstimateNote] = useState('');
   const [newPart, setNewPart] = useState('3001');
@@ -153,13 +154,17 @@ export function App() {
           const detail = await response.json().catch(() => null);
           throw new Error(detail?.error || (nativeModel ? 'The 3D model could not be downloaded. Please try again.' : 'The manual could not be exported. Please try again.'));
         }
-        const downloadUrl = URL.createObjectURL(await response.blob());
+        const file = await response.blob();
+        const downloadUrl = URL.createObjectURL(file);
         anchor.href = downloadUrl;
         const filename = requestedDesign.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 70) || 'build';
         anchor.download = manual ? `${filename}-instructions.pdf` : `${filename}.usdz`;
+        if (nativeModel) { setModelDownload({ url, title: requestedDesign.title, size: file.size }); setModal(current => current === 'exports' ? null : current); }
+        document.body.appendChild(anchor);
         anchor.click();
-        window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
-        setNotice(nativeModel ? `3D model for “${requestedDesign.title}” downloaded as USDZ. Check your browser’s downloads.` : 'Instruction PDF ready. Check your browser’s downloads.');
+        anchor.remove();
+        window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 60_000);
+        setNotice(nativeModel ? 'Your 3D file is ready. If the download has not started, use Save USDZ file below.' : 'Instruction PDF ready. Check your browser’s downloads.');
       } else { anchor.href = url; anchor.download = ''; anchor.click(); }
     } catch (e) { setNotice(''); setError(nativeModel && e instanceof TypeError ? new Error(`The 3D download for “${requestedDesign.title}” was interrupted. Check your connection and try again.`) : e as Error); setModal(null); }
     finally { if (manual) setManualBusy(false); if (nativeModel) setModelBusy(false); }
@@ -186,6 +191,7 @@ export function App() {
         <div className="intro-note"><span className="note-orb"><Box size={21} /></span><span>One brick model.<br /><strong>Matching parts and instructions.</strong></span></div>
       </section>
       {(error || notice) && <div className={`message-banner ${error ? 'error' : 'success'}`} role={error ? 'alert' : 'status'}>{error ? <ErrorFeedback error={error} /> : <span>{notice}</span>}<button aria-label="Dismiss message" onClick={() => { setError(''); setNotice(''); }}><X size={16} /></button></div>}
+      {modelDownload && <div className="model-file"><span><strong>{modelDownload.title}</strong> · USDZ · {(modelDownload.size / 1024 / 1024).toFixed(1)} MB<small>If nothing saves, open this page in Safari or Chrome.</small></span><a href={modelDownload.url} target="_blank" rel="noopener"><Download size={15} /> Save USDZ file</a><button aria-label="Dismiss 3D download link" onClick={() => setModelDownload(null)}><X size={16} /></button></div>}
       <section className="workspace">
         <aside className="sidebar">
           <section className="prompt-card panel">
