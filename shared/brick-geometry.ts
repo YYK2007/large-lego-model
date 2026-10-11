@@ -112,7 +112,7 @@ export function createBrickModel(design: Design): THREE.Group {
 }
 
 /** The browser batches identical pieces; native exports retain named real meshes. */
-export function createInstancedBrickModel(input: Design) {
+export function createInstancedBrickModel(input: Design, opaqueContext = false) {
   const design = normalizeDesign(input);
   const catalog = catalogForDesign(design);
   const { centerX, centerY } = modelCenter(design.bricks, catalog);
@@ -147,7 +147,8 @@ export function createInstancedBrickModel(input: Design) {
     if (!batches.has(batchKey)) {
       const material = new THREE.MeshStandardMaterial({ color: catalog.colors[brick.colorId].hex, roughness: 0.27, metalness: 0.03 });
       const fadedMaterial = material.clone();
-      fadedMaterial.transparent = true; fadedMaterial.opacity = 0.3; fadedMaterial.depthWrite = false;
+      if (opaqueContext) fadedMaterial.color.lerp(new THREE.Color('#eaf0ed'), 0.65);
+      else { fadedMaterial.transparent = true; fadedMaterial.opacity = 0.3; fadedMaterial.depthWrite = false; }
       const solid = new THREE.InstancedMesh(shape.geometry, material, counts.get(batchKey)!);
       const faded = new THREE.InstancedMesh(shape.geometry, fadedMaterial, counts.get(batchKey)!);
       for (const mesh of [solid, faded]) {

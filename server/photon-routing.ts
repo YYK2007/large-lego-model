@@ -12,7 +12,7 @@ export interface PhotonImage {
 }
 export type PhotonQuality = 'quick' | 'detailed';
 export type PendingPhotonRequest = { kind: 'new' | 'design'; prompt: string; image?: PhotonImage };
-export type ApprovedDelivery = Partial<Record<'model' | 'manual' | 'parts', true>>;
+export type ApprovedDelivery = Partial<Record<'model' | 'manual' | 'parts' | 'instructions', true>> & { mode?: 'guide' };
 
 export interface Conversation {
   designId?: string;
@@ -51,9 +51,9 @@ export function rememberMessageIds(handledIds: string[], ids: string[]): string[
   return [...new Set([...handledIds, ...ids])].slice(-MESSAGE_HISTORY_LIMIT);
 }
 
-type PhotonCommand = { kind: 'manual' | 'model' | 'parts' | 'approve' | 'retry' | 'clarify' | 'stop' | 'status' | 'chat' | 'new' | 'design'; prompt: string } | { kind: 'open'; designId: string; prompt: '' } | { kind: 'use'; attempt: number; prompt: '' } | { kind: 'quality'; quality: PhotonQuality; prompt: string };
+type PhotonCommand = { kind: 'manual' | 'instructions' | 'model' | 'parts' | 'approve' | 'retry' | 'clarify' | 'stop' | 'status' | 'chat' | 'new' | 'design'; prompt: string } | { kind: 'open'; designId: string; prompt: '' } | { kind: 'use'; attempt: number; prompt: '' } | { kind: 'quality'; quality: PhotonQuality; prompt: string };
 const validDesignId = (value: unknown): value is string => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(value);
-const commandHelp = 'I don’t recognize that command. Use /status for progress, /stop to stop generation, /approve to accept a checked preview, or /retry to resend missing files from your approved build. /model, /manual and /parts request a copy. Send /new followed by an idea to start another build.';
+const commandHelp = 'I don’t recognize that command. /instructions or /build opens your building guide. Use /status for progress, /stop to stop generation, /approve to accept a checked preview, or /retry to resend missing files from your approved build. /model, /manual and /parts request the 3D file, optional PDF and parts list. Send /new followed by an idea to start another build.';
 
 /** Only clear edits reuse a build's mode; a new subject still gets a choice. */
 export function isRevisionPrompt(prompt: string): boolean {
@@ -67,7 +67,7 @@ export function isRevisionPrompt(prompt: string): boolean {
 export function routeText(text: string): PhotonCommand {
   const prompt = text.trim();
   const natural = prompt.toLowerCase().replace(/[’]/g, "'").replace(/[?!.]+$/, '').trim();
-  if (prompt.startsWith('/') && !['approve', 'retry', 'manual', 'instructions', 'stop', 'cancel', 'status', 'model', '3d', 'parts', 'use', 'open', 'new', 'quick', 'detailed'].includes(/^\/([a-z0-9]+)/i.exec(prompt)?.[1].toLowerCase() ?? '')) throw new PhotonInputError(commandHelp);
+  if (prompt.startsWith('/') && !['approve', 'retry', 'manual', 'instructions', 'build', 'stop', 'cancel', 'status', 'model', '3d', 'parts', 'use', 'open', 'new', 'quick', 'detailed'].includes(/^\/([a-z0-9]+)/i.exec(prompt)?.[1].toLowerCase() ?? '')) throw new PhotonInputError(commandHelp);
   if (natural === '/retry') return { kind: 'retry', prompt: '' };
   if (['/approve', 'approve', 'approved', 'i approve this build', 'looks good', 'this looks good', 'that looks good'].includes(natural)) return { kind: 'approve', prompt: '' };
   if (/^(?:i (?:don't|do not) like (?:it|this)|(?:it|this|that) (?:looks (?:bad|wrong)|(?:isn't|is not) (?:right|good))|(?:it|this|that) (?:doesn't|does not) look right|not (?:right|good)|try again|no)$/.test(natural)) return { kind: 'clarify', prompt: '' };
@@ -78,7 +78,8 @@ export function routeText(text: string): PhotonCommand {
   if (quality) return { kind: 'quality', quality: quality[1].toLowerCase() as PhotonQuality, prompt: /^(?:mode)?(?:[, ]*please)?[.!]*$/i.test(quality[2].trim()) ? '' : quality[2].trim() };
   const modeSuffix = /^(.*?)\s+(?:in|using)\s+(quick|detailed)\s+mode(?:,?\s+please)?[.!]?$/i.exec(prompt);
   if (modeSuffix && !prompt.startsWith('/')) return { kind: 'quality', quality: modeSuffix[2].toLowerCase() as PhotonQuality, prompt: modeSuffix[1].trim() };
-  if (/^\/?(?:manual|instructions)$/i.test(prompt)) return { kind: 'manual', prompt: '' };
+  if (/^\/?manual$/i.test(prompt)) return { kind: 'manual', prompt: '' };
+  if (/^\/?instructions$/i.test(prompt) || /^\/build$/i.test(prompt)) return { kind: 'instructions', prompt: '' };
   if (/^\/?(?:stop|cancel)$/i.test(prompt)) return { kind: 'stop', prompt: '' };
   if (/^\/?status$/i.test(prompt)) return { kind: 'status', prompt: '' };
   if (/^\/?(?:model|3d)$/i.test(prompt)) return { kind: 'model', prompt: '' };
@@ -135,7 +136,7 @@ export function parseConversation(value: unknown): Conversation {
     if (!data.approvedDeliveries || typeof data.approvedDeliveries !== 'object' || Array.isArray(data.approvedDeliveries)) throw new Error('Invalid saved approval deliveries.');
     approvedDeliveries = Object.fromEntries(Object.entries(data.approvedDeliveries).map(([id, value]) => {
       if (!validDesignId(id) || !value || typeof value !== 'object' || Array.isArray(value)
-        || Object.entries(value).some(([key, sent]) => !['model', 'manual', 'parts'].includes(key) || sent !== true)) throw new Error('Invalid saved approval deliveries.');
+        || Object.entries(value).some(([key, sent]) => key === 'mode' ? sent !== 'guide' : !['model', 'manual', 'parts', 'instructions'].includes(key) || sent !== true)) throw new Error('Invalid saved approval deliveries.');
       return [id, { ...value } as ApprovedDelivery];
     }));
   }

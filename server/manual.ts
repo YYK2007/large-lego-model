@@ -7,7 +7,7 @@ import type { Design, InventoryItem } from '../shared/model.js';
 type ManualInput = { design: Design; inventory?: InventoryItem[] };
 const pending = new Map<string, Promise<Buffer>>();
 let queue: Promise<void> = Promise.resolve();
-const CACHE_VERSION = 'manual-v4-repeated-placements';
+const CACHE_VERSION = 'manual-v5-diagram-guide';
 const cacheDirectory = resolve('data/manual-cache');
 
 async function cachedManual(input: ManualInput, key: string): Promise<Buffer> {

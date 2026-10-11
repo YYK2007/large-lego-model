@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { groupManualSteps, MAX_REPEATS_PER_PAGE } from '../server/manual-repeats';
+import { groupManualSteps, MAX_REPEATS_PER_PAGE } from '../shared/manual-repeats';
 import type { BuildStep } from '../shared/model';
 
 function step(index: number, x = 0, y = 0, z = 0, attachedTo: string[] = []): BuildStep {

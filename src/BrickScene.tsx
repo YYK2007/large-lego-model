@@ -7,13 +7,13 @@ import { createInstancedBrickModel, STUD_UNITS_PER_PLATE } from '../shared/brick
 import { placementOffset, type Placement } from '../shared/assembly';
 import { frameDistance } from './scene-framing';
 
-export function BrickScene({ design, visibleIds, highlightIds, activeId, replayKey, placement }: { design: Design; visibleIds?: string[]; highlightIds?: string[]; activeId?: string; replayKey?: number; placement?: Placement }) {
+export function BrickScene({ design, visibleIds, highlightIds, activeId, replayKey, placement, focusIds, opaqueContext = false }: { design: Design; visibleIds?: string[]; highlightIds?: string[]; activeId?: string; replayKey?: number; placement?: Placement; focusIds?: string[]; opaqueContext?: boolean }) {
   const host = useRef<HTMLDivElement>(null);
   const actions = useRef<{ reset(): void; front(): void; top(): void; rotate(value: boolean): void } | null>(null);
   const [rotating, setRotating] = useState(false);
   const [error, setError] = useState(false);
-  const visibility = useRef({ visibleIds, highlightIds, activeId, placement });
-  visibility.current = { visibleIds, highlightIds, activeId, placement };
+  const visibility = useRef({ visibleIds, highlightIds, activeId, placement, focusIds });
+  visibility.current = { visibleIds, highlightIds, activeId, placement, focusIds };
   const placementAnimation = useRef({ id: activeId, start: 0 });
   useEffect(() => { placementAnimation.current = { id: activeId, start: performance.now() }; }, [activeId, replayKey, design]);
 
@@ -39,7 +39,7 @@ export function BrickScene({ design, visibleIds, highlightIds, activeId, replayK
     controls.dampingFactor = 0.08;
     controls.minPolarAngle = 0.02;
     controls.maxPolarAngle = Math.PI / 2 - 0.04;
-    controls.minDistance = 8;
+    controls.minDistance = 4;
     controls.autoRotateSpeed = 1.3;
     const catalog = catalogForDesign(canonical);
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, height = 0, liftHeight = 0;
@@ -93,8 +93,34 @@ export function BrickScene({ design, visibleIds, highlightIds, activeId, replayK
     const floorSize = Math.max(200, 2 * (pedestalRadius + (height + liftHeight) * Math.hypot(sunDirection.x, sunDirection.z) / sunDirection.y + 8));
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(floorSize, floorSize), new THREE.ShadowMaterial({ opacity: 0.1 }));
     floor.rotation.x = -Math.PI / 2; floor.position.y = -0.54; floor.receiveShadow = true; scene.add(floor);
-    const instances = createInstancedBrickModel(canonical);
+    const instances = createInstancedBrickModel(canonical, opaqueContext);
     scene.add(instances.model);
+    const brickBounds = new Map(canonical.bricks.map(brick => {
+      const size = footprint(brick, catalog);
+      return [brick.id, new THREE.Box3(
+        new THREE.Vector3(brick.x - (minX + maxX) / 2, brick.z * STUD_UNITS_PER_PLATE, brick.y - (minY + maxY) / 2),
+        new THREE.Vector3(brick.x + size.width - (minX + maxX) / 2, (brick.z + partHeight(brick, catalog)) * STUD_UNITS_PER_PLATE + .2, brick.y + size.depth - (minY + maxY) / 2),
+      )];
+    }));
+    let framePoints = points;
+    const focus = () => {
+      const ids = visibility.current.focusIds;
+      if (!ids?.length) { framePoints = points; return false; }
+      const bounds = new THREE.Box3();
+      for (const id of ids) { const box = brickBounds.get(id); if (box) bounds.union(box); }
+      if (bounds.isEmpty()) return false;
+      const { activeId, placement } = visibility.current;
+      const activeBounds = activeId ? brickBounds.get(activeId) : undefined;
+      if (activeBounds && placement && ids.includes(activeId!)) {
+        const end = placement.waypoints.at(-1)!;
+        for (const point of placement.waypoints) bounds.union(activeBounds.clone().translate(new THREE.Vector3(point.x - end.x, (point.z - end.z) * STUD_UNITS_PER_PLATE, point.y - end.y)));
+      }
+      // Frame the checked insertion path and neighboring support, without
+      // fitting the distant base of a tall model into every placement view.
+      bounds.expandByVector(new THREE.Vector3(1.5, 1.5, 1.5));
+      framePoints = [bounds.min.x, bounds.max.x].flatMap(x => [bounds.min.y, bounds.max.y].flatMap(y => [bounds.min.z, bounds.max.z].map(z => new THREE.Vector3(x, y, z))));
+      return bounds.getCenter(new THREE.Vector3());
+    };
     const distance = Math.max(height * 2.6, width * 2.7, depth * 2.7, 28);
     const updateRange = (fittedDistance: number) => {
       controls.maxDistance = Math.max(95, fittedDistance * 3, diagonal * 5);
@@ -103,20 +129,21 @@ export function BrickScene({ design, visibleIds, highlightIds, activeId, replayK
     };
     const frame = (direction: THREE.Vector3, up: THREE.Vector3, target: THREE.Vector3, minimum: number) => {
       camera.up.copy(up); controls.target.copy(target);
-      const fittedDistance = frameDistance(points, target, direction, up, camera.fov, camera.aspect, minimum);
+      const fittedDistance = frameDistance(framePoints, target, direction, up, camera.fov, camera.aspect, minimum);
       updateRange(fittedDistance);
       camera.position.copy(target).addScaledVector(direction.normalize(), fittedDistance);
       controls.update();
     };
     const reset = () => {
       const direction = new THREE.Vector3(distance * 0.46, height * 0.03 + distance * 0.36, distance * 0.85);
-      frame(direction, new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, height * 0.47, 0), direction.length());
+      const target = focus();
+      frame(direction, new THREE.Vector3(0, 1, 0), target || new THREE.Vector3(0, height * 0.47, 0), target ? 6 : direction.length());
     };
     reset();
     actions.current = {
       reset,
-      front: () => frame(new THREE.Vector3(0, Math.cos(controls.maxPolarAngle), Math.sin(controls.maxPolarAngle)), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, height * 0.47, 0), distance),
-      top: () => frame(new THREE.Vector3(0, Math.cos(controls.minPolarAngle), Math.sin(controls.minPolarAngle)), new THREE.Vector3(0, 0, -1), new THREE.Vector3(), Math.max(height + 20, width * 2.7, depth * 2.7, 28)),
+      front: () => { const target = focus(); frame(new THREE.Vector3(0, Math.cos(controls.maxPolarAngle), Math.sin(controls.maxPolarAngle)), new THREE.Vector3(0, 1, 0), target || new THREE.Vector3(0, height * .47, 0), target ? 6 : distance); },
+      top: () => { const target = focus(); frame(new THREE.Vector3(0, Math.cos(controls.minPolarAngle), Math.sin(controls.minPolarAngle)), new THREE.Vector3(0, 0, -1), target || new THREE.Vector3(), target ? 6 : Math.max(height + 20, width * 2.7, depth * 2.7, 28)); },
       rotate: value => { controls.autoRotate = value; },
     };
     setRotating(false);
@@ -128,7 +155,7 @@ export function BrickScene({ design, visibleIds, highlightIds, activeId, replayK
       renderer.setSize(width, height);
       camera.aspect = width / height;
       const direction = camera.position.clone().sub(controls.target);
-      const fittedDistance = frameDistance(points, controls.target, direction, camera.up, camera.fov, camera.aspect, direction.length());
+      const fittedDistance = frameDistance(framePoints, controls.target, direction, camera.up, camera.fov, camera.aspect, direction.length());
       updateRange(fittedDistance);
       camera.position.copy(controls.target).addScaledVector(direction.normalize(), fittedDistance);
       controls.update(); dirty = true;
@@ -137,6 +164,7 @@ export function BrickScene({ design, visibleIds, highlightIds, activeId, replayK
     let animationFrame = 0;
     let lastVisibility: typeof visibility.current | undefined;
     let previousOffset = '';
+    let lastFocus = '';
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     const animate = () => {
       animationFrame = requestAnimationFrame(animate);
@@ -146,6 +174,14 @@ export function BrickScene({ design, visibleIds, highlightIds, activeId, replayK
         lastVisibility = visibility.current;
         previousOffset = '';
         renderer.shadowMap.needsUpdate = true;
+        dirty = true;
+      }
+      const focusKey = visibility.current.focusIds?.join('|') ?? '';
+      if (lastFocus !== focusKey) {
+        lastFocus = focusKey;
+        const target = focus();
+        if (target) frame(camera.position.clone().sub(controls.target), camera.up, target, 6);
+        else reset();
         dirty = true;
       }
       const elapsed = Math.min(1, (performance.now() - placementAnimation.current.start) / (placement?.approach === 'above' ? 700 : 1400));
@@ -163,12 +199,12 @@ export function BrickScene({ design, visibleIds, highlightIds, activeId, replayK
     };
     animate();
     return () => { cancelAnimationFrame(animationFrame); observer.disconnect(); controls.dispose(); instances.dispose(); scene.traverse(object => { if (object instanceof THREE.Mesh || object instanceof THREE.LineSegments) { object.geometry.dispose(); const materials = Array.isArray(object.material) ? object.material : [object.material]; materials.forEach(material => material.dispose()); } }); renderer.dispose(); renderer.domElement.remove(); actions.current = null; };
-  }, [design]);
+  }, [design, opaqueContext]);
 
   return <div className="scene-wrap">
     <div ref={host} className="scene-canvas" />
     {error && <div className="scene-error"><AlertCircle /><p>Your browser couldn’t start 3D. The parts list and PDF are still available.</p></div>}
-    <div className="scene-guide"><span className="tiny-dot" /> DRAG TO EXPLORE <span className="guide-separator">/</span> SCROLL TO ZOOM</div>
+    <div className="scene-guide"><span className="tiny-dot" /> DRAG TO ROTATE <span className="guide-separator">/</span> PINCH TO ZOOM</div>
     <div className="scene-tools">
       <button title="Reset camera" aria-label="Reset camera" onClick={() => actions.current?.reset()}><Focus size={17} /></button>
       <button title="Top view: +X right, +Y down" aria-label="View from above" onClick={() => { actions.current?.top(); actions.current?.rotate(false); setRotating(false); }}><Grid2X2 size={17} /></button>

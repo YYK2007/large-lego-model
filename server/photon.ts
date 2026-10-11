@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import sharp from 'sharp';
-import { Spectrum, attachment, type Space } from 'spectrum-ts';
+import { Spectrum, app as appCard, attachment, type Space } from 'spectrum-ts';
 import { imessage } from 'spectrum-ts/providers/imessage';
 import { photonJobsApi } from './photon-api.js';
 import { PhotonConversation, type PhotonReply } from './photon-conversation.js';
@@ -30,9 +30,8 @@ export const PHOTON_FILE_LIMIT = 100 * 1024 * 1024 - 64 * 1024;
 export function photonReplies(space: Pick<Space, 'send'>): PhotonReply {
   const sendFile = async (bytes: Buffer, name: string, mimeType: string) => {
     const model = mimeType === 'model/vnd.usdz+zip';
-    // Shared geometry already keeps detailed models small. Flattening these
-    // archives repeats every piece; only try it when delivery requires it.
-    if (model && bytes.length > PHOTON_FILE_LIMIT) {
+    // Binary USD layers preserve shared geometry while reducing phone transfers.
+    if (model && bytes.length > 1024 * 1024) {
       try { bytes = await compactUsdz(bytes); }
       catch { console.error('Photon file preparation failed; keeping the original USDZ.'); }
     }
@@ -53,6 +52,15 @@ export function photonReplies(space: Pick<Space, 'send'>): PhotonReply {
   };
   return {
     text: async value => { await space.send(value); },
+    instructions: async (url, title) => {
+      let cardSent = false;
+      try {
+        await space.send(appCard(url, { layout: { caption: `Build ${title}`, subcaption: 'Step-by-step 3D instructions', summary: 'Open this exact checked build' } }));
+        cardSent = true;
+      } catch { /* A plain link remains usable without an app-card delivery. */ }
+      try { await space.send(`Your building guide. Open in Safari if you want to try AR:\n${url}`); }
+      catch (error) { if (!cardSent) throw error; }
+    },
     preview: async svg => { await sendFile(await sharp(svg).png().toBuffer(), 'attempt.png', 'image/png'); },
     designPreview: async design => {
       const bytes = await new Promise<Buffer>((resolve, reject) => {
@@ -67,7 +75,7 @@ export function photonReplies(space: Pick<Space, 'send'>): PhotonReply {
     parts: async bytes => { await sendFile(bytes, 'large-lego-model-parts.csv', 'text/csv'); },
     model: async bytes => {
       await sendFile(bytes, 'large-lego-model.usdz', 'model/vnd.usdz+zip');
-      try { await space.send('Tap the 3D file to open and rotate your build.'); }
+      try { await space.send('Tap the 3D file to open and rotate your build. This lighter viewing copy leaves out covered stud detail; the guide has the full file.'); }
       catch { console.error('Photon accepted the 3D attachment, but its viewing instructions could not be sent.'); }
     },
   };

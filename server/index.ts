@@ -7,7 +7,7 @@ import { SAMPLE_DESIGNS } from '../shared/examples.js';
 import { resolveCatalog, mergeCatalogManifests, exportCsv, exportLDraw, validateDesign, normalizeDesign } from '../shared/model.js';
 import { renderDesignSvg } from '../shared/illustration.js';
 import { generateManualPdf } from './manual.js';
-import { generateUsdz } from './native-model.js';
+import { generateMobileFile, generateNativeFile } from './native-export.js';
 import { suggestInventory, validateInventory, GenerationError } from './generation.js';
 import { GenerationJobs } from './generation-jobs.js';
 import { isActiveJob } from '../shared/generation-job.js';
@@ -16,11 +16,13 @@ import { loadCachedCatalog, loadCatalogIndex, rankCatalogParts, verifyCatalogMan
 import { importSet } from './inventory.js';
 import { loadDesign, saveDesign } from './store.js';
 import { readConfig } from './config.js';
+import { instructionGateway, instructionUrl, loadInstructionSecret, sendInstructionFile } from './instruction-share.js';
 
 readConfig();
 const jobs = new GenerationJobs();
 await jobs.ready;
 const app = express();
+const instructionSecret = await loadInstructionSecret();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '8mb' }));
 app.use((_req, res, next) => { res.setHeader('X-Content-Type-Options', 'nosniff'); next(); });
@@ -45,6 +47,10 @@ app.get('/api/designs/:id', async (req, res) => {
   const design = await loadDesign(req.params.id) || SAMPLE_DESIGNS.find(item => item.id === req.params.id);
   if (!design) return res.status(404).json({ error: 'Design not found.' });
   res.json(design);
+});
+app.get('/api/designs/:id/instructions-link', async (req, res) => {
+  if (!await loadDesign(req.params.id)) return res.status(404).json({ error: 'Design not found.' });
+  res.json({ url: instructionUrl(readConfig().publicBaseUrl, req.params.id, instructionSecret) });
 });
 app.post('/api/generation-jobs', async (req, res) => {
   res.status(202).json(await jobs.submit(req.body.requestId, req.body.input, undefined, { continuous: true, stopWhenMatched: true, visualReview: req.body.visualReview }));
@@ -117,10 +123,11 @@ app.get('/api/designs/:id/:format', async (req, res) => {
   if (!design) return res.status(404).json({ error: 'Design not found.' });
   const name = design.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 70) || 'build';
   switch (req.params.format) {
-    case 'manual.pdf': res.type('pdf').attachment(`${name}-instructions.pdf`).send(await generateManualPdf(design, saved?.inventory)); break;
+    case 'manual.pdf': sendInstructionFile(req, res.type('pdf').attachment(`${name}-instructions.pdf`), await generateManualPdf(design, saved?.inventory)); break;
     case 'parts.csv': res.type('text/csv').attachment(`${name}-parts.csv`).send(exportCsv(design, saved?.inventory)); break;
     case 'model.ldr': res.type('text/plain').attachment(`${name}.ldr`).send(exportLDraw(design)); break;
-    case 'model.usdz': res.type('model/vnd.usdz+zip').attachment(`${name}.usdz`).send(await generateUsdz(design)); break;
+    case 'model.usdz': sendInstructionFile(req, res.type('model/vnd.usdz+zip').attachment(`${name}.usdz`), await generateNativeFile(design)); break;
+    case 'mobile.usdz': sendInstructionFile(req, res.type('model/vnd.usdz+zip').attachment(`${name}-lightweight.usdz`), await generateMobileFile(design)); break;
     case 'preview.png': res.type('png').send(await sharp(Buffer.from(renderDesignSvg(design, { width: 1200, height: 1000 }))).png().toBuffer()); break;
     default: res.status(404).json({ error: 'Unknown export.' });
   }
@@ -136,3 +143,4 @@ app.use((error: Error & { status?: number; type?: string }, _req: express.Reques
 const port = Number(process.env.PORT) || 3001;
 const host = process.env.HOST || '127.0.0.1';
 app.listen(port, host, () => console.log(`Large Lego Model API: http://${host}:${port}`));
+instructionGateway(app, instructionSecret, loadDesign).listen(3002, '127.0.0.1', () => console.log('Read-only instruction sharing: http://127.0.0.1:3002'));

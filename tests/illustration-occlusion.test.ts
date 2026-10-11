@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
+import { inflateSync } from 'node:zlib';
 import sharp from 'sharp';
 import { renderDesignSvg } from '../shared/illustration';
 import { buildSteps, COLORS, validateDesign, type Design } from '../shared/model';
@@ -18,8 +19,16 @@ test('accepted 436-piece Bell Tower exports every piece and its complete manual 
   const pdf = await generateManualPdf(tower);
   assert.equal(pdf.subarray(0, 5).toString(), '%PDF-');
   assert.ok(pdf.subarray(-20).toString().includes('%%EOF'));
-  assert.ok((pdf.toString('latin1').match(/\/Type \/Page\b/g) || []).length >= buildSteps(tower).length,
-    'Every assembly step must survive PDF rendering, including the cyclic clock courses');
+  const raw = pdf.toString('latin1'), attachment = raw.indexOf('/Type /EmbeddedFile');
+  assert.ok(attachment >= 0, 'The compact manual must retain its exact assembly sequence');
+  const start = raw.indexOf('stream\n', attachment), dictionary = raw.slice(attachment, start);
+  const length = Number(dictionary.match(/\/Length\s+(\d+)/)![1]);
+  const retained = JSON.parse(inflateSync(pdf.subarray(start + 7, start + 7 + length)).toString('utf8'));
+  assert.deepEqual(retained.steps, buildSteps(tower), 'Every ordered step and checked path survives grouped panels');
+  const retainedIds = retained.steps.flatMap((step: { bricks: { id: string }[] }) => step.bricks.map(brick => brick.id));
+  assert.equal(retainedIds.length, 436);
+  for (const id of ['b362', 'b363', 'b366', 'b375', 'b383']) assert.equal(retainedIds.filter((value: string) => value === id).length, 1,
+    `Cyclic clock placement ${id} is retained exactly once`);
 });
 
 test('split face colors agree with independent ray-box intersections across the five-brick cycle', async () => {

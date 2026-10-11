@@ -9,10 +9,10 @@ import sharp from 'sharp';
 import PDFDocument from 'pdfkit';
 import { generateManualPdf } from '../server/manual';
 import { renderManualPdf } from '../server/manual-render';
-import { groupManualSteps } from '../server/manual-repeats';
+import { groupManualSteps } from '../shared/manual-repeats';
 import { renderDesignSvg } from '../shared/illustration';
 import { partSurfaces } from '../shared/part-surfaces';
-import { buildSteps, validateDesign, type Design } from '../shared/model';
+import { buildSteps, validateDesign, type BuildStep, type Design } from '../shared/model';
 import { hangingDesign } from './fixtures/hanging-design';
 
 const design: Design = {
@@ -65,6 +65,14 @@ function pdfText(pdf: Buffer): string {
   return extracted;
 }
 
+function exactPlacements(pdf: Buffer): { designId: string; coordinateSystem: string; steps: BuildStep[] } {
+  const raw = pdf.toString('latin1'), at = raw.indexOf('/Type /EmbeddedFile');
+  assert.ok(at >= 0, 'The companion must retain exact placements as an embedded attachment');
+  const stream = raw.indexOf('stream\n', at), dictionary = raw.slice(at, stream);
+  const length = Number(dictionary.match(/\/Length\s+(\d+)/)![1]);
+  return JSON.parse(inflateSync(pdf.subarray(stream + 7, stream + 7 + length)).toString('utf8'));
+}
+
 test('PDF text extraction preserves a final carriage-return byte in compressed data', () => {
   const instruction = 'BT <4c6974746c6520746f776572> Tj ET\n%';
   const bytes = Array.from({ length: 256 }, (_, suffix) => deflateSync(Buffer.from(instruction + String.fromCharCode(suffix), 'latin1')))
@@ -78,14 +86,13 @@ test('PDF text extraction preserves a final carriage-return byte in compressed d
 test('hanging-piece PDF follows the anchor-first order and prints exact upward entry instructions', async () => {
   const pdf = await generateManualPdf(hangingDesign), content = pdfText(pdf);
   assert.equal((content.match(/ATTACH FROM BELOW/g) || []).length, 2);
-  assert.ok(content.indexOf('28.8 mm (z = 9)') < content.indexOf('ATTACH FROM BELOW'), 'The overhead beam must be assembled before the hanging steps');
   assert.match(content, /Enter from \+X/);
   assert.match(content, /17\.6 mm above the table/);
   assert.match(content, /8\.0 mm above the table/);
   assert.equal((content.match(/then raise it 1\.6 mm/g) || []).length, 2);
-  assert.equal((content.match(/Body bottom:/g) || []).length, 3, 'Beam and both side-entry placements retain their own full instructions');
-  assert.match(content, /Repeat these placements x3/);
-  for (let i = 0; i < 3; i++) assert.ok(content.includes(`${i + 1}  /  ${i + 1}  /  (0, 0, ${i * 3})`), 'Repeated column steps retain their exact destinations');
+  assert.deepEqual(exactPlacements(pdf).steps, buildSteps(hangingDesign));
+  assert.match(content, /3 repeats/);
+  assert.match(content, /Stack this pattern upward/);
 });
 
 test('layer illustrations retain the full-model camera and exact geometry', () => {
@@ -206,27 +213,28 @@ test('solid staggered walls render solid side faces, without back faces or studs
   }
 });
 
-test('PDF has all step coordinates, complete BOM, inventory shortages, and numbered pages', async () => {
+test('diagram-led PDF preserves exact placements, complete BOM, inventory shortages, and landscape page totals', async () => {
   assert.equal(validateDesign(design).valid, true);
   const pdf = await generateManualPdf(design, [{ partId: '3004', colorId: 1, quantity: 1, source: 'Set 10696-1' }]);
   assert.equal(pdf.subarray(0, 5).toString(), '%PDF-');
   const content = pdfText(pdf);
   for (const expected of ['Little tower', '4 PIECES', '3004', '3003', '3005', 'Set 10696-1', '3 bricks missing',
-    'Build step 1', 'Build step 2', 'Build step 3', 'Body bottom: 9.6 mm (z = 3)', 'Body bottom: 19.2 mm (z = 6)',
-    '(0, 0)', '(1, 0)', '(1, 1)', '1 x 2', '90 deg', '01 / 07', '07 / 07']) {
+    '1 x 2', '01 / 05', '05 / 05', 'exact-placements.json', 'Build left to right.']) {
     assert.ok(content.includes(expected), `Missing PDF text: ${expected}`);
   }
-  assert.equal((pdf.toString('latin1').match(/\/Type \/Page\b/g) ?? []).length, 7);
+  assert.equal((pdf.toString('latin1').match(/\/Type \/Page\b/g) ?? []).length, 5);
+  assert.match(pdf.toString('latin1'), /\/MediaBox \[0 0 841\.89 595\.28\]/);
+  assert.deepEqual(exactPlacements(pdf).steps, buildSteps(design));
+  assert.ok(!content.includes('TOP-DOWN PLACEMENT MAP'), 'Engineering coordinates should not dominate the illustrated guide');
 });
 
-test('mixed-height PDF prints actual body-bottom heights, all slope directions and plate BOM entries', async () => {
-  const content = pdfText(await generateManualPdf(mixed));
-  for (const expected of ['10 PIECES', '3020', '3022', '3039', 'Build step 4', 'Body bottom: 3.2 mm (z = 1)',
-    'Body bottom: 6.4 mm (z = 2)', 'Body bottom: 16.0 mm (z = 5)', '0 deg = +Y', '90 deg = -X', '180 deg = -Y', '270 deg = +X',
-    '3022 / White / 3.2 mm', '(0, 2)  2 x 2  /  180 deg', '(2, 2)  2 x 2  /  270 deg']) {
+test('mixed-height PDF preserves plate heights and all four slope rotations in its exact attachment', async () => {
+  const pdf = await generateManualPdf(mixed), content = pdfText(pdf);
+  for (const expected of ['10 PIECES', '3020', '3022', '3039', 'White', 'FRONT']) {
     assert.ok(content.includes(expected), `Missing mixed-part PDF text: ${expected}`);
   }
   assert.ok(!content.includes('Build layer'), 'Step indices must not be presented as full-brick heights');
+  assert.deepEqual(exactPlacements(pdf).steps, buildSteps(mixed));
 });
 
 test('repeated stack PDF gathers total quantities and prints every original step and height once', async () => {
@@ -239,13 +247,12 @@ test('repeated stack PDF gathers total quantities and prints every original step
   assert.equal(groupManualSteps(buildSteps(repeated)).length, 2);
   const inventory = [{ partId: '3020', colorId: 15, quantity: 8, source: 'My plate box' }, { partId: '3001', colorId: 1, quantity: 1, source: 'My base box' }];
   const pdf = await generateManualPdf(repeated, inventory), content = pdfText(pdf);
-  for (const expected of ['9 PIECES', '9 BUILD STEPS', 'Repeat these placements x8', '1 piece per repeat / 8 total',
-    'GATHER FOR ALL 8 REPEATS', '8x 3020 / 15', 'ONE REPEAT: EACH ROW IS ONE PIECE',
-    'STACK IN PLACE', 'Do not build separate copies.', 'My plate box', 'My base box', 'All required pieces are allocated', '06 / 06']) {
+  for (const expected of ['9 PIECES', '9 BUILD STEPS', '8 repeats / 8 pieces total', '1 piece per repeat',
+    '8x', '3020', 'ONE REPEAT', 'Stack this pattern upward.', 'My plate box', 'My base box', 'All required pieces are allocated', '04 / 04']) {
     assert.ok(content.includes(expected), `Missing repetition detail: ${expected}`);
   }
-  for (let i = 0; i < 8; i++) assert.ok(content.includes(`${i + 1}  /  ${i + 2}  /  (3, 4, ${i + 3})`));
-  assert.equal((pdf.toString('latin1').match(/\/Type \/Page\b/g) ?? []).length, 6, 'The exact 9 checked steps fit on 2 instruction pages');
+  assert.deepEqual(exactPlacements(pdf).steps, buildSteps(repeated));
+  assert.equal((pdf.toString('latin1').match(/\/Type \/Page\b/g) ?? []).length, 4, 'The exact 9 checked steps fit on 1 instruction spread');
 });
 
 test('same-height translated PDF uses repeated placements with exact destinations and total gather counts', async () => {
@@ -259,11 +266,12 @@ test('same-height translated PDF uses repeated placements with exact destination
   assert.equal(groups[0].kind, 'placements');
   assert.equal(groups[0].steps.length, 2);
   const pdf = await generateManualPdf(repeated), content = pdfText(pdf);
-  for (const expected of ['29 PIECES', 'Repeat these placements x2', '12 pieces per repeat / 24 total', '24x 3024 / 1',
-    'REPEAT AT THE LISTED LOCATIONS', 'not an off-model subassembly', '1  /  1  /  (0, 0, 0)', '2  /  2  /  (0, 1, 0)', '06 / 06']) {
+  for (const expected of ['29 PIECES', '2 repeats / 24 pieces total', '12 pieces per repeat', '24x', '3024',
+    'Repeat at the highlighted locations.', 'Place directly on the model, in step order.', '04 / 04']) {
     assert.ok(content.includes(expected), `Missing translated-placement detail: ${expected}`);
   }
-  assert.equal((pdf.toString('latin1').match(/\/Type \/Page\b/g) ?? []).length, 6);
+  assert.deepEqual(exactPlacements(pdf).steps, buildSteps(repeated));
+  assert.equal((pdf.toString('latin1').match(/\/Type \/Page\b/g) ?? []).length, 4);
 });
 
 test('narrow-plate SVG and manual retain one-plate steps, correct exposed studs and source quantities', async () => {
@@ -275,12 +283,12 @@ test('narrow-plate SVG and manual retain one-plate steps, correct exposed studs 
   assert.equal((svg.match(/data-brick-id=/g) || []).length, 4);
   for (let z = 0; z < 4; z++) assert.equal((svg.match(new RegExp(`data-stud-owner="narrow-${z}"`, 'g')) || []).length, 1, 'Only the uncovered last stud of each plate is visible');
   const inventory = narrow.bricks.map(brick => ({ partId: brick.partId, colorId: brick.colorId, quantity: 1, source: 'My narrow plate box' }));
-  const content = pdfText(await generateManualPdf(narrow, inventory));
+  const pdf = await generateManualPdf(narrow, inventory), content = pdfText(pdf);
   for (const expected of ['4 PIECES', '3710', '3623', '3023', '3024', 'My narrow plate box', 'All required pieces are allocated',
-    'Body bottom: 3.2 mm (z = 1)', 'Body bottom: 6.4 mm (z = 2)', 'Body bottom: 9.6 mm (z = 3)',
-    '3710 / White / 3.2 mm', '3024 / White / 3.2 mm', '1 x 4', '1 x 3', '1 x 2', '1 x 1']) {
+    'White', '1 x 4', '1 x 3', '1 x 2', '1 x 1']) {
     assert.ok(content.includes(expected), `Missing narrow-plate guide text: ${expected}`);
   }
+  assert.deepEqual(exactPlacements(pdf).steps, buildSteps(narrow));
 });
 
 test('manual generation rejects invalid brick placement before exporting', async () => {
@@ -309,15 +317,15 @@ test('manuals flush completed vector pages and retain exact page totals and plac
   });
   const pdf = await renderManualPdf(design, [{ partId: '3004', colorId: 1, quantity: 1, source: 'Page count source' }]);
   const pages = (pdf.toString('latin1').match(/\/Type\s*\/Page\b/g) || []).length;
-  const expected = 4 + buildSteps(design).length; // cover, BOM, allocation, guide, steps
+  const expected = 3 + Math.ceil(groupManualSteps(buildSteps(design)).length / 2); // cover, BOM, allocation, instruction spreads
   assert.equal(pages, expected);
   assert.equal(buffered.length, expected);
   assert.ok(buffered.every(count => count === 1), 'Only the active vector page stays buffered, regardless of manual length');
-  assert.ok(!pdf.toString('latin1').includes('/Subtype /Image'), 'Small manuals retain vector model diagrams');
+  assert.equal((pdf.toString('latin1').match(/\/Subtype \/Image\b/g) || []).length, 8, 'Four exact part/color thumbnails (RGB plus alpha) are embedded once and reused across trays and BOM');
   const content = pdfText(pdf);
   for (let index = 1; index <= pages; index++) assert.ok(content.includes(`${String(index).padStart(2, '0')} / ${String(pages).padStart(2, '0')}`));
   assert.ok(content.includes('Page count source'));
-  for (const step of buildSteps(design)) assert.ok(content.includes(`Build step ${step.index}`));
+  assert.deepEqual(exactPlacements(pdf).steps, buildSteps(design));
 });
 
 test('manual cache survives process restart and keys exact design and inventory content', async t => {
@@ -325,7 +333,7 @@ test('manual cache survives process restart and keys exact design and inventory 
   const inventory = [{ partId: '3004', colorId: 1, quantity: 1, source: 'Cached source lot' }];
   const changed = { ...original, title: 'Changed cached revision' };
   const inputs = [{ design: original, inventory }, { design: changed, inventory }, { design: original, inventory: [] }];
-  const filenames = inputs.map(input => `data/manual-cache/manual-v4-repeated-placements-${createHash('sha256').update(JSON.stringify(input)).digest('hex')}.pdf`);
+  const filenames = inputs.map(input => `data/manual-cache/manual-v5-diagram-guide-${createHash('sha256').update(JSON.stringify(input)).digest('hex')}.pdf`);
   t.after(() => Promise.all(filenames.map(filename => rm(filename, { force: true }))));
   const first = await generateManualPdf(original, inventory);
   assert.deepEqual(await readFile(filenames[0]), first);
@@ -377,10 +385,8 @@ test('dense layers become small numbered steps without losing any placements', a
     { id: 'cap', partId: '3001', colorId: 4, x: 0, y: 1, z: 2, rotation: 90 },
   );
   assert.equal(validateDesign(dense).valid, true);
-  const content = pdfText(await generateManualPdf(dense));
+  const pdf = await generateManualPdf(dense), content = pdfText(pdf);
   assert.deepEqual(buildSteps(dense).map(step => step.bricks.length), [12, 4, 2, 1]);
-  assert.ok(content.includes('Build step 2'));
   assert.ok(content.includes('4 new pieces'));
-  assert.ok(content.includes('(3, 3)  1 x 1  /  0 deg'));
-  assert.ok(content.includes('(0, 1)  4 x 2  /  90 deg'));
+  assert.deepEqual(exactPlacements(pdf).steps, buildSteps(dense));
 });

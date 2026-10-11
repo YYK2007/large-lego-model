@@ -43,7 +43,7 @@ test('both build-start acknowledgements explain every supported command before s
         acknowledged = true;
         assert.equal(h.submitted.length, 0);
         if (quality === 'Quick') assert.match(text, /aim for a usable checked draft in about 2\.5 minutes/);
-        for (const command of ['/status', '/stop', '/model', '/manual', '/parts', '/approve', '/retry', '/use N', '/open ID', '/new idea', '/quick idea', '/detailed idea']) {
+        for (const command of ['/status', '/stop', '/model', '/manual', '/instructions', '/build', '/parts', '/approve', '/retry', '/use N', '/open ID', '/new idea', '/quick idea', '/detailed idea']) {
           assert.ok(text.includes(command), `${quality} acknowledgement is missing ${command}`);
         }
         assert.match(text, /once a checked build is available/);
@@ -448,7 +448,7 @@ test('approval pins the previewed revision while stopping a worker with a newer 
   await conversation.handle(message('Looks good!'));
   assert.equal(h.state().designId, build.id); assert.equal(h.state().approvedDesignId, build.id);
   assert.deepEqual(h.state().approvedDeliveries, { [build.id]: { model: true, manual: true, parts: true } });
-  assert.deepEqual(files, ['model.usdz', 'manual.pdf', 'parts.csv'].map(format => `${build.id}/${format}`));
+  assert.deepEqual(files, ['mobile.usdz', 'manual.pdf', 'parts.csv'].map(format => `${build.id}/${format}`));
   assert.equal(h.stops.length, 1); assert.equal(h.submitted.length, 1);
   const restarted = h.create(); await restarted.handle(message('/approve')); await restarted.handle(message('/status'));
   assert.equal(files.length, 3); assert.match(h.texts.at(-1)!, /selected build is approved.*were sent/);
@@ -509,7 +509,7 @@ test('/retry restores missing approved delivery after selection was cleared with
   const files: string[] = [];
   h.api.file = async (id, format) => { files.push(`${id}/${format}`); return Buffer.from(format); };
   await h.create().handle(message('/retry'));
-  assert.deepEqual(files, [`${approved.id}/model.usdz`]); assert.deepEqual(h.media, ['model']);
+  assert.deepEqual(files, [`${approved.id}/mobile.usdz`]); assert.deepEqual(h.media, ['model']);
   assert.equal(h.submitted.length, 0); assert.equal(h.stops.length, 0);
   assert.equal(h.state().approvedDesignId, approved.id);
   assert.deepEqual(h.state().approvedDeliveries?.[approved.id], { model: true, manual: true, parts: true });
@@ -534,7 +534,7 @@ test('/retry pins the old approved revision while preserving a newer preview and
   await conversation.handle(message('/status')); assert.match(h.texts.at(-1)!, /Sending your rotatable 3D file/);
   await conversation.handle(message('/stop')); assert.equal(h.jobs.get('new-job')!.status, 'cancelled');
   release(); await retry; await duplicate;
-  assert.deepEqual(files, [`${build.id}/model.usdz`]); assert.deepEqual(h.media, ['model']); assert.equal(h.submitted.length, 0);
+  assert.deepEqual(files, [`${build.id}/mobile.usdz`]); assert.deepEqual(h.media, ['model']); assert.equal(h.submitted.length, 0);
   assert.equal(h.state().approvedDesignId, build.id); assert.equal(h.state().feedbackDesignId, newer.id);
 });
 
@@ -549,6 +549,90 @@ test('/retry without approval and unknown slash commands preserve pending reques
   assert.equal(h.submitted.length, 0); assert.equal(h.stops.length, 0); assert.deepEqual(h.media, []);
   assert.equal(h.state().feedbackDesignId, build.id); assert.deepEqual(h.state().pendingRequest, pendingRequest);
   assert.equal(h.state().approvedDesignId, undefined);
+});
+
+test('checked previews and instruction aliases send the signed guide for that exact selected build', async () => {
+  const h = harness({ handledIds: [] }, false), conversation = h.create();
+  const guides: string[] = [], links: string[] = [];
+  h.api.instructionsLink = async id => { links.push(id); return `https://guide.example/?build=${id}&share=signed`; };
+  h.reply.instructions = async url => { guides.push(url); };
+  await conversation.handle(message('Make a rocket'));
+  const job = h.jobs.get(h.state().jobId!)!; job.bestDraftId = build.id;
+  await conversation.poll();
+  assert.equal(h.state().feedbackDesignId, build.id); assert.equal(guides.length, 1);
+  await conversation.handle(message('/instructions')); await conversation.handle(message('/build'));
+  assert.deepEqual(links, [build.id, build.id, build.id]);
+  assert.ok(guides.every(url => new URL(url).searchParams.get('build') === build.id));
+  assert.doesNotMatch(h.texts.join('\n'), /https:\/\/example\.test/);
+  assert.equal(h.submitted.length, 1); assert.deepEqual(h.media, [`design:${build.id}`]);
+});
+
+test('new approval sends guide, model and parts; PDF is on demand and retries preserve the guide intent', async () => {
+  const h = harness({ handledIds: [], designId: build.id, feedbackDesignId: build.id }, false), conversation = h.create();
+  let failGuide = true;
+  const guides: string[] = [], files: string[] = [];
+  h.api.instructionsLink = async id => `https://guide.example/?build=${id}&share=signed`;
+  h.reply.instructions = async url => { if (failGuide) throw new Error('Card and text failed'); guides.push(url); };
+  h.api.file = async (id, format) => { files.push(`${id}/${format}`); return Buffer.from(format); };
+  await conversation.handle(message('/approve'));
+  assert.deepEqual(h.state().approvedDeliveries?.[build.id], { mode: 'guide', model: true, parts: true });
+  assert.deepEqual(files, [`${build.id}/mobile.usdz`, `${build.id}/parts.csv`]);
+  assert.match(h.texts.at(-1)!, /building guide.*\/retry/);
+  failGuide = false; await h.create().handle(message('/retry'));
+  assert.equal(guides.length, 1); assert.equal(files.length, 2);
+  assert.deepEqual(h.state().approvedDeliveries?.[build.id], { mode: 'guide', instructions: true, model: true, parts: true });
+  await h.create().handle(message('/retry')); assert.equal(guides.length, 1); assert.equal(files.length, 2);
+  await h.create().handle(message('/manual'));
+  assert.equal(files.at(-1), `${build.id}/manual.pdf`); assert.equal(h.submitted.length, 0);
+});
+
+test('legacy approvals keep their promised PDF retry even when a guide becomes available', async () => {
+  const h = harness({ handledIds: [], approvedDesignId: build.id, approvedDeliveries: { [build.id]: { model: true, parts: true } } }, false);
+  h.api.instructionsLink = async id => `https://guide.example/?build=${id}&share=signed`;
+  h.reply.instructions = async () => { assert.fail('Legacy file retry must not add a new guide delivery'); };
+  await h.create().handle(message('/retry'));
+  assert.deepEqual(h.media, ['manual']); assert.deepEqual(h.state().approvedDeliveries?.[build.id], { model: true, manual: true, parts: true });
+});
+
+test('no public guide falls back to the file bundle and instruction commands explain the limitation without a fake URL', async () => {
+  const h = harness({ handledIds: [], designId: build.id, feedbackDesignId: build.id }, false), conversation = h.create();
+  h.api.instructionsLink = async () => null;
+  await conversation.handle(message('/build'));
+  assert.match(h.texts.at(-1)!, /guide isn’t available.*\/manual/); assert.doesNotMatch(h.texts.at(-1)!, /https?:\/\//);
+  await conversation.handle(message('/approve'));
+  assert.deepEqual(h.media, ['model', 'manual', 'parts']); assert.equal(h.state().approvedDeliveries?.[build.id].mode, undefined);
+});
+
+test('guide approval stays pinned while a newer worker draft appears and Stop bypasses a held card', { timeout: 2000 }, async () => {
+  const newer = { ...build, id: 'newest-worker-result' };
+  const h = harness({ handledIds: [], designId: build.id, feedbackDesignId: build.id, jobId: 'running' }, false), conversation = h.create();
+  h.designs.set(newer.id, newer);
+  h.jobs.set('running', { id: 'running', quality: 'detailed', status: 'running', bestDraftId: newer.id, createdAt: build.createdAt, updatedAt: build.createdAt, milestones: [], attempts: [] });
+  const ids: string[] = [], guides: string[] = [];
+  let entered!: () => void, release!: () => void;
+  const sending = new Promise<void>(resolve => { entered = resolve; });
+  h.api.instructionsLink = async id => { ids.push(id); return `https://guide.example/?build=${id}&share=signed`; };
+  h.reply.instructions = async url => { guides.push(url); entered(); await new Promise<void>(resolve => { release = resolve; }); };
+  const approving = conversation.handle(message('/approve')); await sending;
+  const duplicate = conversation.handle(message('/approve'));
+  await conversation.handle(message('/stop'));
+  release(); await approving; await duplicate;
+  assert.ok(ids.every(id => id === build.id)); assert.equal(guides.length, 1);
+  assert.equal(h.state().approvedDesignId, build.id); assert.equal(h.state().feedbackDesignId, build.id);
+  assert.deepEqual(h.media, ['model', 'parts']); assert.equal(h.submitted.length, 0);
+});
+
+test('status and Stop stay responsive during a directly requested guide card', { timeout: 2000 }, async () => {
+  const h = harness({ handledIds: [], designId: build.id }, false), conversation = h.create();
+  let entered!: () => void, release!: () => void;
+  const sending = new Promise<void>(resolve => { entered = resolve; });
+  h.api.instructionsLink = async id => `https://guide.example/?build=${id}&share=signed`;
+  h.reply.instructions = async () => { entered(); await new Promise<void>(resolve => { release = resolve; }); };
+  const guide = conversation.handle(message('/instructions')); await sending;
+  await conversation.handle(message('/status')); assert.match(h.texts.at(-1)!, /Sending your interactive building guide/);
+  await conversation.handle(message('/stop')); assert.match(h.texts.at(-1)!, /no active generation/i);
+  release(); await guide;
+  assert.equal(h.submitted.length, 0); assert.equal(h.state().designId, build.id);
 });
 
 test('approval never delivers if stopping the active worker is unconfirmed', async () => {
@@ -730,7 +814,7 @@ test('approval status and Stop remain responsive during PDF preparation while a 
   assert.deepEqual(h.state().approvedDeliveries?.[build.id], { model: true });
   await conversation.handle(message('/stop')); assert.match(h.texts.at(-1)!, /no active generation/i);
   release(); await first; await duplicate;
-  assert.deepEqual(calls, ['model.usdz', 'manual.pdf', 'parts.csv'].map(format => `${build.id}/${format}`));
+  assert.deepEqual(calls, ['mobile.usdz', 'manual.pdf', 'parts.csv'].map(format => `${build.id}/${format}`));
   assert.deepEqual(h.media, ['model', 'manual', 'parts']); assert.equal(h.submitted.length, 0);
   assert.equal(h.state().approvedDesignId, build.id);
 });
@@ -746,7 +830,7 @@ test('a timed-out manual can be retried after restart without regenerating or re
   await conversation.handle(message('/approve'));
   assert.deepEqual(h.state().approvedDeliveries?.[build.id], { model: true, parts: true });
   failManual = false; await h.create().handle(message('/approve'));
-  assert.deepEqual(calls, ['model.usdz', 'manual.pdf', 'parts.csv', 'manual.pdf'].map(format => `${build.id}/${format}`));
+  assert.deepEqual(calls, ['mobile.usdz', 'manual.pdf', 'parts.csv', 'manual.pdf'].map(format => `${build.id}/${format}`));
   assert.deepEqual(h.media, ['model', 'parts', 'manual']); assert.equal(h.submitted.length, 0);
 });
 
@@ -759,7 +843,7 @@ test('approval polling follows preparation and sending with throttled check-ins 
   const calls: string[] = [];
   h.api.file = async (id, format) => {
     calls.push(`${id}/${format}`);
-    if (format === 'model.usdz') { fileEntered(); await new Promise<void>(resolve => { releaseFile = resolve; }); }
+    if (format === 'mobile.usdz') { fileEntered(); await new Promise<void>(resolve => { releaseFile = resolve; }); }
     return Buffer.from(format);
   };
   h.reply.model = async () => { sendEntered(); await new Promise<void>(resolve => { releaseSend = resolve; }); h.media.push('model'); };
@@ -777,7 +861,7 @@ test('approval polling follows preparation and sending with throttled check-ins 
   await conversation.handle(message('/status')); assert.match(h.texts.at(-1)!, /Sending your rotatable 3D file/);
   await conversation.handle(message('/stop')); assert.match(h.texts.at(-1)!, /requested files are still being prepared or sent/);
   releaseSend(); await approval; await duplicate;
-  assert.deepEqual(calls, ['model.usdz', 'manual.pdf', 'parts.csv'].map(format => `${build.id}/${format}`));
+  assert.deepEqual(calls, ['mobile.usdz', 'manual.pdf', 'parts.csv'].map(format => `${build.id}/${format}`));
   assert.deepEqual(h.state().approvedDeliveries?.[build.id], { model: true, manual: true, parts: true });
   assert.equal(h.state().approvedDesignId, build.id); assert.equal(h.submitted.length, 0);
   count = h.texts.length; h.advance(60_000); await conversation.poll(); assert.equal(h.texts.length, count);

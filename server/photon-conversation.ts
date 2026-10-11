@@ -12,10 +12,11 @@ export interface PhotonReply {
   manual(bytes: Buffer): Promise<void>;
   parts(bytes: Buffer): Promise<void>;
   designPreview(design: SavedDesign): Promise<void>;
+  instructions?(url: string, title: string): Promise<void>;
 }
 
-type ExportKind = 'model' | 'manual' | 'parts';
-const exportLabels: Record<ExportKind, string> = { model: 'rotatable 3D file', manual: 'PDF instructions', parts: 'parts list' };
+type ExportKind = 'model' | 'manual' | 'parts' | 'instructions';
+const exportLabels: Record<ExportKind, string> = { model: 'rotatable 3D file', manual: 'PDF instructions', parts: 'parts list', instructions: 'interactive building guide' };
 interface ExportProgress {
   kind: ExportKind;
   phase: 'preparing' | 'sending';
@@ -61,12 +62,21 @@ export class PhotonConversation {
     return pending;
   }
   private link(key: 'job' | 'design', id: string) {
-    if (!this.publicBaseUrl) return '';
+    // The public guide gateway accepts signed links, not the local job/editor URLs.
+    if (!this.publicBaseUrl || this.api.instructionsLink) return '';
     const url = new URL('/', this.publicBaseUrl); url.searchParams.set(key, id); return `\n${url}`;
   }
   private async tell(value: string, jobId?: string) {
     await this.reply.text(value);
     if (jobId && this.state.jobId === jobId) { this.state.lastDeliveryAt = this.now(); await this.persist(); }
+  }
+  private async instructionUrl(id: string) {
+    try { return await this.api.instructionsLink?.(id) || undefined; }
+    catch { return undefined; }
+  }
+  private async sendInstructions(design: SavedDesign, url: string) {
+    if (this.reply.instructions) await this.reply.instructions(url, design.title);
+    else await this.reply.text(`Build ${design.title}, one step at a time. Open your guide:\n${url}`);
   }
   private exportStage(progress: ExportProgress) {
     return `${progress.phase === 'preparing' ? 'Preparing' : 'Sending'} your ${exportLabels[progress.kind]}`;
@@ -112,7 +122,7 @@ export class PhotonConversation {
     const review = design.research?.comparison.status === 'matched' ? 'It also passed the AI visual review.'
       : design.research?.comparison.status === 'needs-work' ? 'The shape still needs refinement, so please check whether it looks right to you.'
         : 'AI visual review was skipped. Please check whether the preview looks like your request.';
-    return `${review} Reply with a change, or /approve to receive this build’s 3D file, PDF instructions, and parts list.`;
+    return `${review} Reply with a change, or /approve when you’re ready to build. /instructions opens the building guide; /manual gets a PDF.`;
   }
   private completionMessage(job: GenerationJob, design?: SavedDesign) {
     const saved = design ? `Your checked draft is kept. ${this.feedbackPrompt(design)}${this.link('design', design.id)}`
@@ -121,7 +131,7 @@ export class PhotonConversation {
     const matched = design?.research?.comparison.status === 'matched';
     const problem = job.error ? ` ${buildProblem([job.error.message, ...job.error.checks])}` : '';
     if (job.quality === 'quick') return `${this.qualitySelectionEnabled ? 'Quick' : 'The build'} finished${design ? ' with a draft that passes brick checks.' : ' without a draft that passes brick checks.'}${problem} ${saved} ${this.qualitySelectionEnabled ? 'Reply Detailed to try again with more time, or describe a change.' : 'Describe a change if you want another version.'}`;
-    if (job.status === 'succeeded' && matched) return `The build passed the brick checks and AI visual review. Please inspect it before building; physical stability is not tested. Reply with a change, or /approve for the 3D file, manual, and parts list.${this.link('design', design!.id)}`;
+    if (job.status === 'succeeded' && matched) return `The build passed the brick checks and AI visual review. Please inspect it before building; physical stability is not tested. Reply with a change, or /approve for the building guide, 3D file and parts list. /manual gets an optional PDF.${this.link('design', design!.id)}`;
     if (design && design.research?.comparison.status !== 'needs-work') return `This draft passes brick checks.${problem} ${saved}`;
     return `${job.status === 'failed' ? 'I couldn’t finish this build.' : 'This draft still needs visual refinement.'}${problem} ${saved} ${this.qualitySelectionEnabled ? 'Reply Quick or Detailed to try again, or describe a simpler version.' : 'Describe what to change, or send a simpler version of your idea.'}${this.link('job', job.id)}`;
   }
@@ -169,6 +179,10 @@ export class PhotonConversation {
     await this.reply.designPreview(design);
     if (this.state.jobId === job.id && !this.changing && this.state.finishedJobId !== job.id) {
       this.state.designId = id; this.state.feedbackDesignId = id; this.state.lastDraftId = id; this.state.lastDeliveryAt = this.now(); await this.persist();
+      const url = await this.instructionUrl(id);
+      if (url && this.state.feedbackDesignId === id && this.state.jobId === job.id && !this.changing) {
+        try { await this.sendInstructions(design, url); } catch { /* The checked preview remains selected; /instructions can retry the link. */ }
+      }
     }
     return design;
   }
@@ -202,7 +216,8 @@ export class PhotonConversation {
         : 'Starting Detailed. I’ll send checked drafts while I review and refine the build. Send /stop any time.')
       + '\n\n/status: progress · /stop: stop generation'
       + '\n/model: rotatable file · /manual: PDF instructions, once a checked build is available'
-      + '\n/parts: parts list · /approve: accept the preview and receive all three files'
+      + '\n/instructions or /build: interactive building guide'
+      + '\n/parts: parts list · /approve: accept this exact preview and get ready to build'
       + '\n/retry: resend only missing files from your approved build'
       + '\n/use N: stop and choose checked attempt N'
       + '\n/open ID: open a saved build'
@@ -239,6 +254,7 @@ export class PhotonConversation {
     if (retry && !id) throw new PhotonInputError('There is no approved build to resend yet. Choose a checked preview and send /approve first. No new build was started.');
     if (!id || !retry && this.state.pendingRequest) throw new PhotonInputError('Choose a checked preview before approving. Send /use N to select a checked attempt, or finish your pending request first.');
     const design = await this.api.design(id);
+    const guideUrl = await this.instructionUrl(id);
     if (!retry) {
       await this.stopCurrent();
       // Stopping may expose a newer worker draft. Approval stays on the preview
@@ -246,11 +262,15 @@ export class PhotonConversation {
       this.state.designId = id; this.state.lastDraftId = id; this.state.approvedDesignId = id;
     }
     this.state.approvedDeliveries ??= {};
-    if (!Object.hasOwn(this.state.approvedDeliveries, id)) this.state.approvedDeliveries = { ...this.state.approvedDeliveries, [id]: {} };
+    if (!Object.hasOwn(this.state.approvedDeliveries, id)) this.state.approvedDeliveries = { ...this.state.approvedDeliveries, [id]: guideUrl ? { mode: 'guide' } : {} };
     await this.persist();
     const delivery = this.state.approvedDeliveries[id];
-    const files = [['model', 'model.usdz', '3D file'], ['manual', 'manual.pdf', 'PDF instructions'], ['parts', 'parts.csv', 'parts list']] as const;
-    if (files.every(([kind]) => delivery[kind])) { await this.tell('This build is approved and all three files were sent. Send /model, /manual, or /parts if you want a copy.'); return; }
+    const files = delivery.mode === 'guide'
+      ? [['instructions', null, 'building guide'], ['model', 'mobile.usdz', '3D file'], ['parts', 'parts.csv', 'parts list']] as const
+      : [['model', 'mobile.usdz', '3D file'], ['manual', 'manual.pdf', 'PDF instructions'], ['parts', 'parts.csv', 'parts list']] as const;
+    if (files.every(([kind]) => delivery[kind])) { await this.tell(delivery.mode === 'guide'
+      ? 'Ready to build. Your guide, 3D file and parts list were sent. /instructions reopens the guide; /manual gets an optional PDF.'
+      : 'This build is approved and all three files were sent. Send /model, /manual, or /parts if you want a copy.'); return; }
     const failed: string[] = [];
     this.beginExport(files.find(([kind]) => !delivery[kind])![0]);
     try {
@@ -259,16 +279,23 @@ export class PhotonConversation {
         if (delivery[kind]) continue;
         try {
           this.activeExport!.kind = kind; this.activeExport!.phase = 'preparing';
-          const bytes = await this.api.file(id, format);
-          this.activeExport!.phase = 'sending';
-          await this.reply[kind](bytes);
+          if (kind === 'instructions') {
+            if (!guideUrl) throw new PhotonInputError('The building guide link is temporarily unavailable.');
+            this.activeExport!.phase = 'sending';
+            await this.sendInstructions(design, guideUrl);
+          } else {
+            const bytes = await this.api.file(id, format);
+            this.activeExport!.phase = 'sending';
+            await this.reply[kind](bytes);
+          }
           delivery[kind] = true;
           await this.persist();
         } catch { failed.push(label); }
       }
     } finally { await this.finishExport(); }
     await this.tell(failed.length ? `Your approved build is saved. I couldn’t send: ${failed.join(', ')}. Send /retry to resend just those files.${this.link('design', id)}`
-      : 'Your 3D file, PDF instructions, and parts list have been sent. You can still reply with a change.').catch(() => {});
+      : delivery.mode === 'guide' ? 'Ready, set, build. Your guide, 3D file and parts list have been sent. The guide walks through each step; /manual gets an optional PDF. You can still reply with a change.'
+        : 'Your 3D file, PDF instructions, and parts list have been sent. You can still reply with a change.').catch(() => {});
   }
   private async receive(message: Pick<Message, 'direction' | 'id' | 'content'>) {
     if (!shouldHandleMessage(message.direction, message.id, this.state.handledIds)) return;
@@ -291,9 +318,10 @@ export class PhotonConversation {
         }
         if (this.state.approvedDesignId && this.state.feedbackDesignId === this.state.approvedDesignId && this.state.designId === this.state.approvedDesignId && !this.state.pendingRequest) {
           const sent = this.state.approvedDeliveries?.[this.state.approvedDesignId];
-          const remaining = (['model', 'manual', 'parts'] as const).filter(kind => !sent?.[kind]);
+          const remaining = (sent?.mode === 'guide' ? ['instructions', 'model', 'parts'] as const : ['model', 'manual', 'parts'] as const).filter(kind => !sent?.[kind]);
           await this.tell(remaining.length ? `Your selected build is approved. Still to send: ${remaining.join(', ')}. Send /retry to resend only the missing files.`
-            : `Your selected build is approved, and its 3D file, PDF instructions, and parts list were sent. Reply with a change or send /model, /manual, or /parts for another copy.`, this.state.jobId); return;
+            : sent?.mode === 'guide' ? 'Your selected build is approved. The guide, 3D file and parts list were sent. /instructions opens your guide; /manual gets an optional PDF.'
+              : `Your selected build is approved, and its 3D file, PDF instructions, and parts list were sent. Reply with a change or send /model, /manual, or /parts for another copy.`, this.state.jobId); return;
         }
         if (!this.state.jobId) await this.reply.text(this.state.pendingRequest?.prompt ? this.qualitySelectionEnabled ? 'Your request is saved and waiting for your choice: Quick or Detailed.' : 'Your request is saved. Say “go ahead” to start it.' : 'No active build yet. Send a description, or a photo with a description.');
         else {
@@ -318,6 +346,18 @@ export class PhotonConversation {
         }
         return;
       }
+      if (command.kind === 'instructions') {
+        const id = this.state.feedbackDesignId || this.state.designId || this.state.approvedDesignId;
+        if (!id) throw new PhotonInputError('Let’s get a checked build first. Send an idea, or /use followed by a checked attempt number.');
+        this.beginExport('instructions');
+        try {
+          const design = await this.api.design(id), url = await this.instructionUrl(id);
+          if (!url) throw new PhotonInputError('The phone building guide isn’t available yet. Your checked build is saved. /model gets the rotatable 3D file, /manual gets a PDF, and /parts gets the parts list.');
+          this.activeExport!.phase = 'sending';
+          await this.sendInstructions(design, url);
+        } finally { await this.finishExport(); }
+        return;
+      }
       if (command.kind === 'manual' || command.kind === 'model' || command.kind === 'parts') {
         if (!this.state.designId) throw new PhotonInputError('There is no checked build selected yet. Send an idea first, or /use followed by a checked attempt number.');
         const designId = this.state.designId;
@@ -325,7 +365,7 @@ export class PhotonConversation {
         try {
           await this.exportMessage(`${this.exportStage(this.activeExport!)}. Your checked build is saved.`);
           await this.api.design(designId);
-          const bytes = await this.api.file(designId, command.kind === 'manual' ? 'manual.pdf' : command.kind === 'model' ? 'model.usdz' : 'parts.csv');
+          const bytes = await this.api.file(designId, command.kind === 'manual' ? 'manual.pdf' : command.kind === 'model' ? 'mobile.usdz' : 'parts.csv');
           this.activeExport!.phase = 'sending';
           await this.reply[command.kind](bytes);
           await this.finishExport();

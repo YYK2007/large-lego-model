@@ -77,3 +77,11 @@ Later: ElevenLabs incoming/outgoing voice notes, physical stability solver and r
 - Quick mode is archived behind `QUICK_MODE_ENABLED=false`, with code and tests retained. New requests start directly; requested detail does not select a separate speed mode.
 - Demo jobs skip the separate concept study and Gemini visual critic, preserve reference analysis and structural checks, and return the first complete checked draft. User feedback drives revisions; explicit approval sends matching USDZ, manual and parts files.
 - Delivery, timeout recovery and large-manual verification are tracked in `VERIFICATION.md`.
+
+## Interactive instruction guide (2026-10-11)
+
+- The primary instruction surface is a normal 3D mini-app opened from a Photon app card, with a Safari fallback. Users can inspect the complete model, zoom and rotate, follow each checked placement, replay it, see exact step trays and the full parts list, and resume their place on the same device. AR is a separate optional action.
+- Signed links expose only the selected immutable revision and its downloads through a read-only gateway; prompts, photos, generation controls and unrelated inventory stay private.
+- New guide-enabled approvals deliver the guide, a lightweight phone model, and the exact parts CSV. PDF instructions are prepared on demand; legacy deliveries preserve their original retry behavior.
+- The companion manual uses landscape spreads with two diagram panels, close placement views, pictured quantities and repeat groups. Geometry, exact ordered placements and quantities remain intact.
+- Full verification, timing and remaining phone acceptance checks are in `VERIFICATION.md`.

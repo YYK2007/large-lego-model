@@ -1,83 +1,60 @@
-# Large Lego Model: interactive 3D in iMessage
+# Large LEGO Model: building from iMessage
 
-Research verified October 10, 2026. The offline USDZ exporter, download route, web export button, and Photon attachment code are implemented locally. Artifact tests verify the exported geometry. The user manually sent diagnostic castle USDZ files through iMessage on an iPhone 14: the six-mesh binary and portable text versions opened and rotated. The unchanged many-mesh scene kept loading. These are user-reported diagnostic-device results; automated Photon delivery, AR, animation, and app cards remain unverified.
+Updated October 11, 2026. The primary experience is a mobile instruction guide reached from a Photon app card or ordinary HTTPS link. It supports normal camera-free 3D viewing, checked placement steps, a gather tray and saved device progress. AR is optional. The native model and parts list remain part of approval; PDF instructions are available on demand.
 
-## Recommendation
+Prior native attachment delivery and touch rotation were confirmed by the user, including the approved Wilson revision. The new lightweight viewing copy, guide inside Spectrum, and AR require separate device checks. Local HTTP, artifact and mocked transport tests do not establish those phone behaviors.
 
-The first native option to test on a phone is a **USDZ attachment that opens Apple's Quick Look when tapped**. It carries a real 3D model, rather than a recording of a model. Apple explicitly lists Messages among its built-in USDZ viewers. Retain the HTTPS web viewer as a fallback, and optionally add a short turntable GIF for an immediate visual preview. A user cannot choose a viewpoint in a GIF or MP4. [Apple Quick Look gallery](https://developer.apple.com/quick-look-gallery/)
+## Entry point and approval
 
-If the requirement is interaction **inside the conversation's bubble or app panel**, evaluate Photon's live app card after that path works. This requires the recipient to install the Spectrum iMessage App once. It is a different user experience from tapping a file into a system preview. [Photon app cards](https://photon.codes/docs/spectrum-ts/content/app)
+A checked preview includes a signed guide for that exact revision. `/instructions` and `/build` reopen the selected checked build. Approval pins the previewed revision and sends **guide + 3D model + parts CSV**. `/manual` prepares an optional PDF, and the guide provides the same download. `/retry` sends only unacknowledged items for the saved approved revision; switching the current selection does not change that retry. Older approval records keep their original model/PDF/parts bundle. A new approval without a configured guide URL also uses that bundle.
 
-## What each option actually provides
+The transport calls Spectrum's `app(url, { layout })`, then attempts a plain HTTPS link as fallback. The recipient installs the [Spectrum iMessage launcher](https://apps.apple.com/ca/app/spectrum-apps-in-messages/id6777616651) once for app cards; a browser can open the ordinary link without it. This reuses a web guide inside Spectrum, not a custom native iMessage extension. No `live: true` hint is needed for the implemented card. Photon documents the app-card mechanism, but that does not prove our WebGL gestures work in every extension/device combination. [Photon app cards](https://photon.codes/docs/spectrum-ts/content/app)
 
-| Option | User-controlled rotation? | Where it runs | What remains unverified |
-| --- | --- | --- | --- |
-| PNG preview | No | Ordinary image message | Actual delivery and appearance through this account |
-| Looping GIF turntable | No; pre-rendered viewpoints | Image message | Looping/compression through Photon and recipient settings |
-| MP4 turntable | No; playback is a recording | Video message/player | Codec compatibility, compression, autoplay, and looping |
-| USDZ attachment | A real interactive model in Quick Look | Native preview opened from Messages | Photon delivery, final production artifact, metric scale/AR, additional devices/builds |
-| HTTPS Three.js viewer | Yes; existing OrbitControls | Web page opened from the link | Touch gestures/performance on the target phone |
-| Spectrum `app(url, { live: true })` | Candidate for our interactive web viewer | Installed Spectrum extension in Messages | WebGL, OrbitControls, layout, and any extension restrictions |
-| Custom iMessage extension | Can supply a custom interactive 3D view | Own installed iMessage extension | Native app implementation, signing, distribution, device testing |
+Quick Look viewing is not approval. No reviewed generic-attachment contract reports that the user rotated or approved the model. Feedback and approval remain explicit chat messages.
 
-“Native 3D” here means a 3D file opened by Apple's system viewer. It does not mean the closed file bubble itself becomes a freely rotatable model. “Live app card” means an installed extension supplies interactive content; sending a URL alone does not prove the extension will render our WebGL scene correctly.
+## Model files: viewing copy and full exact export
 
-## USDZ and the native viewer
+| Entry | Contents and purpose |
+| --- | --- |
+| Instruction guide | Canonical validated parts and placements, step navigation, owned-part allocation, optional downloads |
+| `/model` and normal approved model delivery | `/api/designs/:id/mobile.usdz`, a phone viewing copy with all bodies, colors, exposed studs and imported surfaces; covered ordinary stud detail is omitted |
+| Full model download in the guide | `/api/designs/:id/model.usdz`, preserving the full canonical geometry |
+| `/manual` | PDF derived from the exact checked assembly sequence |
+| `/parts` | Exact part/color quantities, owned-stock allocation and catalog links |
 
-Apple's AR Quick Look documentation supports USDZ or Reality files and touch manipulation of the displayed model. Its WWDC discussion explicitly describes rotation gestures. These establish the platform capability; they do not establish that our generated model or Photon delivery works on a particular device. [Previewing a model](https://developer.apple.com/documentation/arkit/previewing-a-model-with-ar-quick-look), [Apple's rotation discussion](https://developer.apple.com/videos/play/wwdc2019/612/)
+The mobile file does not change the saved design, stock constraints, BOM or instructions. Both model endpoints identify the same immutable revision, have separate export caches, and use `model/vnd.usdz+zip`. Model and PDF routes support GET, HEAD and single byte ranges. The viewer copy must not be described as triangle-identical to the full export.
 
-Spectrum accepts file attachments from a path, URL, or buffer with explicit filename and MIME type. The prepared transport code uses a `.usdz` filename and `model/vnd.usdz+zip`. The installed `@spectrum-ts/imessage` 12.10.1 attachment path uploads generic file content; no USDZ-specific success guarantee is documented. This is a supported API shape plus an integration hypothesis that requires a real-device test. [Photon attachment API](https://photon.codes/docs/spectrum-ts/content/attachments)
+The full native exporter uses actual catalog geometry, Y-up orientation, 8 mm stud spacing, 3.2 mm plate spacing and 9.6 mm full-brick height. It excludes the display pedestal, UI, lights and decorative highlights. Large models share part geometry across placements. Archive tests verify canonical transforms, surfaces and colors; these are artifact checks, not mechanical simulation or a hand-build. [Three.js USDZ exporter](https://threejs.org/docs/pages/USDZExporter.html), [Apple asset guidance](https://developer.apple.com/videos/play/wwdc2023/10274/)
 
-The web app serves `/api/designs/:id/model.usdz` with that MIME type. **Let's build → Native 3D model** saves a design/inventory snapshot and downloads the USDZ. The current button is a download action; opening Quick Look directly from Safari is a separate optional improvement. WebKit documents an anchor with `rel="ar"` and a single image/picture child for that flow. An ordinary direct file link can require an additional thumbnail tap. [WebKit's USDZ guide](https://webkit.org/blog/8421/viewing-augmented-reality-assets-in-safari-for-ios/)
+Photon's installed transport caps a request at 100 MiB. Files over 1 MiB try the installed OpenUSD tools to encode the layers as binary USDC while preserving shared references. This storage conversion is separate from the mobile copy's covered-stud omission. If tools are absent, the original archive remains; an oversized file gets a clear guide-download fallback. A binary conversion of the approved Wilson retained 27 shared shapes and 1,961 placements, reducing 9,156,965 to 2,619,483 bytes in the recorded local check. An accepted upload is not proof the phone opened it.
+
+## Normal viewing and optional AR
+
+Apple lists Messages among its built-in USDZ viewers. Tapping a compatible attachment opens a manipulable model in Quick Look; the file bubble itself is not a rotatable scene. Normal object viewing should be the first device check. A recorded turntable GIF/video cannot replace user-controlled rotation. [Apple Quick Look gallery](https://developer.apple.com/quick-look-gallery/), [Apple rotation demonstration](https://developer.apple.com/videos/play/wwdc2019/612/)
+
+On a supported browser, the guide offers an AR anchor with `rel="ar"` and an image child. It points at the signed model endpoint. Other browsers retain a normal model download. Safari is the fallback if the Spectrum web view does not support the AR launch. A camera is unnecessary for the guide's normal building mode. [Apple AR Quick Look](https://developer.apple.com/documentation/arkit/previewing-a-model-with-ar-quick-look), [WebKit's link format](https://webkit.org/blog/8421/viewing-augmented-reality-assets-in-safari-for-ios/)
 
 ```html
-<!-- Optional direct-launch UI pattern. Both file endpoints exist locally;
-     the current export button downloads the USDZ instead. -->
-<a rel="ar" href="/api/designs/DESIGN_ID/model.usdz">
-  <img src="/api/designs/DESIGN_ID/preview.png" alt="Open this build in 3D" />
+<!-- Schematic: the application supplies the exact revision and signed token. -->
+<a rel="ar" href="/api/designs/DESIGN_ID/model.usdz?share=SIGNED_TOKEN">
+  <img src="ar-icon.svg" alt="View this build in your room" />
 </a>
 ```
 
-Quick Look viewing should not be treated as approval. No reviewed Photon contract provides a “user rotated the model” or “approved in Quick Look” event for a generic attachment. Keep approval and changes explicit in the conversation.
+## Signed read-only sharing
 
-## GIFs and video
+`PUBLIC_BASE_URL` must identify an HTTPS origin forwarding to **`127.0.0.1:3002`**, the separate read-only listener in the API process. Never expose the private port 3001 API or Vite to make the phone guide work. Build the production web assets first. `/api/designs/:id/instructions-link` is a local API operation returning `/?build=<id>&share=<token>`; it is not publicly exposed.
 
-Apple documents sending and receiving GIFs in Messages. It also exposes an accessibility setting that disables automatic animated-image playback in Messages. Therefore a GIF can be a convenient looping preview, but autoplay is a recipient preference, not something our agent can guarantee. Include a useful first frame. [Apple GIF support](https://support.apple.com/en-ie/118278), [Motion settings](https://support.apple.com/en-ae/guide/iphone/iph0b691d3ed/ios)
+The public gateway binds the token to one saved revision, allows required public assets and that revision's approved read-only endpoints, and rejects mutations, job/status/catalog routes and arbitrary paths. Public JSON omits prompt, input photos and research. Required-part allocation preserves owned quantities and provenance without exposing unrelated stock. Private responses use `Cache-Control: private, no-store` and `Referrer-Policy: no-referrer`.
 
-Apple supports video sharing through Messages, but the reviewed sources do not promise that an arbitrary MP4 attachment will loop or autoplay in the transcript. Treat it as a short video requiring playback, and verify its presentation. Size limits may depend on the service. A six-second, modest-resolution turntable is a proposed starting point, not a platform guarantee. [Apple photo/video sharing](https://support.apple.com/guide/iphone/share-photos-and-videos-iphf28f17237/ios)
+Keep `data/instruction-share-key` private and persistent. A signed link grants bearer access, so its recipient can forward it. Replacing the key invalidates old links. For an authorized temporary test, `cloudflared tunnel --url http://127.0.0.1:3002` provides a random HTTPS origin. Quick Tunnels stop with the process, change hostname when recreated, and carry no production uptime guarantee. Use durable hosting or a named tunnel for persistent links; do not claim a temporary demo URL is permanent. [Cloudflare Quick Tunnels](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/)
 
-A turntable should be rendered from the **same validated brick geometry** as the manual. Do not use a generative image/video model to invent a prettier build that differs from the actual parts and coordinates.
+## Verification still required on the recipient phone
 
-## Photon app cards and true interaction inside Messages
+- Open the guide from both the Spectrum card and plain link; verify gestures, gather tray, first/last placements, step jumps and resumed progress.
+- Approve a revision, then change the current selection and `/retry`; confirm only missing items from the approved revision arrive.
+- Open and rotate the mobile USDZ; compare its visible surfaces with the full model, and test the full exact download separately.
+- Try Safari AR independently. Verify scale/orientation and keep ordinary 3D working when camera access or AR support is absent.
+- Request the optional PDF and check readable diagrams, exact parts and source-set allocations on the same revision.
 
-The current Spectrum API exposes `app(url, { live: true })`; `live` is a rendering hint, with static/URL fallback when a live surface is unavailable. Photon says its app cards open in the Spectrum iMessage App, installed once by the recipient. The [official App Store listing](https://apps.apple.com/ca/app/spectrum-apps-in-messages/id6777616651) describes interactive cards and web content, and currently requires iOS 17 or later. [Photon API](https://photon.codes/docs/spectrum-ts/content/app)
-
-Reusing our existing public Three.js viewer in that extension is the smallest experiment. However, the reviewed documentation does **not explicitly promise WebGL support or successful OrbitControls gestures**. Test that before describing it as interactive native 3D. The listing's general support for web content is evidence for an experiment, not proof for our scene.
-
-Photon also exposes `customizedMiniApp` with an extension bundle ID, team ID, URL, visual layout, and optional `live`. A matching extension must be installed. Merely inventing those identifiers will not create a working native app. [Customized cards](https://photon.codes/docs/spectrum-ts/providers/imessage/messaging-features/apps)
-
-Apple's `MSMessageLiveLayout` allows custom interactive transcript views and requires an alternative layout for recipients without the app. A dedicated extension could host a 3D view, but building and distributing one is a separate native-app project. It is unnecessary for the first Quick Look path. [Apple live layout](https://developer.apple.com/documentation/messages/msmessagelivelayout), [Messages framework](https://developer.apple.com/documentation/messages)
-
-## Implementation and remaining work
-
-The installed Photon transport rejects requests larger than 100 MiB. The listener now converts large ASCII USDZ exports to binary USDC inside an aligned USDZ using OpenUSD's `usdcat` and `usdzip`, when available. It keeps the same scene, geometry, materials and transforms; it does not remove pieces. A real 1,282-piece garden changed from 187,663,313 to 48,567,100 bytes and passed a Photon upload check after the original failed. The user then retried `/model` and confirmed that this binary garden arrived, opened and rotated on the phone. If tools are absent or a file remains too large, the saved web export remains available; a public phone link requires `PUBLIC_BASE_URL`.
-
-1. **Shared geometry is implemented.** `shared/brick-geometry.ts` builds the exact bodies, studs, and catalog colors used by `src/BrickScene.tsx` and the native exporter. The USDZ excludes the display pedestal, UI, grid, lights, and decorative outlines.
-2. **Offline USDZ export is implemented and tested.** `server/native-model.ts` validates the design and combines its exact bodies/studs into bounded indexed meshes grouped by color before calling Three.js `USDZExporter.parseAsync` with `quickLookCompatible: true`. Untextured `MeshStandardMaterial` keeps this path independent of browser canvas APIs. Tests compare actual archived triangle corners, normals, and colors with the canonical model, including every catalog part at all four yaws and all curated samples. Every geometry reference resolves. [Official Three.js exporter documentation](https://threejs.org/docs/pages/USDZExporter.html)
-3. **Scale and orientation are tested in the exported archive.** The model is Y-up, with 8 mm stud spacing and 9.6 mm layer spacing. Tests check the actual USDA transforms and vertices, rotated footprints, all bodies/studs, and uncompressed ZIP entries aligned to 64 bytes. The cosmetic body gap leaves the bottom 0.04 mm above the ground, matching the web geometry. Apple's Quick Look respects USDZ unit metadata. [Apple's asset guidance](https://developer.apple.com/videos/play/wwdc2023/10274/)
-4. **Web download and attachment code are implemented; automated Photon delivery remains untested.** The web export button and `/api/designs/:id/model.usdz` route call the same batched exporter. After the PNG and optional web link, the adapter prepares a USDZ attachment with the correct MIME type and a caption explaining the feedback loop. Native export/delivery errors leave the earlier preview and manual available. A new revision has a new design ID. User-controlled manual delivery of the diagnostic six-mesh castle opened and rotated on an iPhone 14; this does not verify the configured Photon line.
-5. **The feedback loop remains explicit in iMessage.** A text revision passes the current design and saved inventory to `generateDesign`, then sends the updated preview. The existing `manual` command produces instructions without inventing a viewing/approval event.
-6. **Turntable and app cards remain future work.** A turntable is optional preview media. A live card is a separate device test with the Spectrum extension installed, retaining a regular link fallback.
-
-This work should not change inventory constraints, the validated model, or manual generation. Voice memo input/output with ElevenLabs remains a later feature and is not part of this transport plan.
-
-## Required real-device checks before claiming completion
-
-- Deliver a small known-good USDZ through the configured Photon line; open it from Messages and manipulate it with touch.
-- Deliver one exported Large Lego Model design; inspect color, orientation, studs, centering, scale, and native object/AR behavior.
-- Test the HTTPS viewer and downloaded USDZ separately on the actual recipient phone. If a direct Safari Quick Look action is later added, test that separately too.
-- Send a revision from iMessage and confirm the new model, preserved owned inventory, and resulting PDF all correspond to the new design ID.
-- If adding GIF/video, test recipient motion settings and first-frame usefulness; do not require autoplay for comprehension.
-- If adding a live app card, test the install/fallback experience and then the existing WebGL viewer's gestures inside Spectrum. Document the tested iOS and Spectrum versions.
-
-Research, offline USDZ generation, local artifact tests, and the web download integration are implemented. Manual diagnostic castle attachment opening/rotation was confirmed by the user on an iPhone 14. Final production attachment delivery, additional builds/devices, metric scale, and AR require separate checks. AR is outside the current acceptance scope. Turntable generation, a direct Safari Quick Look launch action, and live app-card integration remain unimplemented. Photon delivery remains unverified. Follow [the live test guide](live-testing.md) when credentials and a phone are available.
+The implementation uses Spectrum attachment buffers with explicit filename and MIME type. Those documented API shapes and mocked transport checks are separate from live recipient evidence. Voice memos, turntable media and a custom native iMessage extension remain outside this increment. [Photon attachments](https://photon.codes/docs/spectrum-ts/content/attachments), [live test guide](live-testing.md)

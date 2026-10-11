@@ -6,6 +6,11 @@ type RenderOptions = {
   highlightIds?: string[];
   width?: number;
   height?: number;
+  /** Close instruction view; all visible solids intersecting the crop remain. */
+  focusIds?: string[];
+  showCue?: boolean;
+  arrows?: { from: PartPoint; to: PartPoint }[];
+  labels?: { point: PartPoint; text: string }[];
 };
 
 const escapeXml = (value: string) => value.replace(/[&<>"']/g, (character) => ({
@@ -238,18 +243,36 @@ export function renderDesignSvg(design: Design, options: RenderOptions = {}): st
   const catalog = catalogForDesign(design);
   const width = options.width ?? 1000;
   const height = options.height ?? 650;
-  const showCue = width >= 300 && height >= 200;
+  const showCue = options.showCue ?? (width >= 300 && height >= 200);
   if (!design.bricks.length) return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"/>`;
+  const visible = options.visibleIds ? new Set(options.visibleIds) : null;
+  const focused = options.focusIds?.length ? new Set(options.focusIds) : null;
+  const bounds = new Map<string, [number, number, number, number]>();
   let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
   for (const brick of design.bricks) {
     const size = footprint(brick, catalog);
+    let bl = Infinity, br = -Infinity, bt = Infinity, bb = -Infinity;
     for (const x of [brick.x, brick.x + size.width]) for (const y of [brick.y, brick.y + size.depth]) {
       for (const z of [brick.z, brick.z + partHeight(brick, catalog) + 0.5]) {
         const [px, py] = project(x, y, z);
-        left = Math.min(left, px); right = Math.max(right, px);
-        top = Math.min(top, py); bottom = Math.max(bottom, py);
+        bl = Math.min(bl, px); br = Math.max(br, px);
+        bt = Math.min(bt, py); bb = Math.max(bb, py);
       }
     }
+    bounds.set(brick.id, [bl, br, bt, bb]);
+    if (!focused || focused.has(brick.id) && (!visible || visible.has(brick.id))) {
+      left = Math.min(left, bl); right = Math.max(right, br);
+      top = Math.min(top, bt); bottom = Math.max(bottom, bb);
+    }
+  }
+  // Invalid focus IDs must not produce an unusable SVG.
+  if (!Number.isFinite(left)) return renderDesignSvg(design, { ...options, focusIds: undefined });
+  if (focused) {
+    for (const arrow of options.arrows || []) for (const point of [arrow.from, arrow.to]) {
+      const [x, y] = project(...point); left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y);
+    }
+    const context = Math.max(1.5, Math.max(right - left, bottom - top) * 0.12);
+    left -= context; right += context; top -= context; bottom += context;
   }
   const padding = Math.min(width, height) * 0.06;
   const cueHeight = showCue ? 48 : 0;
@@ -262,9 +285,13 @@ export function renderDesignSvg(design: Design, options: RenderOptions = {}): st
     return [px * scale + offsetX, py * scale + offsetY];
   };
   const point = (x: number, y: number, z: number) => screen(x, y, z).map((value) => value.toFixed(2)).join(',');
-  const visible = options.visibleIds ? new Set(options.visibleIds) : null;
   const highlighted = options.highlightIds ? new Set(options.highlightIds) : null;
-  const bricks = design.bricks.filter((brick) => !visible || visible.has(brick.id));
+  const bricks = design.bricks.filter((brick) => {
+    if (visible && !visible.has(brick.id)) return false;
+    if (!focused) return true;
+    const [bl, br, bt, bb] = bounds.get(brick.id)!;
+    return br >= left && bl <= right && bb >= top && bt <= bottom;
+  });
   const occupied = new Set(bricks.flatMap((brick) => partBottomSites(brick, catalog).map(({ x, y, z }) => `${x},${y},${z}`)));
   const drawBrick = (brick: Brick) => {
     const faded = highlighted !== null && !highlighted.has(brick.id);
@@ -348,5 +375,18 @@ export function renderDesignSvg(design: Design, options: RenderOptions = {}): st
     <text x="66" y="${height - 16}" stroke="none">+X</text><text x="4" y="${height - 8}" stroke="none">+Y</text>
     <text x="47" y="${height - 48}" stroke="none">UP</text><text x="${width - 12}" y="${height - 14}" text-anchor="end" stroke="none">FRONT</text>
   </g>` : '';
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeXml(design.title)} brick model"><title>${escapeXml(design.title)}</title>${painterOrder(bricks.flatMap(drawBrick), point)}${cue}</svg>`;
+  const arrows = (options.arrows || []).map(arrow => {
+    const [x1, y1] = screen(...arrow.from), [x2, y2] = screen(...arrow.to);
+    const dx = x2 - x1, dy = y2 - y1, length = Math.hypot(dx, dy);
+    if (length < 1) return '';
+    const ux = dx / length, uy = dy / length, size = Math.min(9, length * 0.35);
+    return `<g data-placement-arrow="true" stroke="#007ca8" stroke-width="2.2" fill="#007ca8"><path d="M${x1},${y1} L${x2},${y2}"/><path d="M${x2},${y2} L${x2-ux*size-uy*size/2},${y2-uy*size+ux*size/2} L${x2-ux*size+uy*size/2},${y2-uy*size-ux*size/2} Z"/></g>`;
+  }).join('');
+  const labels = (options.labels || []).map(label => {
+    const [x, y] = screen(...label.point);
+    return `<g data-placement-label="${escapeXml(label.text)}"><circle cx="${x}" cy="${y}" r="9" fill="white" stroke="#007ca8" stroke-width="1.3"/><text x="${x}" y="${y+3.5}" font-family="Helvetica,Arial,sans-serif" font-size="10" text-anchor="middle" fill="#007ca8">${escapeXml(label.text)}</text></g>`;
+  }).join('');
+  const artwork = `${painterOrder(bricks.flatMap(drawBrick), point)}${arrows}${labels}`;
+  const clipped = focused ? `<defs><clipPath id="instruction-crop"><rect x="${left*scale+offsetX}" y="${top*scale+offsetY}" width="${(right-left)*scale}" height="${(bottom-top)*scale}"/></clipPath></defs><g clip-path="url(#instruction-crop)">${artwork}</g>` : artwork;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeXml(design.title)} brick model"><title>${escapeXml(design.title)}</title>${clipped}${cue}</svg>`;
 }

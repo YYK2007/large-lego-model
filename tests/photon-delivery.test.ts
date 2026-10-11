@@ -21,6 +21,58 @@ test('Photon snapshots its reversible visual-review setting and fetches parts fo
   }
 });
 
+test('the instruction-link API uses the exact revision and rejects unsigned, mismatched or credential-bearing links', async () => {
+  const id = 'approved-revision', good = `https://guide.example/?build=${id}&share=test-signature`;
+  for (const value of [good, null]) {
+    let requested = '';
+    const api = photonJobsApi('http://127.0.0.1:3001', async url => { requested = String(url); return Response.json({ url: value }); });
+    assert.equal(await api.instructionsLink!(id), value);
+    assert.match(requested, /\/api\/designs\/approved-revision\/instructions-link$/);
+  }
+  for (const url of ['http://guide.example/?build=approved-revision&share=s', 'https://user:secret@guide.example/?build=approved-revision&share=s',
+    'https://guide.example/?build=another&share=s', 'https://guide.example/?build=approved-revision', 123]) {
+    const api = photonJobsApi('http://127.0.0.1:3001', async () => Response.json({ url }));
+    await assert.rejects(api.instructionsLink!(id));
+  }
+});
+
+test('the API fetches a mobile viewing copy without substituting the approved revision or canonical export', async () => {
+  const calls: string[] = [];
+  const api = photonJobsApi('http://127.0.0.1:3001', async url => {
+    calls.push(String(url));
+    return new Response(String(url).endsWith('/mobile.usdz') ? 'mobile-copy' : 'canonical-copy', { headers: { 'Content-Type': 'model/vnd.usdz+zip' } });
+  });
+  assert.equal((await api.file('approved-revision', 'mobile.usdz')).toString(), 'mobile-copy');
+  assert.equal((await api.file('approved-revision', 'model.usdz')).toString(), 'canonical-copy');
+  assert.deepEqual(calls, ['http://127.0.0.1:3001/api/designs/approved-revision/mobile.usdz', 'http://127.0.0.1:3001/api/designs/approved-revision/model.usdz']);
+});
+
+test('instruction delivery uses the installed Spectrum app card with explicit layout plus the same Safari link', async () => {
+  const url = 'https://guide.example/?build=exact-revision&share=test-signature';
+  const sent: unknown[] = [];
+  const reply = photonReplies({ send: async (value: unknown) => {
+    sent.push(typeof value === 'string' ? value : await (value as { build(): Promise<unknown> }).build());
+  } } as Pick<Space, 'send'>);
+  await reply.instructions!(url, 'Pocket Rocket');
+  const card = sent[0] as { type: string; url(): Promise<string>; layout(): Promise<Record<string, string>>; live?: boolean };
+  assert.equal(card.type, 'app'); assert.equal(await card.url(), url); assert.equal(card.live, undefined);
+  assert.deepEqual(await card.layout(), { caption: 'Build Pocket Rocket', subcaption: 'Step-by-step 3D instructions', summary: 'Open this exact checked build' });
+  assert.equal(sent[1], `Your building guide. Open in Safari if you want to try AR:\n${url}`);
+});
+
+test('a guide is acknowledged if either its app card or plain link is accepted, and fails if both fail', async () => {
+  for (const fails of ['card', 'text', 'both']) {
+    const calls: string[] = [];
+    const reply = photonReplies({ send: async (value: unknown) => {
+      const type = typeof value === 'string' ? 'text' : 'card'; calls.push(type);
+      if (fails === 'both' || type === fails) throw new Error('Send failed');
+    } } as Pick<Space, 'send'>);
+    const delivery = reply.instructions!('https://guide.example/?build=id&share=s', 'Rocket');
+    if (fails === 'both') await assert.rejects(delivery, /Send failed/); else await delivery;
+    assert.deepEqual(calls, ['card', 'text']);
+  }
+});
+
 test('parts delivery retains CSV bytes and offers the parts command after a failed send', async () => {
   const bytes = Buffer.from('Part ID,Required\r\n3005,4\r\n');
   let delivered: { name: string; mimeType: string; read(): Promise<Buffer> } | undefined;
@@ -46,6 +98,7 @@ test('model delivery keeps its USDZ name and bytes and explains opening only aft
   assert.equal(file.mimeType, 'model/vnd.usdz+zip');
   assert.deepEqual(await file.read(), bytes);
   assert.match(String(sent[1]), /Tap the 3D file/);
+  assert.match(String(sent[1]), /viewing copy.*covered stud detail.*full file/);
 });
 
 test('manual delivery retains PDF bytes and gives the manual retry command after a failed send', async () => {

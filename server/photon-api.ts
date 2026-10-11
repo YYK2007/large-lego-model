@@ -12,8 +12,9 @@ export interface PhotonJobsApi {
   get(id: string): Promise<GenerationJob>;
   stop(id: string): Promise<GenerationJob>;
   design(id: string): Promise<SavedDesign>;
+  instructionsLink?(id: string): Promise<string | null>;
   preview(id: string, attempt: number): Promise<Buffer>;
-  file(id: string, format: 'manual.pdf' | 'model.usdz' | 'parts.csv'): Promise<Buffer>;
+  file(id: string, format: 'manual.pdf' | 'model.usdz' | 'mobile.usdz' | 'parts.csv'): Promise<Buffer>;
 }
 
 /** Uses the API's existing worker queue; never opens a second job-store owner. */
@@ -43,6 +44,14 @@ export function photonJobsApi(base = 'http://127.0.0.1:3001', request: typeof fe
       const design = await (await response(`/designs/${encodeURIComponent(id)}`)).json() as Design;
       if (design.id !== id || !validateDesign(design).valid) throw new PhotonInputError('That saved build did not pass its brick checks. Your selected build is unchanged.');
       return design;
+    },
+    instructionsLink: async id => {
+      const value = await (await response(`/designs/${encodeURIComponent(id)}/instructions-link`)).json() as { url?: unknown };
+      if (value.url === null) return null;
+      if (typeof value.url !== 'string') throw new PhotonInputError('The building guide link is unavailable. Your checked build is saved.');
+      const url = new URL(value.url);
+      if (url.protocol !== 'https:' || url.username || url.password || url.searchParams.get('build') !== id || !url.searchParams.get('share')) throw new PhotonInputError('The building guide link did not match this build. Your checked build is saved.');
+      return url.href;
     },
     preview: async (id, attempt) => Buffer.from(await (await response(`${idPath(id)}/attempts/${attempt}/preview.svg`)).arrayBuffer()),
     // Large manuals contain hundreds of exact assembly steps. Their first

@@ -44,11 +44,14 @@ test('conversation storage keys are scoped to platform and safe for filesystem p
   assert.notEqual(sessionKey('a', 'b\0c'), sessionKey('a\0b', 'c'));
 });
 
-test('manual commands do not swallow requests mentioning instructions', () => {
-  assert.deepEqual(routeText(' /Instructions '), { kind: 'manual', prompt: '' });
+test('instruction-guide and PDF commands do not swallow requests mentioning instructions', () => {
+  assert.deepEqual(routeText(' /Instructions '), { kind: 'instructions', prompt: '' });
+  assert.deepEqual(routeText('/build'), { kind: 'instructions', prompt: '' });
+  assert.deepEqual(routeText('/manual'), { kind: 'manual', prompt: '' });
   assert.deepEqual(routeText('make the instructions simpler'), { kind: 'design', prompt: 'make the instructions simpler' });
   assert.deepEqual(routeText('/new a red rocket'), { kind: 'new', prompt: 'a red rocket' });
   assert.deepEqual(routeText('/new'), { kind: 'new', prompt: '' });
+  assert.deepEqual(routeText('build a boat'), { kind: 'design', prompt: 'build a boat' });
 });
 
 test('approval phrases are exact; qualified approval remains feedback and parts is an explicit command', () => {
@@ -75,6 +78,9 @@ test('approval history is detached on restore, retained across imports, and reje
   const imported = importSavedDesign(restored, savedBuild);
   assert.equal(imported.approvedDesignId, savedBuild.id); assert.deepEqual(imported.approvedDeliveries, restored.approvedDeliveries);
   for (const approvedDeliveries of [null, [], { '../path': {} }, { valid: { model: false } }, { valid: { unknown: true } }]) assert.throws(() => parseConversation({ handledIds: [], approvedDeliveries }), /approval deliveries/);
+  const guide = { [savedBuild.id]: { mode: 'guide' as const, instructions: true as const, model: true as const } };
+  assert.deepEqual(parseConversation({ handledIds: [], approvedDeliveries: guide }).approvedDeliveries, guide);
+  for (const row of [{ mode: true }, { mode: 'legacy' }, { instructions: false }]) assert.throws(() => parseConversation({ handledIds: [], approvedDeliveries: { valid: row } }), /approval deliveries/);
 });
 
 test('conversational status and explicit quality phrases route without becoming new build subjects', () => {

@@ -1,5 +1,5 @@
-import type { BuildStep } from '../shared/model.js';
-import type { AssemblyPoint } from '../shared/assembly.js';
+import type { BuildStep } from './model.js';
+import type { AssemblyPoint } from './assembly.js';
 
 export type ManualStepGroup = {
   kind: 'single' | 'placements' | 'stack';
