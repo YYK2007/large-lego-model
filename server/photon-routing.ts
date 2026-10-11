@@ -34,6 +34,7 @@ export interface Conversation {
   lastProgressAt?: number;
   lastProgressKey?: string;
   feedbackDesignId?: string;
+  fallbackBuild?: { designId: string; requestKind: PendingPhotonRequest['kind']; prompt?: string; image?: PhotonImage };
   approvedDesignId?: string;
   approvedDeliveries?: Record<string, ApprovedDelivery>;
 }
@@ -166,7 +167,16 @@ export function parseConversation(value: unknown): Conversation {
     if (!request || !['new', 'design'].includes(request.kind as string) || typeof request.prompt !== 'string' || request.prompt.length > 4000) throw new Error('Invalid saved pending request.');
     pendingRequest = { kind: request.kind as 'new' | 'design', prompt: request.prompt, ...(request.image === undefined ? {} : { image: parseImage(request.image) }) };
   }
+  let fallbackBuild: Conversation['fallbackBuild'];
+  if (data.fallbackBuild !== undefined) {
+    const fallback = data.fallbackBuild as NonNullable<Conversation['fallbackBuild']>;
+    if (!fallback || !validDesignId(fallback.designId) || !['new', 'design'].includes(fallback.requestKind)
+      || fallback.prompt !== undefined && (typeof fallback.prompt !== 'string' || fallback.prompt.length > 4000)) throw new Error('Invalid saved fallback build.');
+    fallbackBuild = { designId: fallback.designId, requestKind: fallback.requestKind,
+      ...(fallback.prompt === undefined ? {} : { prompt: fallback.prompt }), ...(fallback.image === undefined ? {} : { image: parseImage(fallback.image) }) };
+  }
   return {
+    ...(fallbackBuild ? { fallbackBuild } : {}),
     ...(data.designId ? { designId: data.designId as string } : {}),
     inventory: inventorySnapshot(data.inventory, inventoryCatalog),
     ...(inventoryCatalog ? { inventoryCatalog } : {}),

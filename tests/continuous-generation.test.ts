@@ -41,6 +41,23 @@ async function setup(t: TestContext, reply: (record: Record, n: number) => unkno
 const cancelled = (error: unknown) => error instanceof GenerationError && error.status === 499;
 const text = (record: Record) => record.body.contents[0].parts.flatMap(part => part.text ? [part.text] : []).join('\n');
 
+test('a malformed repair cannot replace the last complete geometry used by the next edit', async t => {
+  const sections = [{ z: 0, cx: 14, cy: 2, width: 4, depth: 4 }, { z: 9, cx: 14, cy: 2, width: 4, depth: 4 }];
+  const disconnected = { ...plan, profiles: [{ shape: 'rectangle', colorId: 4, sections }] };
+  const flow = await setup(t, (_record, n) => n === 1 ? disconnected
+    : n === 2 ? { edits: [{ op: 'remove', path: '/profiles/0/sections/1', valueJson: 'null' }] }
+    : { edits: sections.map((_, index) => ({ op: 'replace', path: `/profiles/0/sections/${index}/cx`, valueJson: '2' })) });
+  const attempts: GenerationAttempt[] = [];
+  const result = await generateDesign({ prompt: 'Build this sculpture', image: flow.image, quality: 'quick' }, undefined,
+    { continuous: true, visualReview: false, onAttempt: value => { attempts.push(value); } });
+  assert.deepEqual(attempts.map(value => value.status), ['invalid', 'invalid', 'valid']);
+  assert.match(attempts[1].checks.join(' '), /at least two sections/);
+  assert.equal(attempts[1].plan!.profiles![0].sections.length, 1, 'Retain the rejected patch for diagnosis');
+  assert.equal(attempts[2].plan!.profiles![0].sections.length, 2, 'Repair resumes from the complete prior profile');
+  assert.equal(validateDesign(result).valid, true);
+  assert.deepEqual(flow.records.map(record => record.kind), ['plan', 'patch', 'patch']);
+});
+
 test('Stop during a valid draft save cannot lose or duplicate its completed attempt output', async t => {
   const controller = new AbortController(), attempts: GenerationAttempt[] = [];
   const flow = await setup(t, record => record.kind === 'critic' ? matched : plan);

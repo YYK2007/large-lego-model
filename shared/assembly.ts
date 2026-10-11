@@ -94,7 +94,22 @@ export function planAssembly(input: AssemblyPart[]): AssemblyPlan {
   // are not placed yet. Seat it before those lower pieces seal lateral entry.
   // Try one additional schedule, preserving every exact movement check.
   const hanging = planOrder(parts, below, above, new Set(), true);
-  return hanging.valid ? hanging : first;
+  if (hanging.valid) return hanging;
+  // A nearby lower course can close a hanger's entry before its upper anchor
+  // becomes eligible. Build that anchor's support chain first, then seat the
+  // hanger before the surrounding courses. This is one bounded order retry.
+  const anchors = new Set<number>();
+  parts.forEach((part, i) => {
+    if (!blocked.has(part.id)) return;
+    anchors.add(i);
+    for (const anchor of above[i]) anchors.add(anchor);
+  });
+  const supportChain = [...anchors];
+  for (let next = 0; next < supportChain.length; next++) for (const support of below[supportChain[next]]) {
+    if (!anchors.has(support)) { anchors.add(support); supportChain.push(support); }
+  }
+  const anchored = planOrder(parts, below, above, anchors, true);
+  return anchored.valid ? anchored : first;
 }
 
 function planOrder(parts: AssemblyPart[], below: Set<number>[], above: Set<number>[], preferred: Set<number>, hangingFirst = false): AssemblyPlan {

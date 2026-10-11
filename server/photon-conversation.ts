@@ -148,7 +148,7 @@ export class PhotonConversation {
   }
   private completionMessage(job: GenerationJob, design?: SavedDesign) {
     const saved = design ? `Your checked draft is kept. ${this.feedbackPrompt(design)}${this.link('design', design.id)}`
-      : this.state.designId ? 'Your previous checked build is kept. Tell me what to change, or approve its preview when you’re happy with it.' : 'No checked draft was produced.';
+      : this.state.designId ? 'Your previous checked build is kept; it is not a result for this latest request. Describe a change to that earlier preview, or resend your latest idea to try it again.' : 'No checked draft was produced.';
     if (job.status === 'cancelled' || job.status === 'interrupted') return `The build ${job.status === 'cancelled' ? 'was stopped' : 'was interrupted'}. ${saved} ${this.qualitySelectionEnabled ? 'Reply Quick or Detailed when you want to try again.' : 'Send your idea or a change when you want to try again.'}`;
     const matched = design?.research?.comparison.status === 'matched';
     const problem = job.error ? ` ${buildProblem([job.error.message, ...job.error.checks])}` : '';
@@ -193,10 +193,26 @@ export class PhotonConversation {
     this.commands = task.catch(() => {});
     return task;
   }
+  private async restoreEarlierBuild(job: GenerationJob) {
+    if (isActiveJob(job) || job.resultId || job.bestDraftId || this.state.feedbackDesignId || this.changing) return;
+    const id = this.state.fallbackBuild?.designId || this.state.designId || this.state.approvedDesignId;
+    if (!id) return;
+    const version = this.workVersion, design = await this.api.design(id);
+    if (version !== this.workVersion || this.state.jobId !== job.id || this.changing) return;
+    // Old sessions may have already lost their selected ID. An approved saved
+    // revision is recoverable, but never a result for the failed new subject.
+    this.state.fallbackBuild ??= { designId: id, requestKind: 'new', prompt: design.prompt };
+    this.state.fallbackBuild.prompt ??= design.prompt;
+    await this.tell(`Your latest request has no checked result. Here is your earlier saved build: ${design.title}. This is the earlier preview, not a new result.\n${this.feedbackPrompt(design)}`, job.id);
+    if (version !== this.workVersion || this.state.jobId !== job.id || this.changing) return;
+    await this.reply.designPreview(design);
+    if (version !== this.workVersion || this.state.jobId !== job.id || this.changing) return;
+    this.state.designId = id; this.state.feedbackDesignId = id; await this.persist();
+  }
   private async checkedDraft(job: GenerationJob, announce: boolean) {
     const version = this.workVersion;
     const id = job.resultId || job.bestDraftId;
-    if (!id) return;
+    if (!id) { await this.restoreEarlierBuild(job); return; }
     const design = await this.api.design(id);
     if (version !== this.workVersion || this.state.jobId !== job.id || announce && (this.changing || this.state.finishedJobId === job.id)) return;
     if (!announce || this.state.lastDraftId === id) {
@@ -207,6 +223,7 @@ export class PhotonConversation {
     if (this.state.jobId !== job.id || this.changing || this.state.finishedJobId === job.id) return;
     await this.reply.designPreview(design);
     if (this.state.jobId === job.id && !this.changing && this.state.finishedJobId !== job.id) {
+      delete this.state.fallbackBuild;
       this.state.designId = id; this.state.feedbackDesignId = id; this.state.lastDraftId = id; this.state.lastDeliveryAt = this.now(); await this.persist();
     }
     return design;
@@ -256,10 +273,18 @@ export class PhotonConversation {
     const selectedId = previousId || (request.kind !== 'new' ? this.state.designId : undefined);
     const previous = selectedId ? await this.api.design(selectedId) : undefined;
     if (version !== this.workVersion) return;
-    const image = request.image ?? (request.kind === 'new' ? undefined : this.state.pendingImage);
-    const prompt = request.kind !== 'new' && this.state.requestPrompt && request.prompt !== this.state.requestPrompt
-      ? `${this.state.requestPrompt}\nRequested change: ${request.prompt}` : request.prompt;
+    const fallback = this.state.fallbackBuild;
+    const earlier = request.kind !== 'new' && fallback?.designId === selectedId && request.prompt !== this.state.requestPrompt ? fallback : undefined;
+    const originalPrompt = earlier ? earlier.prompt || previous?.prompt : this.state.requestPrompt;
+    const image = request.image ?? (request.kind === 'new' ? undefined : earlier ? earlier.image : this.state.pendingImage);
+    const prompt = request.kind !== 'new' && originalPrompt && request.prompt !== originalPrompt
+      ? `${originalPrompt}\nRequested change: ${request.prompt}` : request.prompt;
     if (prompt.length > 4000) throw new PhotonInputError('This conversation request is too long. Send /new followed by the full updated description.');
+    const retainedId = this.state.feedbackDesignId || this.state.designId || this.state.approvedDesignId;
+    if (retainedId) this.state.fallbackBuild = fallback?.designId === retainedId
+      ? { ...fallback, requestKind: request.kind }
+      : { designId: retainedId, requestKind: request.kind,
+        ...(this.state.designId === retainedId ? { prompt: this.state.requestPrompt, image: this.state.pendingImage } : {}) };
     const requestId = randomUUID();
     this.state.jobId = requestId; this.state.lastAttempt = 0; this.state.requestPrompt = prompt; this.state.quality = quality;
     this.state.lastDeliveryAt = acknowledgedAt;
@@ -267,7 +292,8 @@ export class PhotonConversation {
     delete this.state.pendingRequest; delete this.state.pendingQuality;
     delete this.state.feedbackDesignId;
     if (image) this.state.pendingImage = image; else delete this.state.pendingImage;
-    if (request.kind === 'new') delete this.state.designId;
+    // Keep the earlier checked selection; the active-job approval gate blocks
+    // exports until this request produces a preview or terminates.
     await this.persist();
     if (version !== this.workVersion) return;
     // The persisted ID binds an interrupted HTTP response to this one request.
@@ -302,6 +328,11 @@ export class PhotonConversation {
         // Stopping may expose a newer worker draft. Approval stays on the preview
         // the user saw, never the latest result returned by the worker.
         this.state.designId = id; this.state.lastDraftId = id; this.state.approvedDesignId = id;
+        if (this.state.fallbackBuild?.designId === id) {
+          this.state.requestPrompt = this.state.fallbackBuild.prompt || design.prompt;
+          this.state.pendingImage = this.state.fallbackBuild.image;
+          delete this.state.fallbackBuild;
+        }
       }
       this.state.approvedDeliveries ??= {};
       if (!Object.hasOwn(this.state.approvedDeliveries, id)) this.state.approvedDeliveries = { ...this.state.approvedDeliveries, [id]: guideUrl ? { mode: 'guide' } : {} };
@@ -374,7 +405,7 @@ export class PhotonConversation {
         let answer;
         try {
           answer = await this.api.chat(command.prompt, {
-            originalRequest: this.state.requestPrompt, designId: selectedId, recentMessages: this.state.chatHistory,
+            originalRequest: this.state.fallbackBuild?.designId === selectedId ? this.state.fallbackBuild?.prompt : this.state.requestPrompt, designId: selectedId, recentMessages: this.state.chatHistory,
             hasPendingPhoto: Boolean(input.image || this.state.pendingImage || this.state.pendingRequest?.image),
             hasPendingRequest: Boolean(this.state.pendingRequest),
             hasActiveJob: Boolean(this.state.jobId && this.state.finishedJobId !== this.state.jobId),
@@ -408,7 +439,7 @@ export class PhotonConversation {
         if (this.exporting) {
           await this.exportMessage(`${this.exportStage(this.activeExport!)}. Your checked build is saved. /stop cancels this delivery and any active build.`); return;
         }
-        if (this.state.approvedDesignId && this.state.feedbackDesignId === this.state.approvedDesignId && this.state.designId === this.state.approvedDesignId && !this.state.pendingRequest) {
+        if (this.state.approvedDesignId && this.state.feedbackDesignId === this.state.approvedDesignId && this.state.designId === this.state.approvedDesignId && !this.state.pendingRequest && !this.state.fallbackBuild) {
           const sent = this.state.approvedDeliveries?.[this.state.approvedDesignId];
           const remaining = (sent?.mode === 'guide' ? ['instructions', 'model', 'parts'] as const : ['model', 'manual', 'parts'] as const).filter(kind => !sent?.[kind]);
           await this.tell(remaining.length ? `Your selected build is approved. Still to send: ${remaining.map(kind => exportLabels[kind]).join(', ')}. Send /retry to resend only the missing files.`
@@ -510,6 +541,7 @@ export class PhotonConversation {
         const design = await this.api.design(attempt.designId);
         if (version !== this.workVersion) return;
         delete this.state.pendingRequest; delete this.state.pendingQuality;
+        delete this.state.fallbackBuild;
         this.state.designId = design.id; this.state.lastDraftId = design.id; this.state.feedbackDesignId = design.id; await this.persist();
         await this.reply.text(`Using attempt ${attempt.attempt}: ${design.title}. Generation is stopped. ${this.feedbackPrompt(design)}${this.link('design', design.id)}`);
         await this.reply.designPreview(design); return;
@@ -542,7 +574,7 @@ export class PhotonConversation {
               await this.tell(`Your ${this.qualitySelectionEnabled ? `${job.quality === 'quick' ? 'Quick' : 'Detailed'} build` : 'build'} is already running. No second build was started. Describe a change first, or send /stop.`, job.id); return;
             }
           }
-          if (!request && this.state.requestPrompt) request = { kind: 'design', prompt: this.state.requestPrompt, ...(this.state.pendingImage ? { image: this.state.pendingImage } : {}) };
+          if (!request && this.state.requestPrompt) request = { kind: this.state.fallbackBuild?.requestKind ?? 'design', prompt: this.state.requestPrompt, ...(this.state.pendingImage ? { image: this.state.pendingImage } : {}) };
           else {
             this.state.pendingQuality = this.qualitySelectionEnabled ? command.quality : 'detailed'; await this.persist();
             await this.reply.text(`${this.qualitySelectionEnabled ? `${command.quality === 'quick' ? 'Quick' : 'Detailed'} selected. ` : ''}What would you like to build${request?.image ? ' from the photo' : ''}?`); return;
@@ -588,6 +620,7 @@ export class PhotonConversation {
       if (!this.changing && this.state.jobId === job.id && this.state.finishedJobId !== job.id) {
         await this.reply.preview(preview);
         if (!this.changing && this.state.jobId === job.id && this.state.finishedJobId !== job.id) {
+          delete this.state.fallbackBuild;
           this.state.feedbackDesignId = checked.id; this.state.designId = checked.id;
         }
       }

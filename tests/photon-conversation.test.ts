@@ -298,7 +298,8 @@ test('Quick with no valid draft keeps earlier selected build and offers Detailed
   const job = h.jobs.get(h.submitted[0].id)!; job.status = 'failed'; job.error = { message: 'Quick reached its time limit.', checks: [] };
   job.attempts = [{ attempt: 4, status: 'invalid', partial: true, checks: ['Disconnected stem'], previewAvailable: true, at: build.createdAt }];
   await conversation.poll(); await conversation.poll();
-  assert.equal(h.media.length, 0); assert.equal(h.state().designId, build.id);
+  assert.deepEqual(h.media, [`design:${build.id}`]); assert.equal(h.state().designId, build.id);
+  assert.ok(h.texts.some(text => /earlier saved build/.test(text)));
   assert.match(h.texts.at(-1)!, /without a draft that passes brick checks/); assert.match(h.texts.at(-1)!, /Reply Detailed/);
   await conversation.handle(message('/status'));
   assert.match(h.texts.at(-1)!, /without a draft that passes brick checks/);
@@ -1370,4 +1371,80 @@ test('an ambiguous make command edits the selected draft instead of restarting i
   assert.equal(h.submitted[0].input.prompt, 'Build a rocket\nRequested change: Make the roof red');
   assert.equal(h.state().approvedDesignId, undefined);
   assert.deepEqual(h.media, []);
+});
+
+
+test('failed new subjects retain the older preview across restart, retry the new subject, and revise the older context only on feedback', async () => {
+  const oldPhoto = { data: 'b2xk', mimeType: 'image/jpeg' }, newPhoto = { data: 'bmV3', mimeType: 'image/jpeg' };
+  const oldPrompt = 'Build a red rocket', newPrompt = 'Build a white lighthouse';
+  const inventory = [{ partId: '3005', colorId: 15, quantity: 20, source: 'My stock' }];
+  const h = harness({ handledIds: [], designId: build.id, feedbackDesignId: build.id, requestPrompt: oldPrompt, pendingImage: oldPhoto, inventory,
+    pendingRequest: { kind: 'new', prompt: newPrompt, image: newPhoto } }, false);
+  let conversation = h.create(); await conversation.handle(message('go ahead'));
+  assert.equal(h.submitted[0].input.previous, undefined);
+  assert.equal(h.state().designId, build.id); assert.equal(h.state().feedbackDesignId, undefined);
+  for (const command of ['/approve', '/model', '/instructions']) await conversation.handle(message(command));
+  assert.deepEqual(h.media, []);
+  let job = h.jobs.get(h.state().jobId!)!; job.status = 'failed'; job.error = { message: 'No valid arrangement', checks: [] };
+  conversation = h.create(); await conversation.poll();
+  assert.equal(h.state().designId, build.id); assert.equal(h.state().feedbackDesignId, build.id);
+  assert.equal(h.state().approvedDesignId, undefined); assert.equal(h.state().requestPrompt, newPrompt);
+  assert.deepEqual(h.media, [`design:${build.id}`]);
+  assert.ok(h.texts.some(text => /earlier saved build: Rocket.*earlier preview, not a new result/s.test(text)));
+  for (const command of ['/model', '/instructions', '/manual', '/parts']) await conversation.handle(message(command));
+  assert.deepEqual(h.media, [`design:${build.id}`]);
+  const count = h.texts.length; conversation = h.create(); await conversation.poll(); assert.equal(h.texts.length, count);
+  await conversation.handle(message('Detailed'));
+  assert.equal(h.submitted[1].input.prompt, newPrompt); assert.equal(h.submitted[1].input.previous, undefined);
+  assert.deepEqual(h.submitted[1].input.image, newPhoto); assert.deepEqual(h.submitted[1].input.inventory, inventory);
+  job = h.jobs.get(h.state().jobId!)!; job.status = 'failed'; await conversation.poll();
+  assert.equal(h.state().requestPrompt, newPrompt); assert.equal(h.state().fallbackBuild?.prompt, oldPrompt);
+  await h.create().handle(message('Make it taller'));
+  assert.equal(h.submitted[2].input.previous?.id, build.id);
+  assert.equal(h.submitted[2].input.prompt, `${oldPrompt}\nRequested change: Make it taller`);
+  assert.deepEqual(h.submitted[2].input.image, oldPhoto); assert.deepEqual(h.submitted[2].input.inventory, inventory);
+});
+
+test('legacy failed sessions recover the approved older preview without sending files or relabeling it as the failed subject', async () => {
+  const h = harness({ handledIds: [], jobId: 'failed-new-subject', requestPrompt: 'Build a lighthouse', approvedDesignId: build.id,
+    approvedDeliveries: { [build.id]: { model: true, parts: true } } }, false);
+  h.jobs.set('failed-new-subject', { id: 'failed-new-subject', status: 'failed', quality: 'detailed', createdAt: build.createdAt, updatedAt: build.createdAt, attempts: [], milestones: [] });
+  const conversation = h.create(); await conversation.handle(message('/status')); await conversation.poll();
+  assert.equal(h.state().designId, build.id); assert.equal(h.state().feedbackDesignId, build.id);
+  assert.equal(h.state().requestPrompt, 'Build a lighthouse'); assert.deepEqual(h.media, [`design:${build.id}`]);
+  assert.match(h.texts.at(-1)!, /couldn’t finish.*previous checked build.*not a result/s);
+  await h.create().handle(message('Make it taller'));
+  assert.equal(h.submitted[0].input.previous?.id, build.id);
+  assert.equal(h.submitted[0].input.prompt, `${build.prompt}\nRequested change: Make it taller`);
+});
+
+test('a failed older-preview send stays retryable and a new checked preview supersedes the retained selection', async () => {
+  const h = harness({ handledIds: [], designId: build.id, feedbackDesignId: build.id, requestPrompt: 'Build a rocket' }, false);
+  let conversation = h.create(); await conversation.handle(message('/new Build a lighthouse'));
+  const job = h.jobs.get(h.state().jobId!)!; job.status = 'failed';
+  const send = h.reply.designPreview; h.reply.designPreview = async () => { throw new Error('Preview unavailable'); };
+  await assert.rejects(conversation.poll(), /Preview unavailable/);
+  assert.equal(h.state().feedbackDesignId, undefined); assert.equal(h.state().finishedJobId, undefined);
+  h.reply.designPreview = send; conversation = h.create(); await conversation.poll();
+  assert.equal(h.state().feedbackDesignId, build.id);
+  await conversation.handle(message('Detailed'));
+  const newer = { ...build, id: 'checked-lighthouse', title: 'Lighthouse', prompt: 'Build a lighthouse' }; h.designs.set(newer.id, newer);
+  const next = h.jobs.get(h.state().jobId!)!; next.bestDraftId = newer.id; next.status = 'succeeded'; await conversation.poll();
+  assert.equal(h.state().feedbackDesignId, newer.id); assert.equal(h.state().fallbackBuild, undefined);
+  assert.equal(h.state().approvedDesignId, undefined);
+  await h.create().handle(message('Make it taller'));
+  assert.equal(h.submitted.at(-1)!.input.previous?.id, newer.id);
+  assert.equal(h.submitted.at(-1)!.input.prompt, 'Build a lighthouse\nRequested change: Make it taller');
+});
+
+
+test('explicitly approving a retained earlier preview selects its own context and leaves no automatic export path', async () => {
+  const h = harness({ handledIds: [], designId: build.id, feedbackDesignId: build.id, requestPrompt: 'Build a rocket' }, false);
+  const conversation = h.create(); await conversation.handle(message('/new Build a lighthouse'));
+  h.jobs.get(h.state().jobId!)!.status = 'failed'; await conversation.poll();
+  assert.deepEqual(h.media, [`design:${build.id}`]);
+  await conversation.handle(message('/approve'));
+  assert.equal(h.state().approvedDesignId, build.id); assert.equal(h.state().requestPrompt, 'Build a rocket');
+  assert.equal(h.state().fallbackBuild, undefined);
+  await h.create().handle(message('/status')); assert.match(h.texts.at(-1)!, /selected build is approved/);
 });

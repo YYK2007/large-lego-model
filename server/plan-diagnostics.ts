@@ -44,7 +44,7 @@ function primitives(plan: ShapePlanV2, catalog: CatalogContext): Primitive[] {
 }
 
 /** Explain a compiled V2 plan without recompiling, changing volume or relaxing checks. */
-export function diagnosePlanSupport(plan: ShapePlanV2, design: Design) {
+export function diagnosePlanSupport(plan: ShapePlanV2, design: Design, options: { assemblyBlockedIds?: ReadonlySet<string> } = {}) {
   const catalog = catalogForDesign(design), PARTS = catalog.parts;
   const shapes = primitives(plan, catalog);
   const shapesByHeight = new Map<number, Primitive[]>();
@@ -57,6 +57,22 @@ export function diagnosePlanSupport(plan: ShapePlanV2, design: Design) {
     const level = shapesByHeight.get(point.z) || [];
     for (let i = level.length - 1; i >= 0; i--) if (contains(level[i].bounds, point) && !cutsAt(level[i], point).length) return level[i];
   };
+  const sourcesFor = (brick: Brick): PlanSource[] => {
+    const size = footprint(brick, catalog), height = partHeight(brick, catalog), sources = new Map<string, PlanSource>();
+    for (let z = brick.z; z < brick.z + height; z++) for (let y = brick.y; y < brick.y + size.depth; y++) for (let x = brick.x; x < brick.x + size.width; x++) {
+      const owner = ownerAt({ x, y, z });
+      if (owner) sources.set(sourceKey(owner.source), owner.source);
+    }
+    return [...sources.values()].sort((a, b) => sourceKey(a).localeCompare(sourceKey(b)));
+  };
+  // The assembly checker supplies these IDs. Locate their source geometry without
+  // inferring which surrounding part blocks a particular checked entry path.
+  const blocked = design.bricks.filter(brick => options.assemblyBlockedIds?.has(brick.id));
+  const assemblyBlockedPieces = blocked.slice(0, 8).map(brick => {
+    const sources = sourcesFor(brick);
+    return { ...brick, bounds: { x: brick.x, y: brick.y, z: brick.z, ...footprint(brick, catalog), height: partHeight(brick, catalog) },
+      sources: sources.slice(0, 8), omittedSources: Math.max(0, sources.length - 8) };
+  });
   const studOwners = new Map<string, number>();
   const studsByHeight = new Map<number, Point[]>();
   const heightsByXY = new Map<string, number[]>();
@@ -90,12 +106,7 @@ export function diagnosePlanSupport(plan: ShapePlanV2, design: Design) {
     cutoutsBelow: { source: PlanSource; path: string }[] };
   const groups = new Map<string, Group>();
   for (const brick of unsupported) {
-    const size = footprint(brick, catalog), height = partHeight(brick, catalog), sources = new Map<string, PlanSource>();
-    for (let z = brick.z; z < brick.z + height; z++) for (let y = brick.y; y < brick.y + size.depth; y++) for (let x = brick.x; x < brick.x + size.width; x++) {
-      const owner = ownerAt({ x, y, z });
-      if (owner) sources.set(sourceKey(owner.source), owner.source);
-    }
-    const sourceList = [...sources.values()].sort((a, b) => sourceKey(a).localeCompare(sourceKey(b)));
+    const size = footprint(brick, catalog), height = partHeight(brick, catalog), sourceList = sourcesFor(brick);
     const id = `${sourceList.map(sourceKey).join('|')}:${brick.z}:${brick.colorId}`;
     if (!groups.has(id)) groups.set(id, { sources: sourceList, bottomZ: brick.z, colorId: brick.colorId, pieceCount: 0,
       bounds: { x: brick.x, y: brick.y, z: brick.z, ...size, height }, examples: [], attachmentSites: 0, occupiedBodyEnvelopeSitesBelow: 0,
@@ -140,8 +151,9 @@ export function diagnosePlanSupport(plan: ShapePlanV2, design: Design) {
     components.set(id, group);
   });
   return { unsupportedPieceCount: unsupported.length, disconnectedComponents: roots.size,
+    assemblyBlockedPieceCount: blocked.length, assemblyBlockedPieces, omittedAssemblyBlockedPieces: Math.max(0, blocked.length - 8),
     disconnectedGroups: [...components.values()].sort((a, b) => b.pieceCount - a.pieceCount).slice(0, 8), omittedDisconnectedGroups: Math.max(0, components.size - 8),
     catalogMaxHorizontalSpanStuds: Math.max(...Object.values(PARTS).map(part => Math.max(part.width, part.depth))),
     groups: ordered.slice(0, 8), omittedGroups: Math.max(0, ordered.length - 8),
-    note: 'These are current-packing observations. Groups list missing lower studs in assemblies that do not reach the table; a grounded piece may legally hang from a connector above it. Disconnected groups are separate stud-connected assemblies even when each touches the table; use their bounds and piece positions to join them with legal stud connections. Body envelopes are conservative. A lower stud can be enclosed by another part; an aligned gap is not proof of empty air. A missing connection may be a plan or packing issue. Preserve the requested silhouette and do not silently fill cutouts.' };
+    note: 'These are current-packing observations. Groups list missing lower studs in assemblies that do not reach the table; a grounded piece may legally hang from a connector above it. Disconnected groups are separate stud-connected assemblies even when each touches the table; use their bounds and piece positions to join them with legal stud connections. Assembly-blocked pieces failed the supported placement-path search: their sources identify editable geometry, not a proven obstructing neighbor. A missing path may require different packing, order or entry clearance; do not add support solely because a grounded piece is blocked. Body envelopes are conservative. A lower stud can be enclosed by another part; an aligned gap is not proof of empty air. A missing connection may be a plan or packing issue. Preserve the requested silhouette and do not silently fill cutouts.' };
 }

@@ -202,7 +202,11 @@ function compileStructuralPlan(plan: ShapePlan, input: GenerationInput, deadline
   let design: Design | undefined, check: ReturnType<typeof validateDesign> | undefined, packingError: unknown;
   let optimizationDeadline: number | undefined;
   const assemblyError = (error: string) => /no stud support|disconnected groups|no assembly path/i.test(error);
-  const failures = (result: ReturnType<typeof validateDesign>) => Math.max(result.errors.length, (result.connectedComponents ?? 1) - 1);
+  // Reaching one connected model is progress even if its placement order still
+  // needs repair. Do not count that transition as another identical failure.
+  const failures = (result: ReturnType<typeof validateDesign>) => result.valid ? 0
+    : result.errors.every(error => /no assembly path/i.test(error)) ? 1
+    : 1 + Math.max(result.errors.length, (result.connectedComponents ?? 1) - 1);
   // Compare exact-volume tilings. Plates may repair curves, while mixed brick
   // courses often use fewer pieces. Optional optimization never loses a valid draft.
   for (const strategy of strategies) {
@@ -234,7 +238,9 @@ function compileStructuralPlan(plan: ShapePlan, input: GenerationInput, deadline
       const brick = placements.get(id);
       return brick ? `${label} (part ${brick.partId}, x=${brick.x}, y=${brick.y}, z=${brick.z} plates, rotation=${brick.rotation})` : label;
     })).join('; ');
-    const diagnostics = check.errors.some(assemblyError) ? diagnosePlanSupport(plan as ShapePlanV2, design) : undefined;
+    const assemblyBlockedIds = new Set(check.errors.flatMap(error => error.includes('Blocked pieces: ')
+      ? error.split('Blocked pieces: ')[1].replace(/\.$/, '').split(', ') : []));
+    const diagnostics = check.errors.some(assemblyError) ? diagnosePlanSupport(plan as ShapePlanV2, design, { assemblyBlockedIds }) : undefined;
     const support = diagnostics ? '\nPlan support diagnostics: ' + JSON.stringify(diagnostics) : '';
     // Connecting one formerly floating group is progress even when validation
     // summarizes all remaining groups in a single error message.
@@ -588,6 +594,10 @@ export async function generateDesign(input: GenerationInput, onProgress?: (event
         artifact.checks = [(error as Error).message];
         const failed = error as { design?: Design; partial?: boolean };
         if (failed.design) { artifact.design = failed.design; artifact.partial = failed.partial; }
+        // Keep malformed patches in the attempt record, but never make them the
+        // starting point for the next repair. A compiled (even disconnected)
+        // candidate still provides useful geometry for the following edit.
+        if (repairPlan && !failed.design) plan = repairPlan;
         if (error instanceof CompilationDeadlineError) throw new GenerationError(`Generation reached its ${budget / 1000}-second time limit while arranging the bricks. Your current design is unchanged. Please try again.`, 504, rejectedChecks);
         if (error instanceof GenerationError && (!options.continuous || error.status === 499 || error.status === 504)) throw error;
         transientFailures = 0;

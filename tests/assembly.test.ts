@@ -173,6 +173,39 @@ test('the saved 925-piece turtle finds a complete connected sequence without cha
   t.diagnostic(`Validation and assembly took ${(performance.now() - started).toFixed(1)} ms; full-suite timing includes concurrent tests.`);
 });
 
+test('an anchor support chain precedes neighboring courses that would seal suspended plates inside', () => {
+  // Lower structure of a recorded failed build. Earlier greedy schedules sealed
+  // b443/b446 inside before their upper anchors were available. No catalog,
+  // source photos or subject template are needed to reproduce this ordering gap.
+  const design: Design = JSON.parse(readFileSync(new URL('./fixtures/anchor-support-assembly.json', import.meta.url), 'utf8'));
+  const before = JSON.stringify(design);
+  assert.equal(design.bricks.length, 520);
+  const check = validateDesign(design);
+  assert.equal(check.valid, true, check.errors.join('; '));
+  assert.equal(check.connectedComponents, 1);
+  const steps = buildSteps(design), placements = steps.flatMap(step => step.placements);
+  const byId = new Map(design.bricks.map(brick => [brick.id, brick])), placed = new Set<string>();
+  for (const placement of placements) {
+    const brick = byId.get(placement.brickId)!;
+    assert.equal(placed.has(brick.id), false);
+    assert.deepEqual(placement.waypoints.at(-1), { x: brick.x, y: brick.y, z: brick.z });
+    assert.ok(placement.waypoints.every(point => point.z >= 0));
+    assert.ok(brick.z === 0 || placement.attachedTo.length > 0);
+    for (const id of placement.attachedTo) {
+      assert.ok(placed.has(id));
+      const lower = placement.approach === 'above' ? byId.get(id)! : brick;
+      const upper = placement.approach === 'above' ? brick : byId.get(id)!;
+      assert.ok(partTopStuds(lower).some(a => partBottomSites(upper).some(b => a.x === b.x && a.y === b.y && a.z === b.z)));
+    }
+    placed.add(brick.id);
+  }
+  assert.equal(placed.size, design.bricks.length);
+  assert.notEqual(placements.find(p => p.brickId === 'b443')!.approach, 'above');
+  assert.notEqual(placements.find(p => p.brickId === 'b446')!.approach, 'above');
+  assert.deepEqual(billOfMaterials({ ...design, bricks: steps.flatMap(step => step.bricks) }), billOfMaterials(design));
+  assert.equal(JSON.stringify(design), before);
+});
+
 test('placement animation follows the lateral then upward path and ends at canonical geometry', () => {
   const placement = buildSteps(hangingDesign).at(-1)!.placements[0];
   assert.ok(placementOffset(placement, 0).x > 0);

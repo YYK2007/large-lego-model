@@ -123,3 +123,40 @@ test('separate grounded assemblies expose positions even when every piece has su
   assert.equal(validateDesign(model).valid, false, 'Diagnostic detail never relaxes assembly validity');
   assert.deepEqual(model, before);
 });
+
+test('assembly-blocked placements expose exact rotated bounds and editable repeat sources', () => {
+  const plan = base({ parts: [piece()], repeats: [{ parts: [{ partId: '3460', colorId: 4, x: 3, y: 4, z: 0, rotation: 90 }], count: 2, dx: 12, dy: 0, dz: 0 }] });
+  const model = compilePlan(plan, { prompt: plan.title, repair: false }), before = structuredClone({ plan, model });
+  const selected = model.bricks.find(brick => brick.x === 15)!;
+  const result = diagnosePlanSupport(plan, model, { assemblyBlockedIds: new Set([selected.id, 'missing-id']) });
+  assert.equal(result.assemblyBlockedPieceCount, 1);
+  assert.deepEqual(result.assemblyBlockedPieces, [{ ...selected,
+    bounds: { x: 15, y: 4, z: 0, width: 8, depth: 1, height: 1 },
+    sources: [{ path: '/repeats/0/parts/0', copy: 1, translation: { x: 12, y: 0, z: 0 } }], omittedSources: 0 }]);
+  assert.equal(result.omittedAssemblyBlockedPieces, 0);
+  assert.match(result.note, /not a proven obstructing neighbor/);
+  assert.deepEqual({ plan, model }, before);
+  assert.deepEqual(diagnosePlanSupport(plan, model).assemblyBlockedPieces, [], 'Existing callers do not invent assembly failures');
+});
+
+test('assembly-blocked ownership follows overlays and profile section pointers', () => {
+  const plan = base({ profiles: [{ shape: 'rectangle', colorId: 4, sections: [
+    { z: 0, cx: 2, cy: 2, width: 4, depth: 4 }, { z: 3, cx: 2, cy: 2, width: 4, depth: 4 },
+  ] }], boxes: [box(0, 0, 0, 2, 4, 3, 15)] });
+  const model = compilePlan(plan, { prompt: plan.title, repair: false });
+  const selected = [model.bricks.find(brick => brick.colorId === 4)!, model.bricks.find(brick => brick.colorId === 15)!];
+  const result = diagnosePlanSupport(plan, model, { assemblyBlockedIds: new Set(selected.map(brick => brick.id)) });
+  for (const piece of result.assemblyBlockedPieces) assert.deepEqual(piece.sources, piece.colorId === 4
+    ? [{ path: '/profiles/0', sections: [0, 1] }] : [{ path: '/boxes/0' }]);
+  assert.equal(result.assemblyBlockedPieceCount, 2);
+});
+
+test('assembly diagnostics bound output and report omitted placements', () => {
+  const plan = base({ parts: Array.from({ length: 12 }, (_, index) => piece(0, index * 2)) });
+  const model = compilePlan(plan, { prompt: plan.title, repair: false });
+  const result = diagnosePlanSupport(plan, model, { assemblyBlockedIds: new Set(model.bricks.map(brick => brick.id)) });
+  assert.equal(result.assemblyBlockedPieceCount, 12);
+  assert.equal(result.assemblyBlockedPieces.length, 8);
+  assert.equal(result.omittedAssemblyBlockedPieces, 4);
+  assert.deepEqual(result.assemblyBlockedPieces.map(piece => piece.id), model.bricks.slice(0, 8).map(brick => brick.id));
+});
