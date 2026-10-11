@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { PARTS, COLORS, type InventoryItem } from '../shared/model.js';
+import { resolveCatalog, type CatalogManifest, type InventoryItem } from '../shared/model.js';
+import { subsetCatalog } from '../shared/catalog.js';
+import { loadCachedCatalog } from './catalog-resolver.js';
 import { GenerationError } from './generation.js';
 import { readConfig } from './config.js';
 
@@ -15,10 +17,12 @@ function pacedFetch(url: string, key: string): Promise<Response> {
   return result;
 }
 
-export async function importSet(setNumber: string): Promise<{ items: InventoryItem[]; excluded: number; source: string; note: string }> {
+export async function importSet(setNumber: string): Promise<{ items: InventoryItem[]; catalog: CatalogManifest; excluded: number; source: string; note: string }> {
   if (typeof setNumber !== 'string' || !/^[A-Za-z0-9]+-\d+$/.test(setNumber) || setNumber.length > 30) throw new GenerationError('Use the full set number, for example 10696-1.', 400);
   const { rebrickableKey } = readConfig();
   if (!rebrickableKey) throw new GenerationError('Set lookup needs REBRICKABLE_API_KEY in .env. You can add loose bricks manually now.', 503);
+  const manifest = await loadCachedCatalog();
+  const { parts: PARTS, colors: COLORS } = resolveCatalog(manifest);
   let next: string | null = `https://rebrickable.com/api/v3/lego/sets/${encodeURIComponent(setNumber)}/parts/?inc_part_details=1&page_size=1000`;
   const source = `Set ${setNumber} · copy ${randomUUID().slice(0, 6)}`;
   const quantities = new Map<string, InventoryItem>();
@@ -43,5 +47,5 @@ export async function importSet(setNumber: string): Promise<{ items: InventoryIt
     next = body.next || null;
   }
   if (next) throw new GenerationError('This inventory is too large for the current importer.', 422);
-  return { items: [...quantities.values()], excluded, source, note: 'Supported catalog parts and verified colors only. Spare and unsupported parts are excluded. Check the returned inventory against your physical set; alternate set inventory versions are not resolved automatically.' };
+  return { items: [...quantities.values()], catalog: subsetCatalog(manifest, [...quantities.values()].map(item => item.partId)), excluded, source, note: 'Supported catalog parts and verified colors only. Spare and unsupported parts are excluded. Check the returned inventory against your physical set; alternate set inventory versions are not resolved automatically.' };
 }

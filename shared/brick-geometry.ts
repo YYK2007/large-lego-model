@@ -1,27 +1,28 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { COLORS, PARTS, footprint, normalizeDesign, partHeight, partTopStuds, type Brick, type Design } from './model.js';
-import { partSurfaces } from './part-surfaces.js';
+import { catalogForDesign, footprint, normalizeDesign, partHeight, partTopStuds, type Brick, type Design, type CatalogContext } from './model.js';
+import { partSurfaces, meshSurfaces } from './part-surfaces.js';
 
 // One stud is 8 mm; the canonical vertical unit is one 3.2 mm plate.
 export const METERS_PER_STUD = 0.008;
 export const STUD_UNITS_PER_PLATE = 0.4;
 
-function bodyGeometry(brick: Brick): THREE.BufferGeometry {
-  const { width, depth } = footprint(brick);
-  const height = partHeight(brick);
+function bodyGeometry(brick: Brick, catalog: CatalogContext, mesh?: ReturnType<typeof partSurfaces>): THREE.BufferGeometry {
+  const { width, depth } = footprint(brick, catalog);
+  const height = partHeight(brick, catalog);
   // Retain the small display seams used by the original brick renderer. These
   // cosmetic insets never alter canonical connection sites or part dimensions.
-  const scaleX = (width - 0.04) / width, scaleY = (depth - 0.04) / depth;
-  const scaleZ = (height * STUD_UNITS_PER_PLATE - 0.03) / height;
-  const surfaces = partSurfaces(brick);
+  const imported = !!catalog.parts[brick.partId].geometry;
+  const scaleX = imported ? 1 : (width - 0.04) / width, scaleY = imported ? 1 : (depth - 0.04) / depth;
+  const scaleZ = imported ? STUD_UNITS_PER_PLATE : (height * STUD_UNITS_PER_PLATE - 0.03) / height;
+  const surfaces = mesh ?? partSurfaces(brick, catalog);
   const vertices = surfaces.vertices.map(([x, y, z]) => new THREE.Vector3(
     (x - brick.x - width / 2) * scaleX,
     (z - brick.z - height / 2) * scaleZ,
     (y - brick.y - depth / 2) * scaleY,
   ));
   const positions: number[] = [], normals: number[] = [];
-  const curved = ['round-brick', 'round-plate', 'cone'].includes(PARTS[brick.partId].kind);
+  const curved = ['round-brick', 'round-plate', 'cone'].includes(catalog.parts[brick.partId].kind);
   for (const face of surfaces.faces) {
     const [nx, ny, nz] = face.normal;
     const outward = new THREE.Vector3(nx / scaleX, nz / scaleZ, ny / scaleY).normalize();
@@ -51,10 +52,10 @@ function bodyGeometry(brick: Brick): THREE.BufferGeometry {
   return geometry;
 }
 
-function modelCenter(bricks: Brick[]) {
+function modelCenter(bricks: Brick[], catalog: CatalogContext) {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const brick of bricks) {
-    const { width, depth } = footprint(brick);
+    const { width, depth } = footprint(brick, catalog);
     minX = Math.min(minX, brick.x); minY = Math.min(minY, brick.y);
     maxX = Math.max(maxX, brick.x + width); maxY = Math.max(maxY, brick.y + depth);
   }
@@ -63,7 +64,8 @@ function modelCenter(bricks: Brick[]) {
 
 export function createBrickModel(design: Design): THREE.Group {
   design = normalizeDesign(design);
-  const { centerX, centerY } = modelCenter(design.bricks);
+  const catalog = catalogForDesign(design);
+  const { centerX, centerY } = modelCenter(design.bricks, catalog);
   const model = new THREE.Group();
   model.name = 'BrickModel';
   const studGeometries = new Map<string, THREE.BufferGeometry>();
@@ -80,18 +82,26 @@ export function createBrickModel(design: Design): THREE.Group {
     const group = new THREE.Group();
     group.name = `Brick_${index}`;
     group.userData.brickId = brick.id;
-    group.userData.heightPlates = partHeight(brick);
-    const { width, depth } = footprint(brick);
+    group.userData.heightPlates = partHeight(brick, catalog);
+    const { width, depth } = footprint(brick, catalog);
     const shape = `${brick.partId}:${brick.rotation}`;
-    if (!bodies.has(shape)) bodies.set(shape, bodyGeometry(brick));
-    if (!materials.has(brick.colorId)) materials.set(brick.colorId, new THREE.MeshStandardMaterial({ color: COLORS[brick.colorId].hex, roughness: 0.27, metalness: 0.03 }));
+    if (!bodies.has(shape)) bodies.set(shape, bodyGeometry(brick, catalog));
+    if (!materials.has(brick.colorId)) materials.set(brick.colorId, new THREE.MeshStandardMaterial({ color: catalog.colors[brick.colorId].hex, roughness: 0.27, metalness: 0.03 }));
     const material = materials.get(brick.colorId)!;
     const body = new THREE.Mesh(bodies.get(shape)!, material);
     body.name = `Body_${index}`;
-    body.position.set(brick.x + width / 2 - centerX, (brick.z + partHeight(brick) / 2) * STUD_UNITS_PER_PLATE - 0.01, brick.y + depth / 2 - centerY);
+    body.position.set(brick.x + width / 2 - centerX, (brick.z + partHeight(brick, catalog) / 2) * STUD_UNITS_PER_PLATE - (catalog.parts[brick.partId].geometry ? 0 : 0.01), brick.y + depth / 2 - centerY);
     body.castShadow = true; body.receiveShadow = true; group.add(body);
-    for (const point of partTopStuds(brick)) {
-      const stud = new THREE.Mesh(studGeometry(PARTS[brick.partId].topStudStyle === 'hollow'), material);
+    const imported = catalog.parts[brick.partId].geometry;
+    if (imported) {
+      imported.studs.forEach((source, studIndex) => {
+        const stud = new THREE.Mesh(bodyGeometry(brick, catalog, meshSurfaces(brick, source.mesh, catalog)), material);
+        stud.name = `Stud_${index}_${studIndex}`; stud.position.copy(body.position);
+        stud.castShadow = true; stud.receiveShadow = true; group.add(stud);
+      });
+    }
+    for (const point of imported ? [] : partTopStuds(brick, catalog)) {
+      const stud = new THREE.Mesh(studGeometry(catalog.parts[brick.partId].topStudStyle === 'hollow'), material);
       stud.name = `Stud_${index}_${Math.floor(point.x - brick.x)}_${Math.floor(point.y - brick.y)}`;
       stud.position.set(point.x - centerX, point.z * STUD_UNITS_PER_PLATE + 0.08, point.y - centerY);
       stud.castShadow = true; stud.receiveShadow = true; group.add(stud);
@@ -104,7 +114,8 @@ export function createBrickModel(design: Design): THREE.Group {
 /** The browser batches identical pieces; native exports retain named real meshes. */
 export function createInstancedBrickModel(input: Design) {
   const design = normalizeDesign(input);
-  const { centerX, centerY } = modelCenter(design.bricks);
+  const catalog = catalogForDesign(design);
+  const { centerX, centerY } = modelCenter(design.bricks, catalog);
   const model = new THREE.Group();
   model.name = 'InstancedBrickModel';
   const shapes = new Map<string, { geometry: THREE.BufferGeometry; edges: THREE.EdgesGeometry }>();
@@ -124,7 +135,7 @@ export function createInstancedBrickModel(input: Design) {
         geometry.deleteAttribute('uv');
         return geometry.translate(mesh.position.x, mesh.position.y, mesh.position.z);
       });
-      const edges = new THREE.EdgesGeometry(parts[0], ['round-brick', 'round-plate', 'cone'].includes(PARTS[brick.partId].kind) ? 15 : 1);
+      const edges = new THREE.EdgesGeometry(parts[0], ['round-brick', 'round-plate', 'cone'].includes(catalog.parts[brick.partId].kind) ? 15 : 1);
       const geometry = mergeGeometries(parts)!;
       shapes.set(shapeKey, { geometry, edges });
       parts.forEach(part => part.dispose());
@@ -134,7 +145,7 @@ export function createInstancedBrickModel(input: Design) {
     const shape = shapes.get(shapeKey)!;
     const batchKey = key(brick);
     if (!batches.has(batchKey)) {
-      const material = new THREE.MeshStandardMaterial({ color: COLORS[brick.colorId].hex, roughness: 0.27, metalness: 0.03 });
+      const material = new THREE.MeshStandardMaterial({ color: catalog.colors[brick.colorId].hex, roughness: 0.27, metalness: 0.03 });
       const fadedMaterial = material.clone();
       fadedMaterial.transparent = true; fadedMaterial.opacity = 0.3; fadedMaterial.depthWrite = false;
       const solid = new THREE.InstancedMesh(shape.geometry, material, counts.get(batchKey)!);
@@ -149,7 +160,7 @@ export function createInstancedBrickModel(input: Design) {
       }
       batches.set(batchKey, { solid, faded });
     }
-    const { width, depth } = footprint(brick);
+    const { width, depth } = footprint(brick, catalog);
     return { brick, shape, batch: batches.get(batchKey)!, position: new THREE.Vector3(brick.x + width / 2 - centerX, brick.z * STUD_UNITS_PER_PLATE, brick.y + depth / 2 - centerY), mesh: null as THREE.InstancedMesh | null, index: 0 };
   });
   const edgeGeometry = new THREE.BufferGeometry();

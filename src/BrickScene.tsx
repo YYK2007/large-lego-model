@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RotateCcw, Rotate3D, Grid2X2, Focus, AlertCircle } from 'lucide-react';
-import { footprint, normalizeDesign, partHeight, type Design } from '../shared/model';
+import { catalogForDesign, footprint, normalizeDesign, partHeight, type Design } from '../shared/model';
 import { createInstancedBrickModel, STUD_UNITS_PER_PLATE } from '../shared/brick-geometry';
 import { placementOffset, type Placement } from '../shared/assembly';
 import { frameDistance } from './scene-framing';
@@ -41,9 +41,10 @@ export function BrickScene({ design, visibleIds, highlightIds, activeId, replayK
     controls.maxPolarAngle = Math.PI / 2 - 0.04;
     controls.minDistance = 8;
     controls.autoRotateSpeed = 1.3;
+    const catalog = catalogForDesign(canonical);
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, height = 0, liftHeight = 0;
     for (const brick of canonical.bricks) {
-      const size = footprint(brick), plates = partHeight(brick);
+      const size = footprint(brick, catalog), plates = partHeight(brick, catalog);
       minX = Math.min(minX, brick.x); maxX = Math.max(maxX, brick.x + size.width);
       minY = Math.min(minY, brick.y); maxY = Math.max(maxY, brick.y + size.depth);
       height = Math.max(height, (brick.z + plates) * STUD_UNITS_PER_PLATE);

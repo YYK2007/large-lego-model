@@ -1,4 +1,5 @@
-import { PARTS, partPoint, type Brick } from './model';
+import { resolveCatalog, partPoint, type Brick, type CatalogContext } from './model';
+import type { CatalogMesh } from './catalog';
 
 export type PartPoint = [number, number, number];
 export type PartSurface = { indices: number[]; normal: PartPoint };
@@ -6,8 +7,23 @@ export type PartSurface = { indices: number[]; normal: PartPoint };
 /** Exterior body in canonical stud XY / plate Z; top studs are separate.
  * Neck/groove profiles and hollow top openings follow the linked LDraw parts.
  * Underside tubes are connection metadata, not rendered internal detail. */
-export function partSurfaces(brick: Brick): { vertices: PartPoint[]; faces: PartSurface[] } {
-  const part = PARTS[brick.partId];
+export function meshSurfaces(brick: Brick, mesh: CatalogMesh, catalog: CatalogContext): { vertices: PartPoint[]; faces: PartSurface[] } {
+  const vertices = mesh.vertices.map(([u, v, z]): PartPoint => {
+    const { x, y } = partPoint(brick, u, v, catalog); return [x, y, z + brick.z];
+  });
+  const faces = mesh.faces.flatMap(indices => {
+    const [a, b, c] = indices.map(i => vertices[i]);
+    const u = b.map((v, i) => v - a[i]), v = c.map((v, i) => v - a[i]);
+    const n: PartPoint = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    const length = Math.hypot(...n);
+    return length > 1e-10 ? [{ indices, normal: n.map(value => value / length) as PartPoint }] : [];
+  });
+  return { vertices, faces };
+}
+
+export function partSurfaces(brick: Brick, catalog: CatalogContext = resolveCatalog()): { vertices: PartPoint[]; faces: PartSurface[] } {
+  const part = catalog.parts[brick.partId];
+  if (part.geometry) return meshSurfaces(brick, part.geometry.body, catalog);
   const w = part.width, d = part.depth, h = part.heightPlates;
   let vertices: PartPoint[] = part.kind === 'slope'
     ? [[0, 0, 0], [w, 0, 0], [w, d, 0], [0, d, 0],
@@ -48,7 +64,7 @@ export function partSurfaces(brick: Brick): { vertices: PartPoint[]; faces: Part
     indices.push([12, 13, 14, 15]);
   }
   for (const point of vertices) {
-    const { x, y } = partPoint(brick, point[0], point[1]);
+    const { x, y } = partPoint(brick, point[0], point[1], catalog);
     point[0] = x;
     point[1] = y;
     point[2] += brick.z;

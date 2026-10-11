@@ -107,3 +107,19 @@ test('hollow repeated profiles, detail boxes and local cuts share exact painting
   })));
   assert.equal(result.omittedGroups, 0);
 });
+
+test('separate grounded assemblies expose positions even when every piece has support', () => {
+  const plan = base({ parts: [piece(0, 0), piece(3, 0), piece(0, 6), piece(3, 6)] });
+  const model = compilePlan(plan, { prompt: plan.title }), before = structuredClone(model);
+  const result = diagnosePlanSupport(plan, model);
+  assert.equal(result.unsupportedPieceCount, 0);
+  assert.deepEqual(result.groups, []);
+  assert.equal(result.disconnectedComponents, 2);
+  assert.deepEqual(result.disconnectedGroups.map(group => ({ grounded: group.grounded, count: group.pieceCount, bounds: group.bounds })), [
+    { grounded: true, count: 2, bounds: { x: 0, y: 0, z: 0, width: 1, depth: 1, height: 6 } },
+    { grounded: true, count: 2, bounds: { x: 6, y: 0, z: 0, width: 1, depth: 1, height: 6 } },
+  ]);
+  assert.equal(result.disconnectedGroups[1].examples[0].x, 6);
+  assert.equal(validateDesign(model).valid, false, 'Diagnostic detail never relaxes assembly validity');
+  assert.deepEqual(model, before);
+});

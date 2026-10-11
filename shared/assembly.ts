@@ -89,36 +89,56 @@ export function planAssembly(input: AssemblyPart[]): AssemblyPlan {
     }
   });
   const retry = planOrder(parts, below, above, preferred);
-  return retry.valid ? retry : first;
+  if (retry.valid) return retry;
+  // A hanging upper course may have lower neighbors in the final graph that
+  // are not placed yet. Seat it before those lower pieces seal lateral entry.
+  // Try one additional schedule, preserving every exact movement check.
+  const hanging = planOrder(parts, below, above, new Set(), true);
+  return hanging.valid ? hanging : first;
 }
 
-function planOrder(parts: AssemblyPart[], below: Set<number>[], above: Set<number>[], preferred: Set<number>): AssemblyPlan {
+function planOrder(parts: AssemblyPart[], below: Set<number>[], above: Set<number>[], preferred: Set<number>, hangingFirst = false): AssemblyPlan {
   const position = (part: AssemblyPart): AssemblyPoint => ({ x: part.x, y: part.y, z: part.z });
   const placed = new Set<number>(), index = new PlacedIndex(), placements: Placement[] = [];
   // A priority frontier avoids repeatedly scanning all unplaced pieces. A blocked
   // part is reconsidered only when another one of its mating neighbors is added.
   const frontier: number[] = [], queued = new Set<number>();
-  const compare = (a: number, b: number) => Number(preferred.has(b)) - Number(preferred.has(a)) || a - b;
+  const hanging = new Set<number>();
+  const compare = (a: number, b: number) => Number(hanging.has(b)) - Number(hanging.has(a))
+    || (hanging.has(a) && hanging.has(b) ? parts[b].z - parts[a].z : 0)
+    || Number(preferred.has(b)) - Number(preferred.has(a)) || a - b;
+  const siftDown = (start: number) => {
+    for (let parent = start;;) {
+      const left = parent * 2 + 1, right = left + 1;
+      if (left >= frontier.length) break;
+      const child = right < frontier.length && compare(frontier[right], frontier[left]) < 0 ? right : left;
+      if (compare(frontier[parent], frontier[child]) <= 0) break;
+      [frontier[parent], frontier[child]] = [frontier[child], frontier[parent]]; parent = child;
+    }
+  };
   const enqueue = (i: number) => {
-    if (placed.has(i) || queued.has(i)) return;
-    frontier.push(i); queued.add(i);
-    for (let child = frontier.length - 1; child > 0;) {
+    if (placed.has(i) || queued.has(i) && !hangingFirst) return;
+    // Cache each queued priority, then restore its heap position when a newly
+    // placed neighbor changes eligibility. A comparator over mutable neighbors
+    // alone would invalidate the existing heap order.
+    if (hangingFirst) {
+      if (parts[i].z > 0 && ![...below[i]].some(j => placed.has(j)) && [...above[i]].some(j => placed.has(j))) hanging.add(i);
+      else hanging.delete(i);
+    }
+    let child = queued.has(i) ? frontier.indexOf(i) : -1;
+    if (child < 0) { child = frontier.length; frontier.push(i); queued.add(i); }
+    while (child > 0) {
       const parent = (child - 1) >>> 1;
       if (compare(frontier[parent], frontier[child]) <= 0) break;
       [frontier[parent], frontier[child]] = [frontier[child], frontier[parent]]; child = parent;
     }
+    siftDown(child);
   };
   const dequeue = () => {
     const first = frontier[0], last = frontier.pop()!;
     if (frontier.length) {
       frontier[0] = last;
-      for (let parent = 0;;) {
-        const left = parent * 2 + 1, right = left + 1;
-        if (left >= frontier.length) break;
-        const child = right < frontier.length && compare(frontier[right], frontier[left]) < 0 ? right : left;
-        if (compare(frontier[parent], frontier[child]) <= 0) break;
-        [frontier[parent], frontier[child]] = [frontier[child], frontier[parent]]; parent = child;
-      }
+      siftDown(0);
     }
     queued.delete(first); return first;
   };

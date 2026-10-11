@@ -1,7 +1,8 @@
 import PDFDocument from 'pdfkit';
 import SVGtoPDF from 'svg-to-pdfkit';
-import { allocateInventory, billOfMaterials, buildSteps, COLORS, footprint, normalizeDesign, partHeight, partPoint, partTopStuds, PARTS, validateDesign, type Brick, type Design, type InventoryItem } from '../shared/model';
+import { allocateInventory, billOfMaterials, buildSteps, catalogForDesign, footprint, normalizeDesign, partHeight, partPoint, partTopStuds, validateDesign, type Brick, type Design, type InventoryItem, type CatalogContext } from '../shared/model';
 import { renderDesignSvg } from '../shared/illustration';
+import { partSurfaces } from '../shared/part-surfaces';
 
 const INK = '#133a50';
 const BLUE = '#127faa';
@@ -35,20 +36,21 @@ function illustration(doc: PDFKit.PDFDocument, design: Design, x: number, y: num
   SVGtoPDF(doc, renderDesignSvg(design, { width, height, visibleIds, highlightIds }), x, y, { width, height, assumePt: true });
 }
 
-function placementRows(doc: PDFKit.PDFDocument, bricks: Brick[], x: number, y: number, width: number) {
+function placementRows(doc: PDFKit.PDFDocument, bricks: Brick[], x: number, y: number, width: number, catalog: CatalogContext) {
   bricks.forEach((brick, index) => {
     const yy = y + index * 24;
-    const size = footprint(brick);
+    const size = footprint(brick, catalog);
     doc.roundedRect(x, yy, 20, 18, 5).fill('#e5f3f5');
     text(doc, String(index + 1), x + 3, yy + 4, 17, 8, BLUE, true);
-    text(doc, `${brick.partId} / ${COLORS[brick.colorId].name} / ${(partHeight(brick) * 3.2).toFixed(1)} mm`, x + 27, yy, width - 27, 8, INK, true);
+    text(doc, `${brick.partId} / ${catalog.colors[brick.colorId].name} / ${(partHeight(brick, catalog) * 3.2).toFixed(1)} mm`, x + 27, yy, width - 27, 8, INK, true);
     text(doc, `(${brick.x}, ${brick.y})  ${size.width} x ${size.depth}  /  ${brick.rotation} deg`, x + 27, yy + 11, width - 27, 8, MUTED);
   });
 }
 
 function placementMap(doc: PDFKit.PDFDocument, design: Design, bricks: Brick[], x: number, y: number, width: number, height: number) {
-  const columns = Math.max(...design.bricks.map((brick) => brick.x + footprint(brick).width));
-  const rows = Math.max(...design.bricks.map((brick) => brick.y + footprint(brick).depth));
+  const catalog = catalogForDesign(design);
+  const columns = Math.max(...design.bricks.map((brick) => brick.x + footprint(brick, catalog).width));
+  const rows = Math.max(...design.bricks.map((brick) => brick.y + footprint(brick, catalog).depth));
   const cell = Math.min((width - 32) / columns, (height - 32) / rows, 28);
   const originX = x + 25 + (width - 32 - columns * cell) / 2;
   const originY = y + 23 + (height - 32 - rows * cell) / 2;
@@ -59,14 +61,24 @@ function placementMap(doc: PDFKit.PDFDocument, design: Design, bricks: Brick[], 
   for (let column = 0; column <= columns; column++) doc.moveTo(originX + column * cell, originY).lineTo(originX + column * cell, originY + rows * cell).stroke();
   for (let row = 0; row <= rows; row++) doc.moveTo(originX, originY + row * cell).lineTo(originX + columns * cell, originY + row * cell).stroke();
   bricks.forEach((brick, index) => {
-    const size = footprint(brick);
+    const size = footprint(brick, catalog);
     const bx = originX + brick.x * cell;
     const by = originY + brick.y * cell;
-    doc.rect(bx + 0.8, by + 0.8, size.width * cell - 1.6, size.depth * cell - 1.6)
-      .fillAndStroke(COLORS[brick.colorId].hex, INK);
-    if (PARTS[brick.partId].kind === 'slope') {
+    if (catalog.parts[brick.partId].geometry) {
+      // A plan-view silhouette comes from the same pinned mesh as the 3D view.
+      // The dashed rectangle is its conservative reservation, not its body.
+      const mesh = partSurfaces(brick, catalog);
+      for (const face of mesh.faces) {
+        const points = face.indices.map(i => [originX + mesh.vertices[i][0] * cell, originY + mesh.vertices[i][1] * cell]);
+        doc.polygon(...points as [number, number][]).fill(catalog.colors[brick.colorId].hex);
+      }
+      doc.save().dash(2, { space: 2 }).rect(bx, by, size.width * cell, size.depth * cell).strokeColor(INK).stroke().restore();
+      for (const stud of partTopStuds(brick, catalog)) doc.circle(originX + stud.x * cell, originY + stud.y * cell, cell * 0.13).fillAndStroke('#ffffff', INK);
+    } else doc.rect(bx + 0.8, by + 0.8, size.width * cell - 1.6, size.depth * cell - 1.6)
+      .fillAndStroke(catalog.colors[brick.colorId].hex, INK);
+    if (catalog.parts[brick.partId].kind === 'slope') {
       const mapPoint = (u: number, v: number) => {
-        const point = partPoint(brick, u, v);
+        const point = partPoint(brick, u, v, catalog);
         return [originX + point.x * cell, originY + point.y * cell];
       };
       const [ax, ay] = mapPoint(0, 1), [bx, by] = mapPoint(2, 1);
@@ -76,7 +88,7 @@ function placementMap(doc: PDFKit.PDFDocument, design: Design, bricks: Brick[], 
       const left = mapPoint(0.77, 0.44), right = mapPoint(1.23, 0.44);
       doc.moveTo(tail[0], tail[1]).lineTo(tip[0], tip[1]).stroke();
       doc.moveTo(left[0], left[1]).lineTo(tip[0], tip[1]).lineTo(right[0], right[1]).stroke();
-      for (const stud of partTopStuds(brick)) doc.circle(originX + stud.x * cell, originY + stud.y * cell, cell * 0.13).fillAndStroke('#ffffff', INK);
+      for (const stud of partTopStuds(brick, catalog)) doc.circle(originX + stud.x * cell, originY + stud.y * cell, cell * 0.13).fillAndStroke('#ffffff', INK);
     }
     const labelSize = Math.min(10, cell * 0.68);
     const cx = bx + size.width * cell / 2;
@@ -96,6 +108,7 @@ export async function renderManualPdf(design: Design, inventory?: InventoryItem[
   const validation = validateDesign(design);
   if (!validation.valid) throw new Error(`Cannot create instructions for an invalid design: ${validation.errors.join('; ')}`);
   design = normalizeDesign(design);
+  const catalog = catalogForDesign(design);
   const doc = new PDFDocument({ autoFirstPage: false, size: 'A4', margin: MARGIN, bufferPages: true,
     info: { Title: `${design.title} - Building instructions`, Author: 'Sprout', Subject: `Design ${design.id}` } });
   const chunks: Buffer[] = [];
@@ -144,9 +157,12 @@ export async function renderManualPdf(design: Design, inventory?: InventoryItem[
       if (index % 2 === 0) doc.roundedRect(36, yy - 4, 523, 31, 6).fill('#f1f7f9');
       const preview = { ...design, bricks: [{ id: 'preview', partId: item.partId, colorId: item.colorId, x: 0, y: 0, z: 0, rotation: 0 as const }] };
       illustration(doc, preview, 42, yy - 4, 59, 29);
-      text(doc, PARTS[item.partId].name, 113, yy, 260, 10, INK, true);
+      const name = catalog.parts[item.partId].name;
+      doc.font('Helvetica-Bold').fontSize(10);
+      const nameSize = Math.max(7, Math.min(10, 10 * 260 / doc.widthOfString(name)));
+      doc.fontSize(nameSize).fillColor(INK).text(name, 113, yy, { width: 260, height: 12, ellipsis: true });
       text(doc, `Part ${item.partId}`, 113, yy + 13, 260, 8, MUTED);
-      text(doc, COLORS[item.colorId].name, 379, yy + 5, 132, 9);
+      text(doc, catalog.colors[item.colorId].name, 379, yy + 5, 132, 9);
       text(doc, String(item.quantity), 527, yy + 5, 30, 11, BLUE, true);
     });
     text(doc, allocation ? 'Your source-set allocation follows this parts list.'
@@ -168,7 +184,7 @@ export async function renderManualPdf(design: Design, inventory?: InventoryItem[
       rows.slice(offset, offset + 20).forEach((row, index) => {
         const yy = 154 + index * 28;
         if (index % 2 === 0) doc.roundedRect(36, yy - 4, 523, 27, 5).fill('#f1f7f9');
-        text(doc, `${row.partId} / ${COLORS[row.colorId].name}`, 43, yy + 2, 190, 9, INK, true);
+        text(doc, `${row.partId} / ${catalog.colors[row.colorId].name}`, 43, yy + 2, 190, 9, INK, true);
         text(doc, row.source.slice(0, 60), 240, yy + 2, 270, 9, row.missingRow ? '#a14826' : MUTED);
         text(doc, String(row.take), 528, yy + 2, 28, 10, row.missingRow ? '#a14826' : BLUE, true);
       });
@@ -206,8 +222,30 @@ export async function renderManualPdf(design: Design, inventory?: InventoryItem[
     text(doc, 'PART / COLOR / BODY HEIGHT', 366, 404, 191, 9, BLUE, true);
     text(doc, '(X, Y)  footprint / rotation', 393, 421, 164, 8, MUTED);
     placementMap(doc, design, step.bricks, 36, 436, 300, 275);
-    placementRows(doc, step.bricks, 366, 443, 190);
+    placementRows(doc, step.bricks, 366, 443, 190, catalog);
     text(doc, 'Map numbers match the placement list. Keep the same front before adding the next step.', 36, 744, 523, 9, MUTED);
+  }
+
+  const imported = [...new Set(design.bricks.map(brick => brick.partId))].map(id => catalog.parts[id]).filter(part => part.geometry);
+  if (imported.length) {
+    let y = 721;
+    for (const part of imported) {
+      const title = `${part.id} / ${part.name}`;
+      const authors = [...new Set(part.geometry!.assets.map(asset => asset.author).filter(Boolean))].join('; ');
+      const titleHeight = doc.font('Helvetica-Bold').fontSize(10).heightOfString(title, { width: 520, lineGap: 2 });
+      const authorHeight = doc.font('Helvetica').fontSize(8).heightOfString(authors, { width: 520, lineGap: 2 });
+      const rowHeight = titleHeight + authorHeight + 22;
+      if (y + rowHeight > 720) {
+        page(doc, 'Part geometry credits', 'Pinned catalog sources', 'These part drawings use official LDraw geometry. Parts and colors are identified by Rebrickable.');
+        text(doc, 'LDraw geometry: CC BY 4.0. Connector metadata: LDCad Shadow Library, CC BY-SA 4.0. Meshes were transformed into the build coordinate system. Exact source URLs and hashes accompany the saved design and embedded LDraw export.', 36, 122, 523, 10, MUTED);
+        text(doc, 'Imported plan-view silhouettes show the actual mesh. Dashed map boxes mark reserved footprints. Metallic and pearl colors use catalog RGB; their surface finishes are not simulated.', 36, 741, 523, 9, MUTED);
+        y = 194;
+      }
+      text(doc, title, 36, y, 520, 10, INK, true);
+      text(doc, authors, 36, y + titleHeight + 4, 520, 8, MUTED);
+      doc.link(36, y, 520, titleHeight, `https://library.ldraw.org/library/official/parts/${part.ldrawId}`);
+      y += rowHeight;
+    }
   }
 
   const range = doc.bufferedPageRange();

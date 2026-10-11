@@ -1,29 +1,35 @@
 import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import sharp from 'sharp';
+import type { ReferenceComplexity, ReferenceModelEvidence, ReferenceTextSource, ReferenceViewHint } from '../shared/references.js';
+import { parseReferenceStl, renderReferenceStl } from './reference-model.js';
 
 export type ReferenceSubject = { name: string; location?: string; aliases?: string[] };
 export type ReferenceCandidate = {
   fileTitle: string; sourcePageUrl: string; imageUrl: string; description: string;
   articleTitle?: string; articleUrl?: string; articleExtract?: string;
-  matchedBy: 'article-image' | 'commons-search'; query: string;
+  matchedBy: 'article-image' | 'article-gallery' | 'commons-search'; query: string;
+  viewHints?: ReferenceViewHint[]; identityEvidence?: 'article-linked' | 'metadata-match' | 'search-only';
   artist: string; credit: string; licenseName: string; licenseUrl: string;
   attributionRequired: boolean; width: number; height: number;
+  mediaType?: 'photo' | 'model-render'; viewLabel?: string;
 };
 export type ReferenceMetadata = ReferenceCandidate & { fetchedAt: string; sha256: string };
 export type ReferenceImage = { metadata: ReferenceMetadata; inlineData: { mimeType: 'image/jpeg'; data: string } };
-type Options = { signal?: AbortSignal };
+type Options = { signal?: AbortSignal; complexity?: ReferenceComplexity };
 type WikiPage = {
   title?: string; pageimage?: string; fullurl?: string; extract?: string; index?: number;
-  imageinfo?: { url?: string; thumburl?: string; descriptionurl?: string; mime?: string;
+  lastrevid?: number; missing?: boolean; pageprops?: { disambiguation?: string; wikibase_item?: string };
+  images?: { title?: string }[]; extlinks?: { url?: string }[]; fetchedAt?: string;
+  imageinfo?: { url?: string; thumburl?: string; descriptionurl?: string; mime?: string; size?: number;
     width?: number; height?: number; thumbwidth?: number; thumbheight?: number;
     extmetadata?: Record<string, { value?: string }> }[];
 };
-const apiHosts = new Set(['en.wikipedia.org', 'commons.wikimedia.org']);
+const apiHosts = new Set(['en.wikipedia.org', 'commons.wikimedia.org', 'www.wikidata.org']);
 const imageHosts = new Set(['upload.wikimedia.org', 'thumb.wikimedia.org']);
 const userAgent = 'LargeLegoModel/0.1 (reference-image research; local HackNC prototype)';
 const maxImageBytes = 5_000_000;
-const maxCandidates = 12;
+const maxCandidates = 48;
 const cacheTtlMs = 15 * 60_000;
 function cache<T>(maxEntries: number, maxBytes: number) {
   const entries = new Map<string, { value: T; expiresAt: number; size: number }>();
@@ -47,6 +53,12 @@ function cache<T>(maxEntries: number, maxBytes: number) {
   };
 }
 const metadataCache = cache<WikiPage[]>(32, 8 * 1024 * 1024);
+export type WikidataEntity = { id?: string; lastrevid?: number; labels?: Record<string, { value?: string }>; claims?: Record<string, {
+  id?: string; rank?: string; mainsnak?: { snaktype?: string; datavalue?: { value?: unknown } };
+  qualifiers?: Record<string, { datavalue?: { value?: unknown } }[]>;
+  references?: { snaks?: Record<string, { datavalue?: { value?: unknown } }[]> }[];
+}[]> };
+const entityCache = cache<{ entities: Record<string, WikidataEntity>; fetchedAt: string }>(16, 8 * 1024 * 1024);
 type Pixels = { inlineData: ReferenceImage['inlineData']; width: number; height: number; fetchedAt: string; sha256: string; signature: Float64Array | undefined };
 const pixelCache = cache<Pixels>(24, 24 * 1024 * 1024);
 let networkQueue: Promise<unknown> = Promise.resolve();
@@ -55,7 +67,7 @@ const cooldowns = new Map<string, number>();
 
 /** Test isolation only; never used to bypass an upstream cooldown in production. */
 export function resetReferenceStateForTests() {
-  metadataCache.clear(); pixelCache.clear(); cooldowns.clear(); networkQueue = Promise.resolve(); nextRequestAt = 0;
+  metadataCache.clear(); entityCache.clear(); pixelCache.clear(); cooldowns.clear(); networkQueue = Promise.resolve(); nextRequestAt = 0;
 }
 
 function cancellable<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -94,7 +106,7 @@ function plain(value: unknown, max = 2000): string {
     }).replace(/[<>\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
-function allowedUrl(value: string, kind: 'api' | 'image'): URL {
+function allowedUrl(value: string, kind: 'api' | 'image' | 'model'): URL {
   const url = new URL(value);
   const hosts = kind === 'api' ? apiHosts : imageHosts;
   if (url.protocol !== 'https:' || url.username || url.password || url.port || !hosts.has(url.hostname)
@@ -110,12 +122,12 @@ function publicLink(value: unknown, fallback = ''): string {
   } catch { return fallback; }
 }
 
-async function boundedFetch(value: string, kind: 'api' | 'image', signal: AbortSignal): Promise<{ bytes: Buffer; contentType: string }> {
+async function boundedFetch(value: string, kind: 'api' | 'image' | 'model', signal: AbortSignal): Promise<{ bytes: Buffer; contentType: string }> {
   allowedUrl(value, kind);
   return scheduled(signal, () => fetchBytes(value, kind, signal));
 }
 
-async function fetchBytes(value: string, kind: 'api' | 'image', signal: AbortSignal): Promise<{ bytes: Buffer; contentType: string }> {
+async function fetchBytes(value: string, kind: 'api' | 'image' | 'model', signal: AbortSignal): Promise<{ bytes: Buffer; contentType: string }> {
   let url = allowedUrl(value, kind);
   const limit = kind === 'api' ? 1_000_000 : maxImageBytes;
   let redirects = 0, retries = 0;
@@ -123,7 +135,7 @@ async function fetchBytes(value: string, kind: 'api' | 'image', signal: AbortSig
     signal.throwIfAborted();
     const remainingCooldown = (cooldowns.get(url.hostname) || 0) - Date.now();
     if (remainingCooldown > 0) throw new Error(`Wikimedia reference requests are rate limited (429). Retry after ${Math.ceil(remainingCooldown / 1000)} seconds, or attach a reference photo.`);
-    const response = await fetch(url, { redirect: 'manual', signal, headers: { 'User-Agent': userAgent, Accept: kind === 'api' ? 'application/json' : 'image/jpeg,image/png,image/webp' } });
+    const response = await fetch(url, { redirect: 'manual', signal, headers: { 'User-Agent': userAgent, Accept: kind === 'api' ? 'application/json' : kind === 'model' ? 'application/sla,model/stl,application/octet-stream' : 'image/jpeg,image/png,image/webp' } });
     if (response.status === 429) {
       await response.body?.cancel();
       const header = response.headers.get('retry-after');
@@ -173,7 +185,8 @@ async function query(host: string, params: Record<string, string>, signal: Abort
   const { bytes } = await boundedFetch(url.href, 'api', signal);
   const result = JSON.parse(bytes.toString('utf8')) as { error?: { code?: string }; query?: { pages?: WikiPage[] } };
   if (result.error) throw new Error(`Wikimedia query failed (${plain(result.error.code, 80)}).`);
-  const pages = (Array.isArray(result.query?.pages) ? result.query.pages : []).sort((a, b) => (a.index ?? Infinity) - (b.index ?? Infinity));
+  const fetchedAt = new Date().toISOString();
+  const pages = (Array.isArray(result.query?.pages) ? result.query.pages : []).map(page => ({ ...page, fetchedAt })).sort((a, b) => (a.index ?? Infinity) - (b.index ?? Infinity));
   if (pages.length) metadataCache.put(url.href, structuredClone(pages), bytes.length);
   return pages;
 }
@@ -193,12 +206,63 @@ function candidate(page: WikiPage, search: string, article?: WikiPage): Referenc
   const fileTitle = plain(page.title, 500);
   return {
     fileTitle, sourcePageUrl: `https://commons.wikimedia.org/wiki/${encodeURIComponent(fileTitle.replaceAll(' ', '_'))}`,
-    imageUrl, description: text('ImageDescription'), matchedBy: article ? 'article-image' : 'commons-search', query: search,
+    imageUrl, description: text('ImageDescription'), matchedBy: article ? `File:${article.pageimage}`.replaceAll('_', ' ') === page.title?.replaceAll('_', ' ') ? 'article-image' : 'article-gallery' : 'commons-search', query: search,
     ...(article ? { articleTitle: plain(article.title, 300), articleUrl: publicLink(article.fullurl), articleExtract: plain(article.extract, 2500) } : {}),
     artist: text('Artist'), credit: text('Credit'), licenseName, licenseUrl: publicLink(info.extmetadata?.LicenseUrl?.value),
     attributionRequired: text('AttributionRequired').toLowerCase() !== 'false',
     width: info.thumbwidth ?? info.width ?? 0, height: info.thumbheight ?? info.height ?? 0,
   };
+}
+
+export type ReferenceArticle = { source: ReferenceTextSource; entityId?: string; links: string[] };
+function articleEvidence(page: WikiPage): ReferenceArticle | undefined {
+  const title = plain(page.title, 300), excerpt = plain(page.extract, 6000);
+  if (!title || !excerpt || page.missing || page.pageprops?.disambiguation !== undefined) return;
+  const revisionId = Number.isSafeInteger(page.lastrevid) && page.lastrevid! > 0 ? page.lastrevid : undefined;
+  const url = `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replaceAll(' ', '_'))}` + (revisionId ? `?oldid=${revisionId}` : '');
+  const entityId = page.pageprops?.wikibase_item;
+  return { source: { id: `wikipedia:${title}`, title, url, publisher: 'Wikipedia', excerpt, fetchedAt: page.fetchedAt!,
+    sha256: createHash('sha256').update(excerpt).digest('hex'), ...(revisionId ? { revisionId } : {}),
+    licenseName: 'CC BY-SA 4.0', licenseUrl: 'https://creativecommons.org/licenses/by-sa/4.0/' },
+    ...(/^Q[1-9]\d*$/.test(entityId || '') ? { entityId } : {}),
+    links: [...new Set((page.extlinks || []).map(link => publicLink(link.url)).filter(Boolean))].slice(0, 12),
+  };
+}
+
+/** One exact article, including source text beyond the lead. No external link is fetched. */
+export async function loadArticleEvidence(title: string, options: Options = {}): Promise<ReferenceArticle | undefined> {
+  if (typeof title !== 'string' || !title.trim() || title.length > 300 || title.includes('|')) throw new Error('Provide one exact article title.');
+  const signal = AbortSignal.any([AbortSignal.timeout(10_000), ...(options.signal ? [options.signal] : [])]);
+  const pages = await query('en.wikipedia.org', { titles: title, redirects: '1', prop: 'extracts|info|pageprops|extlinks', explaintext: '1', exlimit: '1', exsectionformat: 'plain', inprop: 'url', ellimit: '12' }, signal);
+  return pages.map(articleEvidence).find(Boolean);
+}
+
+/** Only validated Wikidata entity IDs can reach this allowlisted API. */
+export async function loadWikidataEntities(ids: string[], options: Options = {}) {
+  if (!Array.isArray(ids) || !ids.length || ids.length > 20 || ids.some(id => typeof id !== 'string' || !/^Q[1-9]\d*$/.test(id))) throw new Error('Provide 1–20 Wikidata entity IDs.');
+  const signal = AbortSignal.any([AbortSignal.timeout(10_000), ...(options.signal ? [options.signal] : [])]);
+  const url = new URL('https://www.wikidata.org/w/api.php');
+  url.search = new URLSearchParams({ action: 'wbgetentities', format: 'json', ids: [...new Set(ids)].sort().join('|'), props: 'labels|claims|info', languages: 'en' }).toString();
+  signal.throwIfAborted();
+  const cached = entityCache.get(url.href);
+  if (cached) return structuredClone(cached);
+  const { bytes } = await boundedFetch(url.href, 'api', signal);
+  const json = JSON.parse(bytes.toString('utf8')) as { entities?: Record<string, WikidataEntity>; error?: { code?: string } };
+  if (json.error || !json.entities || typeof json.entities !== 'object' || Array.isArray(json.entities)) throw new Error('Wikidata reference details could not be read.');
+  const entities = Object.fromEntries(Object.entries(json.entities).filter(([id, value]) => ids.includes(id) && value && typeof value === 'object' && !Array.isArray(value)));
+  const result = { entities, fetchedAt: new Date().toISOString() };
+  if (Object.keys(entities).length) entityCache.put(url.href, structuredClone(result), bytes.length);
+  return result;
+}
+
+function viewHints(item: ReferenceCandidate): ReferenceViewHint[] {
+  const text = `${item.fileTitle} ${item.description}`.toLowerCase();
+  const patterns: [ReferenceViewHint, RegExp][] = [
+    ['front', /\bfront(?:al)?\b/], ['rear', /\brear\b|\bback (?:side|view)\b/], ['side', /\bside (?:view|profile)\b|\blateral\b|\bin profile\b/],
+    ...(['north', 'south', 'east', 'west'] as const).map(direction => [direction, new RegExp(`\\b${direction}(?:ern)?[ -](?:side|face|facade|elevation|view)\\b|\\b(?:from|facing|toward|towards) (?:the )?${direction}\\b`)] as [ReferenceViewHint, RegExp]),
+    ['above', /\baerial\b|\bfrom above\b|\btop view\b/], ['interior', /\binterior\b|\binside\b/], ['detail', /\bdetail\b|\bclose[ -]?up\b/],
+  ];
+  return patterns.filter(([, pattern]) => pattern.test(text)).map(([hint]) => hint);
 }
 
 // Derivative credits often name an original file even when an edit was renamed.
@@ -222,7 +286,18 @@ function diverseOrder(items: ReferenceCandidate[]): ReferenceCandidate[] {
     if (known.length) { edits.push(item); for (const existing of known) for (const key of family) existing.add(key); }
     else { primary.push(item); families.push(family); }
   }
-  return [...primary, ...edits];
+  if (!primary.some(item => item.viewHints?.length)) return [...primary, ...edits];
+  const ordered = [primary.shift()!], covered = new Set(ordered[0].viewHints || []);
+  while (primary.length) {
+    let best = 0, bestScore = -Infinity;
+    primary.forEach((item, index) => {
+      const score = (item.viewHints || []).filter(hint => hint !== 'detail' && hint !== 'interior' && !covered.has(hint)).length * 4 - index / Math.max(1, primary.length);
+      if (score > bestScore) { best = index; bestScore = score; }
+    });
+    const [next] = primary.splice(best, 1);
+    ordered.push(next); for (const hint of next.viewHints || []) covered.add(hint);
+  }
+  return [...ordered, ...edits];
 }
 
 // Strict same-view check: normalized luminance tolerates re-encoding/brightness
@@ -243,7 +318,7 @@ function nearDuplicate(a: Float64Array | undefined, b: Float64Array | undefined)
 }
 
 /** Search results are candidates, not proof of identity. Verify metadata AND fetched pixels against the intended subject. */
-export async function discoverReferences(subject: ReferenceSubject, options: Options = {}): Promise<{ subject: string; candidates: ReferenceCandidate[]; warnings: string[] }> {
+export async function discoverReferences(subject: ReferenceSubject, options: Options = {}): Promise<{ subject: string; candidates: ReferenceCandidate[]; articles: ReferenceArticle[]; warnings: string[] }> {
   if (!subject || typeof subject.name !== 'string' || !subject.name.trim() || subject.name.length > 200
     || (subject.location !== undefined && (typeof subject.location !== 'string' || subject.location.length > 200))
     || (subject.aliases !== undefined && (!Array.isArray(subject.aliases) || subject.aliases.length > 3 || subject.aliases.some(alias => typeof alias !== 'string' || alias.length > 200)))) throw new Error('Provide a concise reference subject and location.');
@@ -259,57 +334,112 @@ export async function discoverReferences(subject: ReferenceSubject, options: Opt
   // Canonical/alias search need not repeat every geographic word in a caption.
   const alternateSearch = names.length > 1 ? names.map(value => `(${wordsQuery(value)})`).join(' OR ') : wordsQuery(name);
   const searches = [...new Set([search, alternateSearch])];
+  const enriched = options.complexity === 'complex' || options.complexity === 'intricate';
+  // Broad search already supplies hero/front views. Spend the two supplemental
+  // queries on other sides, without treating a query match as a verified angle.
+  // Keep these searches simple: live CirrusSearch grouped OR queries returned
+  // no raster hits, while the same canonical subject plus one view term did.
+  const angleSearches = [`${wordsQuery(name)} rear filetype:bitmap`, `${wordsQuery(name)} "side view" filetype:bitmap`];
+  searches.push(...angleSearches);
   const warnings: string[] = [];
   const results = await Promise.allSettled([
-    query('en.wikipedia.org', { titles: names.join('|'), redirects: '1', prop: 'pageimages|extracts|info', piprop: 'name', pilicense: 'free', exintro: '1', explaintext: '1', exsentences: '3', inprop: 'url' }, signal),
-    ...searches.map(gsrsearch => query('commons.wikimedia.org', { generator: 'search', gsrsearch, gsrnamespace: '6', gsrlimit: '12', ...imageInfoParams }, signal)),
+    query('en.wikipedia.org', { titles: names.join('|'), redirects: '1', prop: `pageimages|extracts|info|pageprops${enriched ? '|images' : ''}`, piprop: 'name', pilicense: 'free', exintro: '1', explaintext: '1', inprop: 'url', ...(enriched ? { imlimit: '24' } : {}) }, signal),
+    ...searches.map(gsrsearch => query('commons.wikimedia.org', { generator: 'search', gsrsearch, gsrnamespace: '6', gsrlimit: enriched ? '24' : '12', ...imageInfoParams }, signal)),
   ]);
   signal.throwIfAborted();
-  const articles = results[0].status === 'fulfilled' ? results[0].value.filter(page => page.pageimage) : [];
+  const articles = results[0].status === 'fulfilled' ? results[0].value.filter(page => !page.missing && page.pageprops?.disambiguation === undefined) : [];
+  const articleFiles = (article: WikiPage) => [article.pageimage ? `File:${article.pageimage}` : '', ...(enriched ? (article.images || []).map(image => image.title || '') : [])].filter(title => /^File:/i.test(title));
+  const titles = [...new Set(articles.flatMap(articleFiles))].slice(0, 24);
   let articleImages: WikiPage[] = [];
-  if (articles.length) {
-    try { articleImages = await query('commons.wikimedia.org', { titles: articles.map(article => `File:${article.pageimage}`).join('|'), ...imageInfoParams }, signal); }
+  if (titles.length) {
+    try { articleImages = await query('commons.wikimedia.org', { titles: titles.join('|'), ...imageInfoParams }, signal); }
     catch (error) { signal.throwIfAborted(); warnings.push(error instanceof Error ? error.message : 'Article image lookup failed.'); }
   }
   for (const result of results) if (result.status === 'rejected') warnings.push(result.reason instanceof Error ? result.reason.message : 'Reference search failed.');
   const candidates: ReferenceCandidate[] = [];
+  const targetedFiles = new Set<string>();
   const pages = [...articleImages.map(page => ({ page, query: search })), ...results.slice(1).flatMap((result, index) =>
     result.status === 'fulfilled' ? result.value.map(page => ({ page, query: searches[index] })) : [])];
   for (const { page, query: matchedQuery } of pages) {
-    const article = articles.find(item => `File:${item.pageimage}`.replaceAll('_', ' ') === page.title?.replaceAll('_', ' '));
+    const article = articles.find(item => articleFiles(item).some(title => title.replaceAll('_', ' ') === page.title?.replaceAll('_', ' ')));
     const item = candidate(page, matchedQuery, article);
+    if (item && angleSearches.includes(matchedQuery)) targetedFiles.add(item.fileTitle);
     if (item && !candidates.some(existing => existing.fileTitle === item.fileTitle)) candidates.push(item);
   }
   // Prefer files actually named for the subject over campus panoramas whose captions merely mention it.
   // This orders candidates only; neither a filename nor an article association verifies the pixels.
   const words = (value: string) => value.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean);
   const subjectWords = [...new Set(words(name))];
+  const matchesName = (item: ReferenceCandidate) => names.some(name => {
+    const tokens = words(name), metadata = words(`${item.fileTitle} ${item.description}`);
+    return tokens.length > 0 && tokens.every(token => metadata.includes(token));
+  });
+  for (let index = candidates.length - 1; index >= 0; index--) {
+    const item = candidates[index];
+    if (!enriched && !angleSearches.includes(item.query)) continue;
+    const incidentalGraphic = item.fileTitle.match(/\b(?:coat of arms|locator map|logo|signature|flag)\b/i)?.[0];
+    // Article galleries also contain maps, neighboring sites and navigation images.
+    if (incidentalGraphic && !names.some(name => name.toLowerCase().includes(incidentalGraphic.toLowerCase())) || item.matchedBy !== 'article-image' && !matchesName(item)) candidates.splice(index, 1);
+  }
+  for (const item of candidates) {
+    item.identityEvidence = item.matchedBy !== 'commons-search' ? 'article-linked' : matchesName(item) ? 'metadata-match' : 'search-only';
+    item.viewHints = viewHints(item);
+  }
   const relevance = (item: ReferenceCandidate) => {
     const titleWords = words(item.fileTitle), title = titleWords.join(' ');
-    return (item.matchedBy === 'article-image' ? 10 : 0)
+    return (item.matchedBy === 'article-image' ? 10 : item.matchedBy === 'article-gallery' ? 3 : 0)
       + (title.includes(subjectWords.join(' ')) ? 2 : 0)
       + subjectWords.filter(word => titleWords.includes(word)).length / subjectWords.length;
   };
   candidates.sort((a, b) => relevance(b) - relevance(a));
-  const ordered = diverseOrder(candidates).slice(0, maxCandidates);
+  // Keep the strongest identity anchor, then retain targeted hits ahead of
+  // redundant broad results before the bounded candidate list is truncated.
+  const anchor = candidates[0];
+  candidates.sort((a, b) => Number(b === anchor) - Number(a === anchor)
+    || (relevance(b) + (targetedFiles.has(b.fileTitle) ? 4 : 0)) - (relevance(a) + (targetedFiles.has(a.fileTitle) ? 4 : 0)));
+  const ordered = diverseOrder(candidates).slice(0, enriched ? maxCandidates : 12);
   if (ordered.length && ordered.every(item => sameFamily(photoFamily(ordered[0]), photoFamily(item)))) warnings.push('Only one distinct reference photo family was found. Hidden sides and depth remain uncertain.');
-  return { subject: [name, location].filter(Boolean).join(', '), candidates: ordered, warnings };
+  return { subject: [name, location].filter(Boolean).join(', '), candidates: ordered, articles: articles.map(articleEvidence).filter((article): article is ReferenceArticle => Boolean(article)), warnings };
+}
+
+/** Metadata suggests coverage; it cannot establish the camera poses in pixels. */
+export function referenceViewWarnings(images: readonly ReferenceImage[]): string[] {
+  const photos = images.filter(image => image.metadata.mediaType !== 'model-render');
+  if (!photos.length) return [];
+  if (photos.length === 1) return ['Only one usable reference photograph was confirmed. Other sides and depth remain unverified.'];
+  const hints = new Set(photos.flatMap(image => image.metadata.viewHints || []).filter(hint => hint !== 'detail' && hint !== 'interior'));
+  if (hints.size < 2) return ['Multiple photographs were retrieved, but distinct camera angles could not be established from their metadata. Hidden sides and depth remain unverified.'];
+  return [`Reference metadata suggests ${[...hints].join(', ')} views. Verify these angles in the actual photos; labels do not prove independent viewpoints, and unseen sides remain uncertain.`];
 }
 
 /** Pixels are transient: persist metadata only; send inlineData directly to the multimodal planner. */
 export async function loadReferenceImages(candidates: ReferenceCandidate[], options: Options & { maxImages?: number } = {}): Promise<ReferenceImage[]> {
   const maxImages = options.maxImages ?? 2;
-  if (!Number.isInteger(maxImages) || maxImages < 1 || maxImages > 3) throw new Error('Load one to three reference images.');
+  if (!Number.isInteger(maxImages) || maxImages < 1 || maxImages > 12) throw new Error('Load one to twelve reference images.');
   const signal = AbortSignal.any([AbortSignal.timeout(15_000), ...(options.signal ? [options.signal] : [])]);
   const images: ReferenceImage[] = [];
   const selected: { family: Set<string>; signature: Float64Array | undefined }[] = [];
+  let decodedBytes = 0, attempted = 0;
   let firstFailure: unknown;
-  for (const item of diverseOrder(candidates.slice(0, maxCandidates))) {
+  const remaining = diverseOrder(candidates.slice(0, maxCandidates));
+  while (remaining.length) {
+    // A failed download or duplicate photo does not cover an angle. Re-rank
+    // against accepted pixels so another candidate can still supply that view.
+    const covered = new Set(images.flatMap(image => image.metadata.viewHints || []));
+    let next = 0, bestScore = -Infinity;
+    if (images.length) remaining.forEach((item, index) => {
+      const score = (item.viewHints || []).filter(hint => hint !== 'detail' && hint !== 'interior' && !covered.has(hint)).length * 4 - index / remaining.length;
+      if (score > bestScore) { next = index; bestScore = score; }
+    });
+    const [item] = remaining.splice(next, 1);
+    options.signal?.throwIfAborted();
+    if (signal.aborted && images.length) break;
     signal.throwIfAborted();
     const family = photoFamily(item);
     const related = selected.filter(previous => sameFamily(previous.family, family));
     if (related.length) { for (const previous of related) for (const key of family) previous.family.add(key); continue; }
     if (images.some(previous => previous.metadata.imageUrl === item.imageUrl)) continue;
+    if (attempted++ >= 24) break;
     try {
       allowedUrl(item.imageUrl, 'image');
       let decoded = pixelCache.get(item.imageUrl);
@@ -328,15 +458,52 @@ export async function loadReferenceImages(candidates: ReferenceCandidate[], opti
       }
       signal.throwIfAborted();
       if (images.some(previous => previous.metadata.sha256 === decoded.sha256) || selected.some(previous => nearDuplicate(previous.signature, decoded.signature))) continue;
+      const bytes = Buffer.byteLength(decoded.inlineData.data, 'base64');
+      if (decodedBytes + bytes > 8_000_000) continue;
       const { inlineData, signature: pixels, ...metadata } = decoded;
       images.push({ metadata: { ...item, ...metadata }, inlineData: { ...inlineData } });
+      decodedBytes += bytes;
       selected.push({ family, signature: pixels });
       if (images.length === maxImages) break;
     } catch (error) {
+      options.signal?.throwIfAborted();
+      if (signal.aborted && images.length) break;
       signal.throwIfAborted();
       firstFailure ??= error;
     }
   }
   if (!images.length && firstFailure) throw firstFailure;
   return images;
+}
+
+/** One optional public data-only model, never a required substitute for photos.
+ * CirrusSearch filetype:3d is documented at mediawiki.org/wiki/Help:CirrusSearch.
+ * Unsupported formats (including .blend) are not downloaded or executed. */
+export async function loadReferenceModel(subject: ReferenceSubject, options: { signal: AbortSignal; deadline: number }): Promise<{ images: ReferenceImage[]; model: ReferenceModelEvidence } | undefined> {
+  const name = plain(subject.name, 200), words = name.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean);
+  if (!words.length) return;
+  const search = words.map(word => `"${word}"`).join(' ') + ' filetype:3d filesize:<4883';
+  const pages = await query('commons.wikimedia.org', { generator: 'search', gsrsearch: search, gsrnamespace: '6', gsrlimit: '6', ...imageInfoParams }, options.signal);
+  const page = pages.find(page => {
+    const info = page.imageinfo?.[0], metadata = plain(`${page.title} ${info?.extmetadata?.ImageDescription?.value}`).toLowerCase();
+    if (!/\.stl$/i.test(page.title || '') || !info?.url || !['application/sla', 'model/stl', 'model/x.stl-binary', 'model/x.stl-ascii', 'application/octet-stream'].includes(info.mime || '') || (info.size ?? 0) > maxImageBytes
+      || !words.every(word => metadata.includes(word)) || !plain(info.extmetadata?.LicenseShortName?.value || info.extmetadata?.UsageTerms?.value)) return false;
+    try { allowedUrl(info.url, 'model'); if (info.thumburl) allowedUrl(info.thumburl, 'image'); return true; } catch { return false; }
+  });
+  if (!page) return;
+  const info = page.imageinfo![0], { bytes } = await boundedFetch(info.url!, 'model', options.signal);
+  options.signal.throwIfAborted();
+  const mesh = parseReferenceStl(bytes), renders = await renderReferenceStl(mesh, options);
+  const text = (key: string) => plain(info.extmetadata?.[key]?.value);
+  const title = plain(page.title, 500), sourcePageUrl = `https://commons.wikimedia.org/wiki/${encodeURIComponent(title.replaceAll(' ', '_'))}`;
+  const fetchedAt = new Date().toISOString();
+  const model: ReferenceModelEvidence = { title, sourcePageUrl, assetUrl: info.url!, artist: text('Artist'), credit: text('Credit'),
+    licenseName: text('LicenseShortName') || text('UsageTerms'), licenseUrl: publicLink(info.extmetadata?.LicenseUrl?.value), format: 'stl', geometryRead: true,
+    sha256: createHash('sha256').update(bytes).digest('hex'), fetchedAt, triangleCount: mesh.triangleCount, bounds: mesh.bounds, units: 'unspecified', viewImageIndices: [] };
+  return { model, images: renders.map(({ label, bytes }) => ({ inlineData: { mimeType: 'image/jpeg', data: bytes.toString('base64') }, metadata: {
+    fileTitle: title, sourcePageUrl, imageUrl: info.thumburl || info.url!, description: `External 3D model, not a photograph. ${text('ImageDescription')} ${label}; numeric STL geometry was read. Source units, orientation and subject accuracy are unverified. Grayscale rendering does not establish material colors.`,
+    artist: model.artist, credit: model.credit, licenseName: model.licenseName, licenseUrl: model.licenseUrl, attributionRequired: text('AttributionRequired').toLowerCase() !== 'false',
+    matchedBy: 'commons-search', query: search, identityEvidence: 'metadata-match', mediaType: 'model-render', viewLabel: label, width: 320, height: 320,
+    fetchedAt, sha256: createHash('sha256').update(bytes).digest('hex'),
+  } })) };
 }

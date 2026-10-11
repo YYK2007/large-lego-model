@@ -86,8 +86,8 @@ test('the 13-piece roof uses real opposing slopes and seats its ridge on all eig
   ]);
   const slopes = result.bricks.filter(brick => brick.partId === '3039');
   assert.deepEqual(slopes.map(brick => brick.rotation).sort((a, b) => a - b), [0, 0, 180, 180]);
-  const studs = slopes.flatMap(partTopStuds);
-  const capSites = result.bricks.filter(brick => brick.z === 8).flatMap(partBottomSites);
+  const studs = slopes.flatMap(brick => partTopStuds(brick));
+  const capSites = result.bricks.filter(brick => brick.z === 8).flatMap(brick => partBottomSites(brick));
   assert.equal(capSites.length, 8);
   assert.ok(capSites.every(site => studs.some(stud => site.x === stud.x && site.y === stud.y && site.z === stud.z)));
   const allocation = allocateInventory(result, roofInventory);
@@ -105,7 +105,7 @@ test('all four slope yaws are retained even with a square part footprint', () =>
     const slopes = result.bricks.filter(brick => brick.partId === '3039');
     assert.equal(slopes.length, 2);
     assert.ok(slopes.every(brick => brick.rotation === rotation));
-    const studs = slopes.flatMap(partTopStuds);
+    const studs = slopes.flatMap(brick => partTopStuds(brick));
     const expected = rotation === 0 || rotation === 270 ? 1.5 : 0.5;
     assert.ok(studs.every(site => (sideways ? site.x : site.y) === expected));
   }

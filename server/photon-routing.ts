@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Content } from 'spectrum-ts';
-import { COLORS, PARTS, validateDesign, type Design, type InventoryItem } from '../shared/model.js';
+import { resolveCatalog, mergeCatalogManifests, validateDesign, type CatalogManifest, type Design, type InventoryItem } from '../shared/model.js';
 
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 export const MESSAGE_HISTORY_LIMIT = 200;
@@ -10,12 +10,27 @@ export interface PhotonImage {
   data: string;
   mimeType: string;
 }
+export type PhotonQuality = 'quick' | 'detailed';
+export type PendingPhotonRequest = { kind: 'new' | 'design'; prompt: string; image?: PhotonImage };
 
 export interface Conversation {
   designId?: string;
   inventory?: InventoryItem[];
+  inventoryCatalog?: CatalogManifest;
   pendingImage?: PhotonImage;
   handledIds: string[];
+  spaceId?: string;
+  jobId?: string;
+  lastAttempt?: number;
+  lastDraftId?: string;
+  finishedJobId?: string;
+  requestPrompt?: string;
+  quality?: PhotonQuality;
+  pendingRequest?: PendingPhotonRequest;
+  pendingQuality?: PhotonQuality;
+  lastDeliveryAt?: number;
+  lastProgressAt?: number;
+  lastProgressKey?: string;
 }
 
 export class PhotonInputError extends Error {}
@@ -32,12 +47,29 @@ export function rememberMessageIds(handledIds: string[], ids: string[]): string[
   return [...new Set([...handledIds, ...ids])].slice(-MESSAGE_HISTORY_LIMIT);
 }
 
-type PhotonCommand = { kind: 'manual' | 'new' | 'design'; prompt: string } | { kind: 'open'; designId: string; prompt: '' };
+type PhotonCommand = { kind: 'manual' | 'model' | 'stop' | 'status' | 'chat' | 'new' | 'design'; prompt: string } | { kind: 'open'; designId: string; prompt: '' } | { kind: 'use'; attempt: number; prompt: '' } | { kind: 'quality'; quality: PhotonQuality; prompt: string };
 const validDesignId = (value: unknown): value is string => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(value);
 
 export function routeText(text: string): PhotonCommand {
   const prompt = text.trim();
+  const natural = prompt.toLowerCase().replace(/[’]/g, "'").replace(/[?!.]+$/, '').trim();
+  if (/\bwhat(?:'s| is|s) (?:going on|happening)\b/.test(natural)) return { kind: 'status', prompt: '' };
+  if (['status', '/status', 'update', 'progress', 'any update', 'any updates', 'are you working', 'are you still working', 'still working', 'is it ready', 'is it done', 'are you done', 'how is it going', "how's it going", 'how long', 'how much longer', "what's happening"].includes(natural)) return { kind: 'status', prompt: '' };
+  if (/^(?:ok(?:ay)?|thanks|thank you|cool|great|sounds good|yes|yep|sure)$/.test(natural)) return { kind: 'chat', prompt: '' };
+  const quality = /^\/?(quick|detailed)(?=$|[\s:,.!-])(?:\s*[:,-]\s*|\s+)?(.*)$/i.exec(prompt);
+  if (quality) return { kind: 'quality', quality: quality[1].toLowerCase() as PhotonQuality, prompt: /^(?:mode)?(?:[, ]*please)?[.!]*$/i.test(quality[2].trim()) ? '' : quality[2].trim() };
+  const modeSuffix = /^(.*?)\s+(?:in|using)\s+(quick|detailed)\s+mode(?:,?\s+please)?[.!]?$/i.exec(prompt);
+  if (modeSuffix) return { kind: 'quality', quality: modeSuffix[2].toLowerCase() as PhotonQuality, prompt: modeSuffix[1].trim() };
   if (/^\/?(?:manual|instructions)$/i.test(prompt)) return { kind: 'manual', prompt: '' };
+  if (/^\/?(?:stop|cancel)$/i.test(prompt)) return { kind: 'stop', prompt: '' };
+  if (/^\/?status$/i.test(prompt)) return { kind: 'status', prompt: '' };
+  if (/^\/?(?:model|3d)$/i.test(prompt)) return { kind: 'model', prompt: '' };
+  const use = /^\/?use(?:\s+(\d+))?$/i.exec(prompt);
+  if (use) {
+    const attempt = Number(use[1]);
+    if (!Number.isSafeInteger(attempt) || attempt < 1) throw new PhotonInputError('Send /use followed by a checked attempt number, for example /use 7.');
+    return { kind: 'use', attempt, prompt: '' };
+  }
   const open = /^\/open(?:\s+([\s\S]*))?$/i.exec(prompt);
   if (open) {
     const designId = open[1]?.trim();
@@ -49,12 +81,13 @@ export function routeText(text: string): PhotonCommand {
   return { kind: 'design', prompt };
 }
 
-function inventorySnapshot(value: unknown): InventoryItem[] | undefined {
+function inventorySnapshot(value: unknown, manifest?: CatalogManifest): InventoryItem[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value) || value.length > 500) throw new PhotonInputError('The saved inventory is invalid. Save a corrected inventory in the web app first.');
+  const { parts, colors } = resolveCatalog(manifest);
   return value.map(item => {
-    if (!item || typeof item !== 'object' || typeof item.partId !== 'string' || !Object.hasOwn(PARTS, item.partId)
-      || !Number.isInteger(item.colorId) || !Object.hasOwn(COLORS, item.colorId)
+    if (!item || typeof item !== 'object' || typeof item.partId !== 'string' || !Object.hasOwn(parts, item.partId)
+      || !Number.isInteger(item.colorId) || !Object.hasOwn(colors, item.colorId)
       || !Number.isSafeInteger(item.quantity) || item.quantity < 0
       || typeof item.source !== 'string' || item.source.length > 120) {
       throw new PhotonInputError('The saved inventory is invalid. Save a corrected inventory in the web app first.');
@@ -63,41 +96,71 @@ function inventorySnapshot(value: unknown): InventoryItem[] | undefined {
   });
 }
 
+function parseImage(value: unknown): PhotonImage {
+  const image = value as Partial<PhotonImage> | null;
+  if (!image || typeof image.data !== 'string' || image.data.length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4
+    || !/^[A-Za-z0-9+/]+={0,2}$/.test(image.data) || typeof image.mimeType !== 'string' || !IMAGE_TYPES.has(image.mimeType)) throw new Error('Invalid saved image.');
+  return { data: image.data, mimeType: image.mimeType };
+}
+
 /** Reject damaged inventory instead of silently switching an owned build to unlimited pieces. */
 export function parseConversation(value: unknown): Conversation {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid saved conversation.');
   const data = value as Record<string, unknown>;
   if (!Array.isArray(data.handledIds) || data.handledIds.some(id => typeof id !== 'string')) throw new Error('Invalid saved message history.');
   if (data.designId !== undefined && !validDesignId(data.designId)) throw new Error('Invalid saved design ID.');
-  let pendingImage: PhotonImage | undefined;
-  if (data.pendingImage !== undefined) {
-    const image = data.pendingImage as Partial<PhotonImage> | null;
-    if (!image || typeof image.data !== 'string' || image.data.length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4
-      || !/^[A-Za-z0-9+/]+={0,2}$/.test(image.data) || typeof image.mimeType !== 'string' || !IMAGE_TYPES.has(image.mimeType)) {
-      throw new Error('Invalid saved image.');
-    }
-    pendingImage = { data: image.data, mimeType: image.mimeType };
+  for (const name of ['jobId', 'lastDraftId', 'finishedJobId']) if (data[name] !== undefined && !validDesignId(data[name])) throw new Error('Invalid saved job or draft ID.');
+  if (data.lastAttempt !== undefined && (!Number.isSafeInteger(data.lastAttempt) || (data.lastAttempt as number) < 0)) throw new Error('Invalid saved attempt number.');
+  if (data.spaceId !== undefined && (typeof data.spaceId !== 'string' || !data.spaceId.length || data.spaceId.length > 1000)) throw new Error('Invalid saved conversation address.');
+  if (data.requestPrompt !== undefined && (typeof data.requestPrompt !== 'string' || data.requestPrompt.length > 4000)) throw new Error('Invalid saved build prompt.');
+  for (const key of ['quality', 'pendingQuality']) if (data[key] !== undefined && !['quick', 'detailed'].includes(data[key] as string)) throw new Error('Invalid saved build quality.');
+  for (const key of ['lastDeliveryAt', 'lastProgressAt']) if (data[key] !== undefined && (!Number.isFinite(data[key]) || (data[key] as number) < 0)) throw new Error('Invalid saved progress time.');
+  if (data.lastProgressKey !== undefined && (typeof data.lastProgressKey !== 'string' || data.lastProgressKey.length > 100)) throw new Error('Invalid saved progress stage.');
+  const inventoryCatalog = data.inventoryCatalog === undefined ? undefined : structuredClone(data.inventoryCatalog) as CatalogManifest;
+  resolveCatalog(inventoryCatalog);
+  const pendingImage = data.pendingImage === undefined ? undefined : parseImage(data.pendingImage);
+  let pendingRequest: PendingPhotonRequest | undefined;
+  if (data.pendingRequest !== undefined) {
+    const request = data.pendingRequest as Partial<PendingPhotonRequest> | null;
+    if (!request || !['new', 'design'].includes(request.kind as string) || typeof request.prompt !== 'string' || request.prompt.length > 4000) throw new Error('Invalid saved pending request.');
+    pendingRequest = { kind: request.kind as 'new' | 'design', prompt: request.prompt, ...(request.image === undefined ? {} : { image: parseImage(request.image) }) };
   }
   return {
     ...(data.designId ? { designId: data.designId as string } : {}),
-    inventory: inventorySnapshot(data.inventory),
+    inventory: inventorySnapshot(data.inventory, inventoryCatalog),
+    ...(inventoryCatalog ? { inventoryCatalog } : {}),
     ...(pendingImage ? { pendingImage } : {}),
     handledIds: rememberMessageIds([], data.handledIds as string[]),
+    ...(data.spaceId ? { spaceId: data.spaceId as string } : {}),
+    ...(data.jobId ? { jobId: data.jobId as string } : {}),
+    ...(data.lastDraftId ? { lastDraftId: data.lastDraftId as string } : {}),
+    ...(data.finishedJobId ? { finishedJobId: data.finishedJobId as string } : {}),
+    ...(data.lastAttempt !== undefined ? { lastAttempt: data.lastAttempt as number } : {}),
+    ...(data.requestPrompt ? { requestPrompt: data.requestPrompt as string } : {}),
+    ...(data.quality ? { quality: data.quality as PhotonQuality } : {}),
+    ...(data.pendingQuality ? { pendingQuality: data.pendingQuality as PhotonQuality } : {}),
+    ...(pendingRequest ? { pendingRequest } : {}),
+    ...(data.lastDeliveryAt !== undefined ? { lastDeliveryAt: data.lastDeliveryAt as number } : {}),
+    ...(data.lastProgressAt !== undefined ? { lastProgressAt: data.lastProgressAt as number } : {}),
+    ...(data.lastProgressKey ? { lastProgressKey: data.lastProgressKey as string } : {}),
   };
 }
 
 export function importSavedDesign(conversation: Conversation, value: unknown): Conversation {
-  const saved = value as Design & { inventory?: unknown };
+  const saved = value as Design & { inventory?: unknown; inventoryCatalog?: CatalogManifest };
   if (!saved || !validDesignId(saved.id) || !validateDesign(saved).valid) throw new PhotonInputError('That saved design is invalid. Save it again in the web app.');
+  const inventoryCatalog = mergeCatalogManifests(saved.inventoryCatalog, saved.catalog);
   return {
     designId: saved.id,
-    inventory: inventorySnapshot(saved.inventory),
+    inventory: inventorySnapshot(saved.inventory, inventoryCatalog),
+    ...(Object.keys(inventoryCatalog.parts).length || Object.keys(inventoryCatalog.colors).length ? { inventoryCatalog } : {}),
     handledIds: [...conversation.handledIds],
+    ...(conversation.spaceId ? { spaceId: conversation.spaceId } : {}),
   };
 }
 
-export function inventoryContext(conversation: Conversation): { inventory?: InventoryItem[]; inventoryMode: 'owned' | 'unlimited' } {
-  return { inventory: conversation.inventory, inventoryMode: conversation.inventory?.length ? 'owned' : 'unlimited' };
+export function inventoryContext(conversation: Conversation): { inventory?: InventoryItem[]; inventoryCatalog?: CatalogManifest; inventoryMode: 'owned' | 'unlimited' } {
+  return { inventory: conversation.inventory, ...(conversation.inventory?.length && conversation.inventoryCatalog ? { inventoryCatalog: conversation.inventoryCatalog } : {}), inventoryMode: conversation.inventory?.length ? 'owned' : 'unlimited' };
 }
 
 export function contentMessageIds(id: string, content: Content): string[] {

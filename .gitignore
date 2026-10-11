@@ -8,4 +8,6 @@ output/
 .DS_Store
 *.log
 .playwright-cli/
+.playwright-mcp/
+*.tsbuildinfo
 

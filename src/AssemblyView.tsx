@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowDownToLine, ChevronLeft, ChevronRight, RotateCcw } from 'lucide-react';
-import { billOfMaterials, COLORS, footprint, PARTS, type BuildStep, type Design } from '../shared/model';
+import { billOfMaterials, catalogForDesign, footprint, type BuildStep, type Design } from '../shared/model';
 import { renderDesignSvg } from '../shared/illustration';
 import { BrickScene } from './BrickScene';
 import { placementInstruction } from '../shared/assembly';
@@ -16,20 +16,21 @@ export function AssemblyView({ design, steps, downloadManual }: { design: Design
   });
   const [replay, setReplay] = useState(0);
   useEffect(() => { localStorage.setItem(storageKey, JSON.stringify(progress)); }, [storageKey, progress]);
+  const catalog = catalogForDesign(design);
   const current = steps[progress.step];
   const active = current.bricks[progress.piece];
   const placement = current.placements[progress.piece];
-  const size = footprint(active);
+  const size = footprint(active, catalog);
   const visibleIds = useMemo(() => [...steps.slice(0, progress.step).flatMap(step => step.bricks), ...current.bricks.slice(0, progress.piece + 1)].map(brick => brick.id), [steps, current, progress.step, progress.piece]);
   const tray = useMemo(() => billOfMaterials({ ...design, bricks: current.bricks }).map(part => {
     const firstIndex = current.bricks.findIndex(brick => brick.partId === part.partId && brick.colorId === part.colorId);
-    const thumbnail = { ...design, title: `${COLORS[part.colorId].name} ${PARTS[part.partId].name}`, bricks: [{ ...current.bricks[firstIndex], x: 0, y: 0, z: 0, rotation: 0 as const }] };
+    const thumbnail = { ...design, title: `${catalog.colors[part.colorId].name} ${catalog.parts[part.partId].name}`, bricks: [{ ...current.bricks[firstIndex], x: 0, y: 0, z: 0, rotation: 0 as const }] };
     return { ...part, firstIndex, svg: renderDesignSvg(thumbnail, { width: 76, height: 55 }) };
   }), [design, current]);
   const { minX, minY, width, depth } = useMemo(() => {
     const minX = Math.min(...design.bricks.map(brick => brick.x)), minY = Math.min(...design.bricks.map(brick => brick.y));
-    return { minX, minY, width: Math.max(...design.bricks.map(brick => brick.x + footprint(brick).width)) - minX,
-      depth: Math.max(...design.bricks.map(brick => brick.y + footprint(brick).depth)) - minY };
+    return { minX, minY, width: Math.max(...design.bricks.map(brick => brick.x + footprint(brick, catalog).width)) - minX,
+      depth: Math.max(...design.bricks.map(brick => brick.y + footprint(brick, catalog).depth)) - minY };
   }, [design]);
   const cell = 20;
   const moveStep = (step: number) => setProgress({ step, piece: 0 });
@@ -50,10 +51,10 @@ export function AssemblyView({ design, steps, downloadManual }: { design: Design
       <div className="part-tray">{tray.map(part => {
         return <button key={`${part.partId}:${part.colorId}`} className={`part-chip ${active.partId === part.partId && active.colorId === part.colorId ? 'selected' : ''}`} aria-pressed={active.partId === part.partId && active.colorId === part.colorId} onClick={() => setProgress({ ...progress, piece: part.firstIndex })}>
           <span className="part-thumb" aria-hidden="true" dangerouslySetInnerHTML={{ __html: part.svg }} />
-          <span className="part-count">×{part.quantity}</span><strong>{PARTS[part.partId].name}</strong><small>{COLORS[part.colorId].name} · #{part.partId}</small>
+          <span className="part-count">×{part.quantity}</span><strong>{catalog.parts[part.partId].name}</strong><small>{catalog.colors[part.colorId].name} · #{part.partId}</small>
         </button>;
       })}</div>
-      <div className="placement-heading" aria-live="polite"><h3>Place piece {progress.piece + 1} of {current.bricks.length}</h3><p>{COLORS[active.colorId].name} {PARTS[active.partId].name.toLowerCase()} · {size.width} across × {size.depth} deep</p></div>
+      <div className="placement-heading" aria-live="polite"><h3>Place piece {progress.piece + 1} of {current.bricks.length}</h3><p>{catalog.colors[active.colorId].name} {catalog.parts[active.partId].name.toLowerCase()} · {size.width} across × {size.depth} deep</p></div>
       <p className="placement-note">{placementInstruction(placement)}{placement.approach !== 'above' && ' Hold the built section while attaching this piece. Physical strength is unverified.'}</p>
       <div className="placement-list" aria-label="Placements in this step">{current.bricks.map((brick, index) => <button key={brick.id} aria-label={`Show placement ${index + 1}`} aria-pressed={index === progress.piece} className={`placement-button ${index === progress.piece ? 'selected' : ''}`} onClick={() => setProgress({ ...progress, piece: index })}>{index + 1}</button>)}</div>
       <div className="placement-map">
@@ -62,8 +63,8 @@ export function AssemblyView({ design, steps, downloadManual }: { design: Design
           {Array.from({ length: width }, (_, x) => <text key={`x${x}`} x={(x + 1.5) * cell} y={13} textAnchor="middle" fontSize={9} fill="#335678">{x + minX}</text>)}
           {Array.from({ length: depth }, (_, y) => <text key={`y${y}`} x={10} y={(y + 1.6) * cell} textAnchor="middle" fontSize={9} fill="#335678">{y + minY}</text>)}
           {current.bricks.slice(0, progress.piece + 1).map((brick, index) => {
-            const part = footprint(brick);
-            return <g key={brick.id}><rect x={(brick.x - minX + 1) * cell + 1} y={(brick.y - minY + 1) * cell + 1} width={part.width * cell - 2} height={part.depth * cell - 2} fill={COLORS[brick.colorId].hex} stroke={brick.id === active.id ? '#006dff' : '#52667a'} strokeWidth={brick.id === active.id ? 3 : 1} />
+            const part = footprint(brick, catalog);
+            return <g key={brick.id}><rect x={(brick.x - minX + 1) * cell + 1} y={(brick.y - minY + 1) * cell + 1} width={part.width * cell - 2} height={part.depth * cell - 2} fill={catalog.colors[brick.colorId].hex} stroke={brick.id === active.id ? '#006dff' : '#52667a'} strokeWidth={brick.id === active.id ? 3 : 1} />
               <circle cx={(brick.x - minX + 1 + part.width / 2) * cell} cy={(brick.y - minY + 1 + part.depth / 2) * cell} r={7} fill="white" stroke="#173f67" strokeWidth={0.6} />
               <text x={(brick.x - minX + 1 + part.width / 2) * cell} y={(brick.y - minY + 1 + part.depth / 2) * cell + 3} textAnchor="middle" fontSize={9} fill="#173f67">{index + 1}</text></g>;
           })}

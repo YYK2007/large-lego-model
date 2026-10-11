@@ -8,6 +8,7 @@ import { partSurfaces } from '../shared/part-surfaces.js';
 import { createBrickModel } from '../shared/brick-geometry.js';
 import { ROOF_SAMPLE } from '../shared/roof-sample.js';
 import partColors from '../shared/part-colors.json';
+import { archiveFiles, verifyBatchedUsdz } from './usdz-artifact.js';
 
 // Verified 2026-10-10 against Rebrickable part/colour API records and official
 // https://library.ldraw.org/library/official/parts/<id>.dat (CC BY 4.0).
@@ -107,11 +108,15 @@ test('web and native-export geometry keep long dimensions, stud spacing and real
     assert.equal(meshes.length - 1, item.width * item.length);
     for (const mesh of meshes) { mesh.geometry.dispose(); const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]; materials.forEach(material => material.dispose()); }
   }
-  const archive = await generateUsdz(design([piece('91405')]));
-  const text = archive.toString('utf8');
-  assert.equal((text.match(/def Xform "Body_/g) || []).length, 1);
-  assert.equal((text.match(/def Xform "Stud_/g) || []).length, 256);
-  assert.match(text, /metersPerUnit = 1/);
+  const slab = design([piece('91405')]);
+  const report = verifyBatchedUsdz(archiveFiles(await generateUsdz(slab)), slab);
+  assert.equal(report.meshes, 1);
+  assert.equal(report.bodies, 1);
+  assert.equal(report.studs, 256);
+  const bounds = report.parts.find(part => part.name === 'Body_0')!.bounds.getSize(new Vector3());
+  assert.ok(Math.abs(bounds.x - 0.12768) < 1e-8);
+  assert.ok(Math.abs(bounds.z - 0.12768) < 1e-8);
+  assert.ok(Math.abs(bounds.y - 0.00296) < 1e-8);
 });
 
 test('additive long parts preserve saved V2 coordinates and the legacy seven-brick restriction', () => {

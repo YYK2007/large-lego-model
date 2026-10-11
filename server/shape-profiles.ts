@@ -1,14 +1,42 @@
-import { COLORS, WORKSPACE } from '../shared/model.js';
+import { resolveCatalog, type CatalogContext, WORKSPACE } from '../shared/model.js';
 import type { ShapeBox } from './compiler.js';
 
 export type ProfileSection = { z: number; cx: number; cy: number; width: number; depth: number };
-export type ShapeProfile = { shape: 'ellipse' | 'rectangle'; colorId: number; wall?: number; arc?: { startDegrees: number; sweepDegrees: number }; sections: ProfileSection[] };
+export type ProfilePoint = { u: number; v: number };
+export type ShapeProfile = { shape: 'ellipse' | 'rectangle' | 'polygon'; colorId: number; wall?: number; outline?: ProfilePoint[]; arc?: { startDegrees: number; sweepDegrees: number }; sections: ProfileSection[] };
 export type ProfileBox = { box: ShapeBox; source: { path: string; sections: [number, number] } };
 
-function validateProfile(profile: ShapeProfile, path: string) {
+const epsilon = 1e-12;
+function cross(a: ProfilePoint, b: ProfilePoint, c: ProfilePoint) {
+  return (b.u - a.u) * (c.v - a.v) - (b.v - a.v) * (c.u - a.u);
+}
+
+function validateOutline(outline: ShapeProfile['outline'], fail: (message: string) => never) {
+  if (!Array.isArray(outline) || outline.length < 3 || outline.length > 32) fail('A polygon outline needs 3–32 vertices, with implicit closure.');
+  const points = outline!;
+  for (const point of points) if (!point || Array.isArray(point) || ![point.u, point.v].every(value => Number.isFinite(value) && Math.abs(value) <= 1)) fail('Polygon outline coordinates u/v must be finite numbers from -1 through 1.');
+  if (new Set(points.map(point => `${point.u},${point.v}`)).size !== points.length) fail('Polygon outline vertices must be distinct; do not repeat the closing vertex.');
+  const area = points.reduce((sum, a, i) => { const b = points[(i + 1) % points.length]; return sum + a.u * b.v - b.u * a.v; }, 0);
+  if (Math.abs(area) <= epsilon) fail('Polygon outline must have nonzero area.');
+  const onSegment = (a: ProfilePoint, b: ProfilePoint, p: ProfilePoint) => Math.abs(cross(a, b, p)) <= epsilon && p.u >= Math.min(a.u, b.u) - epsilon && p.u <= Math.max(a.u, b.u) + epsilon && p.v >= Math.min(a.v, b.v) - epsilon && p.v <= Math.max(a.v, b.v) + epsilon;
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i], b = points[(i + 1) % points.length], c = points[(i + 2) % points.length];
+    if (Math.abs(cross(a, b, c)) <= epsilon && (a.u - b.u) * (c.u - b.u) + (a.v - b.v) * (c.v - b.v) > 0) fail('Polygon outline edges cannot overlap or backtrack.');
+    for (let j = i + 2; j < points.length; j++) {
+      if (i === 0 && j === points.length - 1) continue;
+      const c = points[j], d = points[(j + 1) % points.length];
+      const abC = cross(a, b, c), abD = cross(a, b, d), cdA = cross(c, d, a), cdB = cross(c, d, b);
+      if ((abC * abD < 0 && cdA * cdB < 0) || onSegment(a, b, c) || onSegment(a, b, d) || onSegment(c, d, a) || onSegment(c, d, b)) fail('Polygon outline must be simple: nonadjacent edges cannot intersect or touch.');
+    }
+  }
+}
+
+export function validateProfile(profile: ShapeProfile, path: string, catalog: CatalogContext = resolveCatalog()) {
   const fail = (message: string): never => { throw new Error(`${path}: ${message}`); };
-  if (!profile || Array.isArray(profile) || !['ellipse', 'rectangle'].includes(profile.shape) || !Number.isSafeInteger(profile.colorId) || !Object.hasOwn(COLORS, profile.colorId)) fail('A profile needs ellipse or rectangle shape and a supported color.');
+  if (!profile || Array.isArray(profile) || !['ellipse', 'rectangle', 'polygon'].includes(profile.shape) || !Number.isSafeInteger(profile.colorId) || !Object.hasOwn(catalog.colors, profile.colorId)) fail('A profile needs ellipse, rectangle or polygon shape and a supported color.');
   if ('profiles' in profile || 'repeats' in profile) fail('Profiles cannot contain nested profiles or repeats.');
+  if (profile.shape === 'polygon') validateOutline(profile.outline, fail);
+  else if (profile.outline !== undefined) fail('Only polygon profiles may define an outline.');
   if (profile.wall !== undefined && (!Number.isSafeInteger(profile.wall) || profile.wall < 1)) fail('Profile wall must be a positive integer thickness in studs.');
   if (profile.arc !== undefined && (profile.shape !== 'ellipse' || !profile.arc || Array.isArray(profile.arc) ||
     !Number.isFinite(profile.arc.startDegrees) || profile.arc.startDegrees < 0 || profile.arc.startDegrees >= 360 ||
@@ -25,11 +53,11 @@ function validateProfile(profile: ShapeProfile, path: string) {
 }
 
 /** Translate a repeated profile in stud-x/y and plate-z units without changing its contour. */
-export function translateProfile(profile: ShapeProfile, offset: { x: number; y: number; z: number }): ShapeProfile {
-  validateProfile(profile, 'Profile');
+export function translateProfile(profile: ShapeProfile, offset: { x: number; y: number; z: number }, catalog: CatalogContext = resolveCatalog()): ShapeProfile {
+  validateProfile(profile, 'Profile', catalog);
   if (!offset || ![offset.x, offset.y, offset.z].every(Number.isSafeInteger)) throw new Error('Profile translation needs integer stud-x/y and plate-z offsets.');
-  const translated = { ...profile, sections: profile.sections.map(section => ({ ...section, cx: section.cx + offset.x, cy: section.cy + offset.y, z: section.z + offset.z })) };
-  validateProfile(translated, 'Translated profile');
+  const translated = { ...profile, ...(profile.outline ? { outline: profile.outline.map(point => ({ ...point })) } : {}), sections: profile.sections.map(section => ({ ...section, cx: section.cx + offset.x, cy: section.cy + offset.y, z: section.z + offset.z })) };
+  validateProfile(translated, 'Translated profile', catalog);
   return translated;
 }
 
@@ -43,10 +71,15 @@ export function translateProfile(profile: ShapeProfile, offset: { x: number; y: 
  * interiors omit only this profile's contribution. No support or closure is added.
  * Optional ellipse arcs start at +X and sweep toward +Y about each interpolated
  * center. Both radial boundaries and the center are included; 360 is a full ellipse.
+ * Polygon outlines use the same normalized vertices at every section, transformed
+ * by its center and diameters. Half-open scanline intervals include their left and
+ * exclude their right boundaries, matching rectangular cell sampling. Polygon wall
+ * is the horizontal Euclidean distance from an occupied cell center to its closest
+ * boundary segment, measured in studs. No inner contour, cap or support is invented.
  * Adjacent identical row runs merge vertically within the same section interval.
  */
-export function expandProfile(profile: ShapeProfile, path = '/profiles/0'): ProfileBox[] {
-  validateProfile(profile, path);
+export function expandProfile(profile: ShapeProfile, path = '/profiles/0', catalog: CatalogContext = resolveCatalog()): ProfileBox[] {
+  validateProfile(profile, path, catalog);
   const output: ProfileBox[] = [];
   for (let index = 0; index < profile.sections.length - 1; index++) {
     const lower = profile.sections[index], upper = profile.sections[index + 1];
@@ -55,6 +88,7 @@ export function expandProfile(profile: ShapeProfile, path = '/profiles/0'): Prof
       const t = (z + 0.5 - lower.z) / (upper.z - lower.z);
       const interpolate = (key: 'cx' | 'cy' | 'width' | 'depth') => lower[key] + (upper[key] - lower[key]) * t;
       const cx = interpolate('cx'), cy = interpolate('cy'), width = interpolate('width'), depth = interpolate('depth');
+      const polygon = profile.shape === 'polygon' ? profile.outline!.map(point => ({ x: cx + point.u * width / 2, y: cy + point.v * depth / 2 })) : undefined;
       const inside = (x: number, y: number, w: number, d: number) => {
         if (w <= 0 || d <= 0) return false;
         if (profile.shape === 'rectangle') return x >= cx - w / 2 && x < cx + w / 2 && y >= cy - d / 2 && y < cy + d / 2;
@@ -72,11 +106,28 @@ export function expandProfile(profile: ShapeProfile, path = '/profiles/0'): Prof
       const minX = Math.max(0, Math.floor(cx - width / 2)), maxX = Math.min(WORKSPACE.width, Math.ceil(cx + width / 2));
       const minY = Math.max(0, Math.floor(cy - depth / 2)), maxY = Math.min(WORKSPACE.depth, Math.ceil(cy + depth / 2));
       for (let y = minY; y < maxY; y++) {
+        // Intersect edges once per row instead of testing every edge at every cell.
+        const crossings = polygon?.flatMap((a, i) => {
+          const b = polygon[(i + 1) % polygon.length], py = y + 0.5;
+          return (a.y > py + epsilon) !== (b.y > py + epsilon) ? [a.x + (py - a.y) * (b.x - a.x) / (b.y - a.y)] : [];
+        }).sort((a, b) => a - b);
+        const filled = (x: number) => {
+          if (!polygon) return occupied(x, y);
+          const px = x + 0.5, py = y + 0.5;
+          // Treat floating-point roundoff at a cell center consistently after translation.
+          if (!crossings!.some((left, i) => i % 2 === 0 && px >= left - epsilon && px < crossings![i + 1] - epsilon)) return false;
+          if (profile.wall === undefined) return true;
+          return polygon.some((a, i) => {
+            const b = polygon[(i + 1) % polygon.length], dx = b.x - a.x, dy = b.y - a.y;
+            const t = Math.max(0, Math.min(1, ((px - a.x) * dx + (py - a.y) * dy) / (dx * dx + dy * dy)));
+            return (px - a.x - t * dx) ** 2 + (py - a.y - t * dy) ** 2 <= profile.wall! ** 2 + epsilon;
+          });
+        };
         let x = minX;
         while (x < maxX) {
-          if (!occupied(x, y)) { x++; continue; }
+          if (!filled(x)) { x++; continue; }
           const start = x++;
-          while (x < maxX && occupied(x, y)) x++;
+          while (x < maxX && filled(x)) x++;
           const key = `${start},${y},${x - start}`;
           const previous = priorRuns.get(key);
           if (previous && previous.z + previous.height === z) previous.height++;

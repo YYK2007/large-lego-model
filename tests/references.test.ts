@@ -2,7 +2,7 @@ import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
-import { discoverReferences, loadReferenceImages, resetReferenceStateForTests, type ReferenceCandidate } from '../server/references.js';
+import { discoverReferences, loadReferenceImages, referenceViewWarnings, resetReferenceStateForTests, type ReferenceCandidate, type ReferenceImage } from '../server/references.js';
 
 beforeEach(resetReferenceStateForTests);
 
@@ -25,7 +25,7 @@ test('discovery retains article evidence, sanitizes attribution, and does not ce
     return json([photo(), photo('File:A different tower.jpg')]);
   });
   const found = await discoverReferences({ name: 'Morehead-Patterson Bell Tower', location: 'Chapel Hill' });
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 6);
   assert.equal(calls[1].searchParams.get('gsrsearch'), '"Morehead" "Patterson" "Bell" "Tower" "Chapel" "Hill"');
   assert.equal(calls[1].searchParams.get('gsrnamespace'), '6');
   assert.equal(calls[1].searchParams.get('iiurlwidth'), '1280');
@@ -123,11 +123,11 @@ test('failed reference images fall through to later ranked candidates and retain
   assert.ok(images.every(item => item.metadata.sha256.length === 64 && item.metadata.height === 40));
 });
 
-test('failed image fallback is bounded to twelve candidates and preserves the original failure', async t => {
+test('failed image fallback is bounded to twenty-four candidates and preserves the original failure', async t => {
   let calls = 0;
   t.mock.method(globalThis, 'fetch', async () => new Response('', { status: ++calls === 1 ? 404 : 503 }));
-  await assert.rejects(loadReferenceImages(Array.from({ length: 20 }, () => sample())), /request failed \(404\)/);
-  assert.equal(calls, 12);
+  await assert.rejects(loadReferenceImages(Array.from({ length: 48 }, () => sample())), /request failed \(404\)/);
+  assert.equal(calls, 24);
 });
 
 test('cancellation during failed-image fallback stops before another candidate is fetched', async t => {
@@ -192,7 +192,7 @@ test('caller cancellation stops discovery and retrieval, and reference image cou
   assert.equal(calls, 0);
   assert.equal((await loadReferenceImages([sample(), sample(), sample()])).length, 1, 'A requested count never duplicates the same photo');
   assert.equal((await loadReferenceImages([sample(), sample(), sample()], { maxImages: 3 })).length, 1);
-  await assert.rejects(loadReferenceImages([sample()], { maxImages: 4 }), /one to three/);
+  await assert.rejects(loadReferenceImages([sample()], { maxImages: 13 }), /one to twelve/);
 });
 
 test('bounded alternate searches use canonical names and aliases without requiring every location word', async t => {
@@ -212,7 +212,7 @@ test('bounded alternate searches use canonical names and aliases without requiri
       return json([photo(`File:${subject.name} view.jpg`)]);
     });
     const found = await discoverReferences(subject);
-    assert.equal(searches.length, 2);
+    assert.equal(searches.length, 4);
     assert.ok(searches[1].includes(subject.aliases[0].split(' ').map(word => `"${word}"`).join(' ')));
     assert.ok(!subject.location || !searches[1].includes(`"${subject.location.split(/[ ,]/)[0]}"`));
     assert.equal(found.candidates.length, 1);
@@ -335,10 +335,10 @@ test('expired metadata and pixels refetch, while failed and empty API results ar
   assert.equal(calls, initial * 2);
   resetReferenceStateForTests(); fail = true;
   await discoverReferences({ name: 'Tower' }); const failures = calls;
-  await discoverReferences({ name: 'Tower' }); assert.equal(calls, failures + 2);
+  await discoverReferences({ name: 'Tower' }); assert.equal(calls, failures + 4);
   fail = false; empty = true;
   await discoverReferences({ name: 'Tower' }); const empties = calls;
-  await discoverReferences({ name: 'Tower' }); assert.equal(calls, empties + 2);
+  await discoverReferences({ name: 'Tower' }); assert.equal(calls, empties + 4);
 });
 
 test('decoded image cache is LRU bounded and failed decodes are not retained', async t => {
@@ -410,4 +410,55 @@ test('repeated 429s stop after one retry and cancellation aborts Retry-After bac
   });
   await assert.rejects(loadReferenceImages([sample()], { signal: controller.signal }), /Cancel reference backoff/);
   assert.equal(calls, 1);
+});
+
+
+test('all research sizes actively search other angles while targeted wrong-subject results stay excluded', async t => {
+  for (const complexity of [undefined, 'simple', 'complex', 'intricate'] as const) await t.test(complexity || 'Quick default', async t => {
+    resetReferenceStateForTests();
+    const searches: string[] = [];
+    t.mock.method(globalThis, 'fetch', async (input: URL) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'en.wikipedia.org') return json([]);
+      const search = url.searchParams.get('gsrsearch')!; searches.push(search);
+      return json(search.includes(' rear filetype:bitmap') ? [photo('File:Specimen rear.jpg'), photo('File:Different object rear.jpg')]
+        : search.includes('side view') ? [photo('File:Specimen side view.jpg')]
+        : [photo('File:Specimen front.jpg'), photo('File:Specimen front edit2.jpg')]);
+    });
+    const found = await discoverReferences({ name: 'Specimen' }, { complexity });
+    assert.equal(searches.length, 3, 'One canonical and two targeted searches, within the existing discovery deadline');
+    assert.ok(searches.some(query => query.includes(' rear filetype:bitmap'))); assert.ok(searches.some(query => query.includes('side view')));
+    assert.ok(searches.slice(-2).every(query => query.endsWith('filetype:bitmap') && !query.includes(' OR ')), 'Supplemental searches exclude PDF text and common front hero shots');
+    assert.deepEqual(found.candidates.slice(0, 3).map(candidate => candidate.viewHints), [['front'], ['rear'], ['side']]);
+    assert.equal(found.candidates.some(candidate => candidate.fileTitle.includes('Different object')), false);
+  });
+});
+
+test('failed or duplicate angle candidates are replaced by genuinely different pixels before repeated views or details', async t => {
+  for (const rejected of ['duplicate', 'failed'] as const) await t.test(rejected, async t => {
+    resetReferenceStateForTests();
+    const original = await patternedImage(0), side = await patternedImage(1), rear = await patternedImage(2);
+    const hints = [['front'], ['rear'], ['detail'], ['side'], ['rear']] as ReferenceCandidate['viewHints'][];
+    const candidates = hints.map((viewHints, index) => ({ ...sample(`https://upload.wikimedia.org/angle-${index}.png`), fileTitle: `File:Distinct photo ${index}.png`, viewHints, artist: `Photographer ${index}` }));
+    const calls: number[] = [];
+    t.mock.method(globalThis, 'fetch', async (input: URL) => {
+      const index = Number(String(input).match(/angle-(\d)/)![1]); calls.push(index);
+      if (index === 1 && rejected === 'failed') return new Response('', { status: 404 });
+      return new Response(new Uint8Array(index === 3 ? side : index === 4 ? rear : original), { headers: { 'content-type': 'image/png' } });
+    });
+    const images = await loadReferenceImages(candidates, { maxImages: 3 });
+    assert.deepEqual(calls, [0, 1, 3, 4]);
+    assert.deepEqual(images.map(image => image.metadata.artist), ['Photographer 0', 'Photographer 3', 'Photographer 4']);
+    assert.equal(new Set(images.map(image => image.metadata.sha256)).size, 3);
+    assert.match(referenceViewWarnings(images).join(' '), /front, side, rear.*labels do not prove/);
+  });
+});
+
+test('coverage disclosures distinguish unknown angles, a single photo and external model renders', () => {
+  const photo = (viewHints: ReferenceCandidate['viewHints']): ReferenceImage => ({ metadata: { ...sample(), viewHints, fetchedAt: new Date(0).toISOString(), sha256: 'a'.repeat(64) }, inlineData: { mimeType: 'image/jpeg', data: '' } });
+  const one = photo(['front']), external: ReferenceImage = { ...photo(['rear']), metadata: { ...photo(['rear']).metadata, mediaType: 'model-render' } };
+  assert.match(referenceViewWarnings([one, external]).join(' '), /Only one.*Other sides.*unverified/);
+  assert.match(referenceViewWarnings([photo([]), photo([])]).join(' '), /distinct camera angles could not be established/);
+  assert.match(referenceViewWarnings([one, photo(['front'])]).join(' '), /distinct camera angles could not be established/);
+  assert.deepEqual(referenceViewWarnings([external]), []);
 });

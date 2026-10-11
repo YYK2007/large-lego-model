@@ -2,9 +2,9 @@ import { mkdir, readFile, writeFile, link, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { normalizeDesign, type Design, type InventoryItem } from '../shared/model.js';
+import { normalizeDesign, type CatalogManifest, type Design, type InventoryItem } from '../shared/model.js';
 
-export type SavedDesign = Design & { inventory?: InventoryItem[] };
+export type SavedDesign = Design & { inventory?: InventoryItem[]; inventoryCatalog?: CatalogManifest };
 const directory = join(process.cwd(), 'data', 'designs');
 const validId = (id: string) => /^[a-zA-Z0-9_-]{1,80}$/.test(id);
 

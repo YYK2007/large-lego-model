@@ -51,6 +51,19 @@ test('manual commands do not swallow requests mentioning instructions', () => {
   assert.deepEqual(routeText('/new'), { kind: 'new', prompt: '' });
 });
 
+test('conversational status and explicit quality phrases route without becoming new build subjects', () => {
+  for (const phrase of ['I sent you a build request already, what’s going on?', 'Hey, what is happening with my build?', 'Whats going on?']) {
+    assert.deepEqual(routeText(phrase), { kind: 'status', prompt: '' });
+  }
+  for (const phrase of ['Quick!', 'quick mode', 'Quick mode, please', 'quick please']) {
+    assert.deepEqual(routeText(phrase), { kind: 'quality', quality: 'quick', prompt: '' });
+  }
+  assert.deepEqual(routeText('Detailed, please'), { kind: 'quality', quality: 'detailed', prompt: '' });
+  assert.deepEqual(routeText('Build a lighthouse in quick mode'), { kind: 'quality', quality: 'quick', prompt: 'Build a lighthouse' });
+  assert.deepEqual(routeText('Make it red using Detailed mode, please.'), { kind: 'quality', quality: 'detailed', prompt: 'Make it red' });
+  assert.deepEqual(routeText('quickly build a boat'), { kind: 'design', prompt: 'quickly build a boat' });
+});
+
 test('/open accepts a saved ID and rejects paths, URLs, missing IDs, and extra arguments', () => {
   assert.deepEqual(routeText(`/open ${savedBuild.id}`), { kind: 'open', designId: savedBuild.id, prompt: '' });
   for (const command of ['/open', '/open ../secrets', '/open https://example.com/design', '/open id another-id']) {

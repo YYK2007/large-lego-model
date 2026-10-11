@@ -25,7 +25,7 @@ Select **Any bricks**, set **Brick budget** to **120**, and paste this prompt in
 
 > Build a small three-dimensional cottage about 8 studs wide, 8 studs deep, and 8 brick layers tall. Give it a substantial box-shaped building, four walls, a stepped red roof, one supported chimney, a blue window on the front, a blue window on a side, and a yellow front door. Use ordinary upright rectangular bricks. Keep it within 120 pieces and keep the upper features supported. Make its shape interesting from the front, both sides, the back, and above. Explain any simplified detail.
 
-Click **Generate design** once and wait. One request can make up to three planning attempts, each with a 90-second API timeout. The UI does not expose the internal attempt count; record the total time and outcome, not a guessed number of repairs. A network/model/quota failure returns an error without the geometry repair loop.
+Choose Quick or Detailed, then click **Generate design** once. Quick aims for a draft in about 2.5 minutes per attempt cycle, excluding queue wait; a usable result is not guaranteed. The website keeps refining until **Stop generation**. Record its displayed attempts, elapsed time and outcome. Keep failures and unfinished previews separate from checked builds; use **Use this build** only for a checked result.
 
 Check every item before recording a pass:
 

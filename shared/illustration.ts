@@ -1,5 +1,5 @@
-import { COLORS, PARTS, footprint, normalizeDesign, partBottomSites, partHeight, partTopStuds, type Brick, type Design } from './model';
-import { partSurfaces, type PartPoint } from './part-surfaces';
+import { catalogForDesign, footprint, normalizeDesign, partBottomSites, partHeight, partTopStuds, type Brick, type Design } from './model';
+import { partSurfaces, meshSurfaces, type PartPoint } from './part-surfaces';
 
 type RenderOptions = {
   visibleIds?: string[];
@@ -24,7 +24,7 @@ const view: PartPoint = [1, 1, 2.5];
 const dot = (a: number[], b: number[]) => a.reduce((sum, value, axis) => sum + value * b[axis], 0);
 
 type Box = { x: number; y: number; z: number; w: number; d: number; h: number };
-type Polygon = { vertices: PartPoint[]; normal: PartPoint; svg: string; clip?: boolean };
+type Polygon = { vertices: PartPoint[]; normal: PartPoint; svg: string; clip?: boolean; fill?: string };
 type Drawing = { vertices: PartPoint[]; normals: PartPoint[]; svg: string; marker: string; polygons: () => Polygon[] };
 
 function boxVertices({ x, y, z, w, d, h }: Box): PartPoint[] {
@@ -97,6 +97,43 @@ function splitPolygonOrder(polygons: Polygon[]): Polygon[] {
   return [...splitPolygonOrder(back), ...coplanar, ...splitPolygonOrder(front)];
 }
 
+/** Source-first strongly connected groups of the unresolved drawing graph. */
+export function orderedOcclusionComponents(edges: readonly number[][], unresolved: readonly boolean[]): number[][] {
+  const reverse = edges.map(() => [] as number[]);
+  edges.forEach((next, index) => {
+    if (unresolved[index]) for (const target of next) if (unresolved[target]) reverse[target].push(index);
+  });
+  const seen = new Uint8Array(edges.length);
+  const cursor = new Uint32Array(edges.length);
+  const finished: number[] = [];
+  // Explicit DFS stacks keep arbitrary tall models independent of JS's call
+  // stack limit. Each edge is visited once per pass; no geometry is discarded.
+  for (let start = 0; start < edges.length; start++) {
+    if (!unresolved[start] || seen[start]) continue;
+    const stack = [start]; seen[start] = 1;
+    while (stack.length) {
+      const index = stack[stack.length - 1];
+      if (cursor[index] === edges[index].length) { finished.push(index); stack.pop(); continue; }
+      const next = edges[index][cursor[index]++];
+      if (unresolved[next] && !seen[next]) { seen[next] = 1; stack.push(next); }
+    }
+  }
+  seen.fill(0);
+  const groups: number[][] = [];
+  for (let i = finished.length - 1; i >= 0; i--) {
+    const start = finished[i];
+    if (seen[start]) continue;
+    const group: number[] = [], stack = [start]; seen[start] = 1;
+    while (stack.length) {
+      const index = stack.pop()!; group.push(index);
+      for (const next of reverse[index]) if (!seen[next]) { seen[next] = 1; stack.push(next); }
+    }
+    // Preserve the original artwork order inside each cycle's BSP input.
+    groups.push(group.sort((a, b) => a - b));
+  }
+  return groups;
+}
+
 // Bounding-box depth sums fail for long bricks. Only overlapping projections
 // need an order; along a viewing ray X, Y and Z all increase toward the camera.
 function painterOrder(drawings: Drawing[], point: (...position: PartPoint) => string) {
@@ -163,11 +200,11 @@ function painterOrder(drawings: Drawing[], point: (...position: PartPoint) => st
   }
   const prefix = ordered.map(({ svg }) => svg).join('');
   if (ordered.length === drawings.length) return prefix;
-  const unresolved = drawings.filter((_, index) => incoming[index] > 0);
-  const fragments = splitPolygonOrder(unresolved.flatMap(drawing => drawing.polygons()));
-  return prefix + unresolved.map(drawing => drawing.marker).join('') + fragments.map((polygon, index) => {
+  const groups = orderedOcclusionComponents(edges, incoming.map(count => count > 0));
+  let fragmentId = 0;
+  const renderFragment = (polygon: Polygon) => {
     if (!polygon.clip) return polygon.svg;
-    const id = `occlusion-fragment-${index}`;
+    const id = `occlusion-fragment-${fragmentId++}`;
     const points = polygon.vertices.map(vertex => point(...vertex).split(',').map(Number));
     const winding = Math.sign(points.reduce((sum, [x, y], i) => {
       const next = points[(i + 1) % points.length]; return sum + x * next[1] - y * next[0];
@@ -184,21 +221,30 @@ function painterOrder(drawings: Drawing[], point: (...position: PartPoint) => st
       return `${x + (a[0] + b[0]) * bleed},${y + (a[1] + b[1]) * bleed}`;
     }).join(' ');
     return `<defs><clipPath id="${id}"><polygon points="${clip}"/></clipPath></defs><g clip-path="url(#${id})">${polygon.svg}</g>`;
+  };
+  // A cycle can block thousands of otherwise acyclic descendants. Only its
+  // members need polygon splitting; component order preserves every edge.
+  return prefix + groups.map(group => {
+    if (group.length === 1) return drawings[group[0]].svg;
+    const cycle = group.map(index => drawings[index]);
+    return cycle.map(drawing => drawing.marker).join('')
+      + splitPolygonOrder(cycle.flatMap(drawing => drawing.polygons())).map(renderFragment).join('');
   }).join('');
 }
 
 /** A fixed isometric camera fitted to the complete design, including hidden bricks. */
 export function renderDesignSvg(design: Design, options: RenderOptions = {}): string {
   design = normalizeDesign(design);
+  const catalog = catalogForDesign(design);
   const width = options.width ?? 1000;
   const height = options.height ?? 650;
   const showCue = width >= 300 && height >= 200;
   if (!design.bricks.length) return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"/>`;
   let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
   for (const brick of design.bricks) {
-    const size = footprint(brick);
+    const size = footprint(brick, catalog);
     for (const x of [brick.x, brick.x + size.width]) for (const y of [brick.y, brick.y + size.depth]) {
-      for (const z of [brick.z, brick.z + partHeight(brick) + 0.5]) {
+      for (const z of [brick.z, brick.z + partHeight(brick, catalog) + 0.5]) {
         const [px, py] = project(x, y, z);
         left = Math.min(left, px); right = Math.max(right, px);
         top = Math.min(top, py); bottom = Math.max(bottom, py);
@@ -219,37 +265,62 @@ export function renderDesignSvg(design: Design, options: RenderOptions = {}): st
   const visible = options.visibleIds ? new Set(options.visibleIds) : null;
   const highlighted = options.highlightIds ? new Set(options.highlightIds) : null;
   const bricks = design.bricks.filter((brick) => !visible || visible.has(brick.id));
-  const occupied = new Set(bricks.flatMap((brick) => partBottomSites(brick).map(({ x, y, z }) => `${x},${y},${z}`)));
+  const occupied = new Set(bricks.flatMap((brick) => partBottomSites(brick, catalog).map(({ x, y, z }) => `${x},${y},${z}`)));
   const drawBrick = (brick: Brick) => {
     const faded = highlighted !== null && !highlighted.has(brick.id);
-    const base = COLORS[brick.colorId].hex;
+    const base = catalog.colors[brick.colorId].hex;
     const color = faded ? tint(base, 0.77) : base;
     const stroke = faded ? '#b2c8cf' : tint(color, -0.43);
     const strokeWidth = Math.max(0.45, Math.min(1.4, scale * 0.03));
-    const curved = ['round-brick', 'round-plate', 'cone'].includes(PARTS[brick.partId].kind);
+    const curved = ['round-brick', 'round-plate', 'cone', 'imported'].includes(catalog.parts[brick.partId].kind);
     // Radial tessellation is a rendering detail, not a rib on the physical part.
     const face = (points: string[], fill: string) => `<polygon points="${points.join(' ')}" fill="${fill}" stroke="${curved ? fill : stroke}" stroke-width="${curved ? 0.5 : strokeWidth}" stroke-linejoin="round"/>`;
-    const body = partSurfaces(brick);
-    const polygons: Polygon[] = body.faces.filter(({ normal }) => dot(normal, view) > 1e-8).map(({ indices, normal }) => {
+    const body = partSurfaces(brick, catalog);
+    const surfacePolygons = (body: ReturnType<typeof partSurfaces>): Polygon[] => body.faces.flatMap(surface => {
+      const { indices, normal } = surface, origin = body.vertices[indices[0]];
+      // LDraw permits slightly nonplanar quads. A BSP plane through their first
+      // triangle can split its own fourth vertex forever. Use the same exact
+      // vertex fan as native geometry, and retain planar artwork unchanged.
+      if (indices.length < 4 || indices.every(index => Math.abs(dot(normal, body.vertices[index].map((v, axis) => v - origin[axis]))) <= 1e-8)) return [surface];
+      return indices.slice(1, -1).flatMap((index, i) => {
+        const triangle = [indices[0], index, indices[i + 2]], [a, b, c] = triangle.map(vertex => body.vertices[vertex]);
+        const u = b.map((v, axis) => v - a[axis]), v = c.map((n, axis) => n - a[axis]);
+        const n: PartPoint = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+        const length = Math.hypot(...n);
+        return length > 1e-10 ? [{ indices: triangle, normal: n.map(value => value / length) as PartPoint }] : [];
+      });
+    }).filter(({ normal }) => dot(normal, view) > 1e-8).map(({ indices, normal }) => {
       const metricNormal = [normal[0], normal[1], normal[2] / 0.4];
       const shade = dot(metricNormal, [-0.3, -0.15, 0.08]) / metricNormal.reduce((sum, value) => sum + Math.abs(value), 0);
-      return { vertices: indices.map(index => body.vertices[index]), normal,
+      return { vertices: indices.map(index => body.vertices[index]), normal, fill: tint(color, shade),
         svg: face(indices.map((index) => point(...body.vertices[index])), tint(color, shade)) };
     });
+    const polygons = surfacePolygons(body);
     const marker = `<g data-brick-id="${escapeXml(brick.id)}" data-highlighted="${highlighted?.has(brick.id) ?? false}">`;
     // Stepped necks and hollow tops have visible surfaces inside their outer shell.
     // Draw their local polygons back-to-front before ordering complete pieces.
+    const imported = catalog.parts[brick.partId].geometry;
+    const localArt = (polygon: Polygon) => imported && polygon.clip
+      ? face(polygon.vertices.map(vertex => point(...vertex)), polygon.fill!) : polygon.svg;
     const orderedPolygons = curved ? splitPolygonOrder(polygons) : polygons;
     const drawings: Drawing[] = [{ vertices: body.vertices, normals: body.faces.map(({ normal }) => normal),
-      svg: `${marker}${orderedPolygons.map(polygon => polygon.svg).join('')}</g>`, marker: `${marker}</g>`, polygons: () => polygons }];
-    for (const { x, y, z } of partTopStuds(brick)) {
+      svg: `${marker}${orderedPolygons.map(localArt).join('')}</g>`, marker: `${marker}</g>`, polygons: () => polygons }];
+    if (imported) for (const [index, stud] of imported.studs.entries()) {
+      const site = partTopStuds(brick, catalog)[index];
+      if (occupied.has(`${site.x},${site.y},${site.z}`)) continue;
+      const surface = meshSurfaces(brick, stud.mesh, catalog), polygons = surfacePolygons(surface);
+      const marker = `<g data-stud-owner="${escapeXml(brick.id)}">`;
+      drawings.push({ vertices: surface.vertices, normals: surface.faces.map(face => face.normal),
+        svg: `${marker}${splitPolygonOrder(polygons).map(localArt).join('')}</g>`, marker: `${marker}</g>`, polygons: () => polygons });
+    }
+    for (const { x, y, z } of imported ? [] : partTopStuds(brick, catalog)) {
       // An attached brick encloses the stud; never draw it through that brick.
       if (occupied.has(`${x},${y},${z}`)) continue;
       const [cx, cy] = screen(x, y, z);
       const rx = scale * 0.3 * Math.sqrt(1.5);
       const ry = scale * 0.3 * Math.sqrt(0.5);
       const rise = scale * 0.2;
-      const hollow = PARTS[brick.partId].topStudStyle === 'hollow';
+      const hollow = catalog.parts[brick.partId].topStudStyle === 'hollow';
       const stud = `<path d="M ${cx - rx} ${cy - rise} L ${cx - rx} ${cy} A ${rx} ${ry} 0 0 0 ${cx + rx} ${cy} L ${cx + rx} ${cy - rise} Z" fill="${tint(color, -0.15)}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`
         + `<ellipse cx="${cx}" cy="${cy - rise}" rx="${rx}" ry="${ry}" fill="${tint(color, 0.16)}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`
         + (hollow ? `<ellipse data-hollow-stud="true" cx="${cx}" cy="${cy - rise}" rx="${rx * 2 / 3}" ry="${ry * 2 / 3}" fill="${tint(color, -0.62)}" stroke="${stroke}" stroke-width="${strokeWidth}"/>` : '');

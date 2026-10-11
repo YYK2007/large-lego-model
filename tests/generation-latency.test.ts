@@ -1,7 +1,10 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import dotenv from 'dotenv';
-import { generateDesign, GenerationError, type GenerationProgress } from '../server/generation.js';
+import { generateDesign as generateWithPolicy, suggestInventory, GenerationError, type GenerationProgress } from '../server/generation.js';
+
+// Preserve the fast-path regressions; detailed staged generation is tested separately.
+const generateDesign: typeof generateWithPolicy = (input, progress, options) => generateWithPolicy({ ...input, quality: 'quick' }, progress, options);
 import { footprint, validateDesign } from '../shared/model.js';
 import { HOLLOW_ROOM_PLAN } from './fixtures/hollow-room-plan.js';
 
@@ -144,12 +147,12 @@ test('one rejected plan may be repaired, with checker feedback and distinct prog
   assert.deepEqual(events.map(event => `${event.stage}:${event.attempt}/${event.maxAttempts}`), ['researching:1/2', 'planning:1/2', 'checking:1/2', 'repairing:2/2', 'planning:2/2', 'checking:2/2']);
 });
 
-test('two invalid plans stop without launching a third plan after subject identification', async t => {
+test('two structural failures receive two bounded simpler-part repairs before stopping', async t => {
   isolateCredentials(t);
   let calls = 0;
   t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => { calls++; return originalSubject(init) || responseFor(calls === 2 ? invalidPlan : replaceBoxes([])); });
-  await assert.rejects(generateDesign({ prompt: 'A red sculpture' }), (error: unknown) => error instanceof GenerationError && error.status === 422 && error.checks.length === 2 && /two attempts/.test(error.message));
-  assert.equal(calls, 3);
+  await assert.rejects(generateDesign({ prompt: 'A red sculpture' }), (error: unknown) => error instanceof GenerationError && error.status === 422 && error.checks.length === 4 && /four attempts/.test(error.message));
+  assert.equal(calls, 5);
 });
 
 test('a syntactically invalid first plan requests one complete regeneration because it cannot be patched', async t => {
@@ -195,7 +198,27 @@ test('exhausted provider quota is reported as HTTP 429 and is not retried', asyn
   assert.equal(calls, 1);
 });
 
-test('the overall deadline aborts even a stalled subject-identification request at 90 seconds', async t => {
+test('depleted prepaid credits remain an actionable terminal 402 in preflight, construction and inventory estimation', async t => {
+  for (const stage of ['preflight', 'construction', 'inventory'] as const) await t.test(stage, async t => {
+    isolateCredentials(t);
+    let calls = 0;
+    t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+      calls++;
+      if (stage === 'construction') { const subject = originalSubject(init); if (subject) return subject; }
+      return new Response(JSON.stringify({ error: { code: 402, status: 'RESOURCE_EXHAUSTED', message: 'Your prepayment credits are depleted. See https://ai.studio/projects and billing#prepay' } }), { status: 402 });
+    });
+    const request = stage === 'inventory'
+      ? suggestInventory({ mimeType: 'image/png', data: 'eA==' })
+      : generateDesign({ prompt: 'A red sculpture' }, undefined, { continuous: true });
+    await assert.rejects(request, error => error instanceof GenerationError && error.status === 402
+      && /prepaid credits.*project linked to the current API key/.test(error.message)
+      && /https:\/\/ai.studio\/projects/.test(error.message) && /already topped up.*balance updates/.test(error.message)
+      && !/replace|invalid.*key|clearer photo|request quota/.test(error.message));
+    assert.equal(calls, stage === 'construction' ? 2 : 1, 'Billing depletion must never trigger another paid retry');
+  });
+});
+
+test('the overall deadline aborts even a stalled subject-identification request at 150 seconds', async t => {
   isolateCredentials(t);
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
   let started!: () => void;
@@ -209,9 +232,9 @@ test('the overall deadline aborts even a stalled subject-identification request 
       started();
     });
   });
-  const rejected = assert.rejects(generateDesign({ prompt: 'A red sculpture' }), (error: unknown) => error instanceof GenerationError && error.status === 504 && /90-second/.test(error.message));
+  const rejected = assert.rejects(generateDesign({ prompt: 'A red sculpture' }), (error: unknown) => error instanceof GenerationError && error.status === 504 && /150-second/.test(error.message));
   await startedPromise;
-  t.mock.timers.tick(90_000);
+  t.mock.timers.tick(150_000);
   await rejected;
   assert.equal(calls, 1);
   assert.equal(aborted, true);
@@ -222,7 +245,7 @@ test('a late invalid response does not start a repair with only five seconds rem
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
   let calls = 0;
   const events: GenerationProgress[] = [];
-  t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => { calls++; const classification = originalSubject(init); if (classification) return classification; t.mock.timers.tick(85_000); return responseFor(invalidPlan); });
+  t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => { calls++; const classification = originalSubject(init); if (classification) return classification; t.mock.timers.tick(145_000); return responseFor(invalidPlan); });
   await assert.rejects(generateDesign({ prompt: 'A red sculpture' }, event => events.push(event)), (error: unknown) => error instanceof GenerationError && error.status === 504 && /not enough time/.test(error.message));
   assert.equal(calls, 2);
   assert.deepEqual(events.map(event => event.stage), ['researching', 'planning', 'checking']);
@@ -246,7 +269,7 @@ test('classification, first plan, and repair share one deadline without resettin
   });
   const rejected = assert.rejects(generateDesign({ prompt: 'A red sculpture' }), (error: unknown) => error instanceof GenerationError && error.status === 504);
   await startedPromise;
-  t.mock.timers.tick(34_999);
+  t.mock.timers.tick(94_999);
   assert.equal(aborted, false);
   t.mock.timers.tick(1);
   await rejected;
@@ -266,7 +289,7 @@ test('a deadline reached while arranging bricks becomes a 504 without another pr
   isolateCredentials(t);
   let compiling = false, compileClockReads = 0, calls = 0;
   const events: GenerationProgress[] = [];
-  t.mock.method(Date, 'now', () => compiling && ++compileClockReads > 4 ? 90_000 : 0);
+  t.mock.method(Date, 'now', () => compiling && ++compileClockReads > 4 ? 150_000 : 0);
   t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
     calls++;
     return originalSubject(init) || responseFor(validPlan);

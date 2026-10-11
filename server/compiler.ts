@@ -1,19 +1,19 @@
 import { randomUUID } from 'node:crypto';
 import { repairPacking } from './packing-repair.js';
 import { expandProfile, translateProfile, type ShapeProfile } from './shape-profiles.js';
-import { PARTS, COLORS, WORKSPACE, footprint, partHeight, partTopStuds, partBottomSites, SCHEMA_VERSION, COORDINATE_SYSTEM, CATALOG_VERSION, type Brick, type Design, type InventoryItem } from '../shared/model.js';
+import type { ShapeComponent } from './component-plan.js';
+import { resolveCatalog, type CatalogManifest, WORKSPACE, footprint, partHeight, partTopStuds, partBottomSites, SCHEMA_VERSION, COORDINATE_SYSTEM, CATALOG_VERSION, type Brick, type Design, type InventoryItem } from '../shared/model.js';
 
 export type ShapeCutout = { x: number; y: number; z: number; width: number; depth: number; height: number };
 export type ShapeBox = { x: number; y: number; z: number; width: number; depth: number; height: number; colorId: number; cutouts?: ShapeCutout[] };
 export type SlopeRun = { kind: 'upright45'; x: number; y: number; z: number; width: number; rotation: 0 | 90 | 180 | 270; colorId: number };
 export type ShapePart = Omit<Brick, 'id'>;
 export type ShapeRepeat = { boxes?: ShapeBox[]; profiles?: ShapeProfile[]; slopes?: SlopeRun[]; parts?: ShapePart[]; count: number; dx: number; dy: number; dz: number };
-export type ShapePlan = { title: string; description: string; boxes: ShapeBox[]; profiles?: ShapeProfile[]; schemaVersion?: 2; coordinateSystem?: 'stud-xy-plate-z'; slopes?: SlopeRun[]; parts?: ShapePart[]; repeats?: ShapeRepeat[]; partPlacement?: 'replace-volume' };
+export type ShapePlan = { title: string; description: string; boxes: ShapeBox[]; profiles?: ShapeProfile[]; schemaVersion?: 2; coordinateSystem?: 'stud-xy-plate-z'; slopes?: SlopeRun[]; parts?: ShapePart[]; repeats?: ShapeRepeat[]; components?: ShapeComponent[]; partPlacement?: 'replace-volume' };
 export type ShapePlanV2 = ShapePlan & { schemaVersion: 2; coordinateSystem: 'stud-xy-plate-z' };
 
 const keyAt = (x: number, y: number, z: number) => `${x},${y},${z}`;
 const legacyParts = new Set(['3005', '3004', '3622', '3010', '3003', '3002', '3001']);
-const validColor = (color: number) => Number.isInteger(color) && Object.hasOwn(COLORS, color);
 const repairContexts = new WeakMap<Design, Parameters<typeof repairPacking>[1]>();
 
 export class CompilationDeadlineError extends Error {
@@ -29,7 +29,10 @@ export function repairCompiledPlan(design: Design, options: { deadline?: number 
 }
 
 // The planner describes space and supported surface primitives. Only this compiler chooses real parts.
-export function compilePlan(plan: ShapePlan, options: { prompt: string; inventory?: InventoryItem[]; ownedOnly?: boolean; maxBricks?: number; scanOrder?: 'y-major' | 'x-major'; packing?: 'plates'; repair?: boolean; deadline?: number }): Design {
+export function compilePlan(plan: ShapePlan, options: { prompt: string; inventory?: InventoryItem[]; ownedOnly?: boolean; maxBricks?: number; scanOrder?: 'y-major' | 'x-major'; packing?: 'plates'; repair?: boolean; deadline?: number; catalog?: CatalogManifest; allowedPartIds?: ReadonlySet<string> }): Design {
+  const catalog = resolveCatalog(options.catalog);
+  const { parts: PARTS, colors: COLORS } = catalog;
+  const validColor = (color: number) => Number.isInteger(color) && Object.hasOwn(COLORS, color);
   const checkDeadline = () => { if (options.deadline !== undefined && Date.now() >= options.deadline) throw new CompilationDeadlineError(); };
   checkDeadline();
   if (!plan || typeof plan.title !== 'string' || !plan.title.trim() || plan.title.length > 90 || typeof plan.description !== 'string' || !plan.description.trim() || plan.description.length > 600 || !Array.isArray(plan.boxes)) {
@@ -72,10 +75,10 @@ export function compilePlan(plan: ShapePlan, options: { prompt: string; inventor
   const layers = new Set<number>();
   let extentX = 0, extentY = 0;
   function* plannedBoxes(): Generator<ShapeBox> {
-    for (const [index, profile] of (plan.profiles || []).entries()) for (const row of expandProfile(profile, `/profiles/${index}`)) yield row.box;
+    for (const [index, profile] of (plan.profiles || []).entries()) for (const row of expandProfile(profile, `/profiles/${index}`, catalog)) yield row.box;
     for (const [index, repeat] of repeats.entries()) for (let copy = 0; copy < repeat.count; copy++) for (const [profileIndex, profile] of (repeat.profiles || []).entries()) {
-      const translated = translateProfile(profile, { x: copy * repeat.dx, y: copy * repeat.dy, z: copy * repeat.dz });
-      for (const row of expandProfile(translated, `/repeats/${index}/profiles/${profileIndex}`)) yield row.box;
+      const translated = translateProfile(profile, { x: copy * repeat.dx, y: copy * repeat.dy, z: copy * repeat.dz }, catalog);
+      for (const row of expandProfile(translated, `/repeats/${index}/profiles/${profileIndex}`, catalog)) yield row.box;
     }
     // Boxes provide deliberate detail colors after profiles; cuts omit only their own box.
     yield* expanded(plan.boxes, 'boxes');
@@ -113,6 +116,7 @@ export function compilePlan(plan: ShapePlan, options: { prompt: string; inventor
   const reservations = new Set<string>();
   for (const run of expanded(runs, 'slopes')) {
     checkDeadline();
+    if (options.allowedPartIds && !options.allowedPartIds.has('3039')) throw new Error('This simpler build uses supported stepped bricks instead of slope runs.');
     if (!run || run.kind !== 'upright45' || !['x', 'y', 'z', 'width', 'rotation', 'colorId'].every(key => Number.isInteger(run[key as keyof SlopeRun])) || !validColor(run.colorId) || ![0, 90, 180, 270].includes(run.rotation) || run.width < 2 || run.width % 2 !== 0) throw new Error('A slope run needs kind upright45, integer coordinates, an even width, a supported color, and yaw 0, 90, 180, or 270.');
     const width = run.rotation % 180 ? 2 : run.width, depth = run.rotation % 180 ? run.width : 2;
     if (run.x < 0 || run.y < 0 || run.z < 0 || run.x + width > workspace.width || run.y + depth > workspace.depth || run.z + 3 > workspace.heightPlates) throw new Error('Slope run exceeds the design grid.');
@@ -134,9 +138,10 @@ export function compilePlan(plan: ShapePlan, options: { prompt: string; inventor
     checkDeadline();
     if (!raw || typeof raw.partId !== 'string' || !Object.hasOwn(PARTS, raw.partId) || !validColor(raw.colorId) ||
       ![raw.x, raw.y, raw.z].every(Number.isInteger) || ![0, 90, 180, 270].includes(raw.rotation)) throw new Error('Each explicit part needs a supported part ID, color, integer coordinates and yaw 0, 90, 180, or 270.');
+    if (options.allowedPartIds && !options.allowedPartIds.has(raw.partId)) throw new Error(`Part ${raw.partId} is outside the simpler build palette.`);
     if (!PARTS[raw.partId].allowedColors.includes(raw.colorId)) throw new Error(`Explicit part ${raw.partId} is not available in ${COLORS[raw.colorId].name} in the verified catalog.`);
     const brick: Brick = { id: '', partId: raw.partId, colorId: raw.colorId, x: raw.x, y: raw.y, z: raw.z, rotation: raw.rotation };
-    const { width, depth } = footprint(brick), height = partHeight(brick);
+    const { width, depth } = footprint(brick, catalog), height = partHeight(brick, catalog);
     if (brick.x < 0 || brick.y < 0 || brick.z < 0 || brick.x + width > workspace.width || brick.y + depth > workspace.depth || brick.z + height > workspace.heightPlates) throw new Error('Explicit part exceeds the design grid.');
     for (let z = brick.z; z < brick.z + height; z++) for (let y = brick.y; y < brick.y + depth; y++) for (let x = brick.x; x < brick.x + width; x++) {
       const key = keyAt(x, y, z);
@@ -178,7 +183,7 @@ export function compilePlan(plan: ShapePlan, options: { prompt: string; inventor
   };
   const supportGroups = (brick: Brick) => {
     const supports = new Set<string>();
-    for (const site of partBottomSites(brick)) {
+    for (const site of partBottomSites(brick, catalog)) {
       const below = placedStuds.get(keyAt(site.x, site.y, site.z));
       if (below) supports.add(component(below));
     }
@@ -202,9 +207,9 @@ export function compilePlan(plan: ShapePlan, options: { prompt: string; inventor
     }
     bricks.push(brick);
     if (maxBricks !== undefined && bricks.length > maxBricks) throw new Error(`Design exceeds the requested ${maxBricks}-brick budget. Increase that budget or simplify the requested shape.`);
-    for (const stud of partTopStuds(brick)) placedStuds.set(keyAt(stud.x, stud.y, stud.z), brick.id);
+    for (const stud of partTopStuds(brick, catalog)) placedStuds.set(keyAt(stud.x, stud.y, stud.z), brick.id);
   };
-  const sizes = Object.values(PARTS).filter(part => (part.kind === 'plate' || (options.packing !== 'plates' && part.kind === 'brick')) && (!legacy || legacyParts.has(part.id))).flatMap(part => ([0, 90] as const).filter(rotation => rotation === 0 || part.width !== part.depth).map(rotation => ({ part, rotation, width: rotation ? part.depth : part.width, depth: rotation ? part.width : part.depth }))).map((candidate, index) => ({ ...candidate, index }));
+  const sizes = Object.values(PARTS).filter(part => (!options.allowedPartIds || options.allowedPartIds.has(part.id)) && (part.kind === 'plate' || (options.packing !== 'plates' && part.kind === 'brick')) && (!legacy || legacyParts.has(part.id))).flatMap(part => ([0, 90] as const).filter(rotation => rotation === 0 || part.width !== part.depth).map(rotation => ({ part, rotation, width: rotation ? part.depth : part.width, depth: rotation ? part.width : part.depth }))).map((candidate, index) => ({ ...candidate, index }));
   const candidateStride = workspace.depth + Math.max(...sizes.map(candidate => candidate.depth));
   const fixedLayers = new Map<number, Brick[]>();
   for (const brick of fixed) {
@@ -291,8 +296,8 @@ export function compilePlan(plan: ShapePlan, options: { prompt: string; inventor
       for (let dz = 0; dz < chosen.part.heightPlates; dz++) for (let dy = 0; dy < chosen.depth; dy++) for (let dx = 0; dx < chosen.width; dx++) cells.delete(keyAt(x + dx, y + dy, z + dz));
     }
   }
-  const design: Design = { id: randomUUID(), title: plan.title.trim(), description: plan.description.trim(), bricks, source: 'ai', prompt: options.prompt, createdAt: new Date().toISOString(), schemaVersion: SCHEMA_VERSION, coordinateSystem: COORDINATE_SYSTEM, catalogVersion: CATALOG_VERSION };
+  const design: Design = { id: randomUUID(), title: plan.title.trim(), description: plan.description.trim(), bricks, source: 'ai', prompt: options.prompt, createdAt: new Date().toISOString(), schemaVersion: SCHEMA_VERSION, coordinateSystem: COORDINATE_SYSTEM, catalogVersion: CATALOG_VERSION, ...(options.catalog ? { catalog: options.catalog } : {}) };
   repairContexts.set(design, { fixedIds: new Set(fixed.map(brick => brick.id)), inventory: options.inventory?.map(item => ({ ...item })), ownedOnly: options.ownedOnly,
-    maxBricks, deadline: options.deadline, allowedPartIds: options.packing === 'plates' ? new Set(sizes.map(candidate => candidate.part.id)) : legacy ? new Set(legacyParts) : undefined });
+    maxBricks, deadline: options.deadline, allowedPartIds: options.packing === 'plates' || options.allowedPartIds ? new Set(sizes.map(candidate => candidate.part.id)) : legacy ? new Set(legacyParts) : undefined });
   return options.repair === false ? design : repairCompiledPlan(design);
 }

@@ -8,14 +8,14 @@ export const repairSchema = {
     edits: { type: 'array', items: {
       type: 'object', required: ['op', 'path', 'valueJson'], properties: {
         op: { type: 'string', enum: ['add', 'replace', 'remove'] },
-        path: { type: 'string', description: 'JSON pointer under /boxes, /profiles, /slopes, /parts, or /repeats. Use a numeric array index; /- appends.' },
+        path: { type: 'string', description: 'JSON pointer under /boxes, /profiles, /slopes, /parts, /repeats or /components. Use a numeric array index; /- appends.' },
         valueJson: { type: 'string', description: 'The replacement or added value encoded as JSON text. Use an empty string for remove.' },
       },
     } },
   },
 };
 
-const roots = new Set(['boxes', 'profiles', 'slopes', 'parts', 'repeats']);
+const roots = new Set(['boxes', 'profiles', 'slopes', 'parts', 'repeats', 'components']);
 const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
 type Container = Record<string, unknown> | unknown[];
 const isContainer = (value: unknown): value is Container => value !== null && typeof value === 'object';

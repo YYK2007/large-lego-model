@@ -1,21 +1,21 @@
-import { PARTS, footprint, partHeight, partTopStuds, partBottomSites, validateDesign, allocateInventory, type Brick, type Design, type InventoryItem } from '../shared/model.js';
+import { catalogForDesign, type CatalogContext, footprint, partHeight, partTopStuds, partBottomSites, validateDesign, allocateInventory, type Brick, type Design, type InventoryItem } from '../shared/model.js';
 
 type Options = { fixedIds: ReadonlySet<string>; inventory?: InventoryItem[]; ownedOnly?: boolean; maxBricks?: number; allowedPartIds?: ReadonlySet<string>; deadline?: number };
 const key = (x: number, y: number, z: number) => `${x},${y},${z}`;
-const rectangular = (brick: Brick) => ['brick', 'plate'].includes(PARTS[brick.partId].kind);
+const rectangular = (brick: Brick, catalog: CatalogContext) => ['brick', 'plate'].includes(catalog.parts[brick.partId].kind);
 
-function connections(bricks: Brick[]) {
+function connections(bricks: Brick[], catalog: CatalogContext) {
   const parents = bricks.map((_, index) => index);
   const root = (index: number): number => { while (parents[index] !== index) { parents[index] = parents[parents[index]]; index = parents[index]; } return index; };
   const studs = new Map<string, number>(), undersides = new Map<string, number>();
   bricks.forEach((brick, index) => {
-    for (const stud of partTopStuds(brick)) studs.set(key(stud.x, stud.y, stud.z), index);
-    for (const site of partBottomSites(brick)) undersides.set(key(site.x, site.y, site.z), index);
+    for (const stud of partTopStuds(brick, catalog)) studs.set(key(stud.x, stud.y, stud.z), index);
+    for (const site of partBottomSites(brick, catalog)) undersides.set(key(site.x, site.y, site.z), index);
   });
   const withoutLower: { brick: Brick; index: number }[] = [];
   bricks.forEach((brick, index) => {
     let supported = brick.z === 0;
-    for (const site of partBottomSites(brick)) {
+    for (const site of partBottomSites(brick, catalog)) {
       const lower = studs.get(key(site.x, site.y, site.z));
       if (lower !== undefined) { parents[root(index)] = root(lower); supported = true; }
     }
@@ -32,10 +32,11 @@ function connections(bricks: Brick[]) {
  * No improvement returns null and never mutates the input.
  * Search limits bound computation, not the allowed model size. */
 export function repairPacking(design: Design, options: Options): Design | null {
+  const catalog = catalogForDesign(design), PARTS = catalog.parts;
   const expired = () => options.deadline !== undefined && Date.now() >= options.deadline;
   if (expired()) return null;
   let bricks = design.bricks;
-  let graph = connections(bricks);
+  let graph = connections(bricks, catalog);
   if (!graph.unsupported.length && graph.count === 1) return design;
   const initialUnsupported = graph.unsupported.length, initialComponents = graph.count;
   const result = (): Design | null => {
@@ -54,16 +55,16 @@ export function repairPacking(design: Design, options: Options): Design | null {
   let visits = 0, attempts = 0, regions = 0, repairs = 0;
   const tried = new Set<string>();
   while (attempts < 24 && regions < 96 && visits < 20_000 && !expired()) {
-    const movable = bricks.filter(brick => !options.fixedIds.has(brick.id) && rectangular(brick));
+    const movable = bricks.filter(brick => !options.fixedIds.has(brick.id) && rectangular(brick, catalog));
     let targets = graph.unsupported.filter(brick => movable.includes(brick));
     if (!targets.length && !graph.unsupported.length) {
       // Disconnected courses can be joined by moving a seam across two groups.
       // Only inspect actual touching boundaries, not every pair in a large model.
       const bodies = new Map<string, number>();
-      bricks.forEach((brick, index) => { const size = footprint(brick); for (let y = brick.y; y < brick.y + size.depth; y++) for (let x = brick.x; x < brick.x + size.width; x++) bodies.set(key(x, y, brick.z), index); });
+      bricks.forEach((brick, index) => { const size = footprint(brick, catalog); for (let y = brick.y; y < brick.y + size.depth; y++) for (let x = brick.x; x < brick.x + size.width; x++) bodies.set(key(x, y, brick.z), index); });
       const indices = new Map(bricks.map((brick, index) => [brick.id, index]));
       targets = movable.filter(brick => {
-        const size = footprint(brick), group = graph.root(indices.get(brick.id)!);
+        const size = footprint(brick, catalog), group = graph.root(indices.get(brick.id)!);
         for (let y = brick.y; y < brick.y + size.depth; y++) for (let x = brick.x; x < brick.x + size.width; x++) for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
           const other = bodies.get(key(x + dx, y + dy, brick.z));
           if (other !== undefined && graph.root(other) !== group) return true;
@@ -78,16 +79,16 @@ export function repairPacking(design: Design, options: Options): Design | null {
     const modes = sizes.every(candidate => candidate.part.heightPlates === 1) ? ['course'] : graph.unsupported.length ? ['vertical', 'course', 'mixed'] : ['course', 'mixed', 'vertical'];
     for (const mode of modes) for (const target of targets) {
       if (improved || attempts >= 24 || regions >= 96 || visits >= 20_000 || expired()) break;
-      const size = footprint(target), height = partHeight(target);
+      const size = footprint(target, catalog), height = partHeight(target, catalog);
       // Missing support can originate one course below a header. Disconnected
       // groups try horizontal seams first, keeping the smaller search space.
       for (const margin of [2, 4, 8]) {
         if (attempts >= 24 || regions >= 96 || visits >= 20_000 || expired()) break;
         regions++;
         const region = movable.filter(brick => {
-          const other = footprint(brick);
-          const vertical = mode === 'vertical' ? brick.z < target.z + height && brick.z + partHeight(brick) > target.z - 3 : brick.z === target.z;
-          return vertical && (mode !== 'course' || partHeight(brick) === height) && brick.colorId === target.colorId &&
+          const other = footprint(brick, catalog);
+          const vertical = mode === 'vertical' ? brick.z < target.z + height && brick.z + partHeight(brick, catalog) > target.z - 3 : brick.z === target.z;
+          return vertical && (mode !== 'course' || partHeight(brick, catalog) === height) && brick.colorId === target.colorId &&
             brick.x < target.x + size.width + margin && brick.x + other.width > target.x - margin && brick.y < target.y + size.depth + margin && brick.y + other.depth > target.y - margin;
         });
         const signature = `${mode}:` + region.map(brick => brick.id).sort().join(',');
@@ -95,10 +96,10 @@ export function repairPacking(design: Design, options: Options): Design | null {
         tried.add(signature);
         attempts++;
         const points: { x: number; y: number; z: number }[] = [];
-        for (const brick of region) { const other = footprint(brick); for (let z = brick.z; z < brick.z + partHeight(brick); z++) for (let y = brick.y; y < brick.y + other.depth; y++) for (let x = brick.x; x < brick.x + other.width; x++) points.push({ x, y, z }); }
+        for (const brick of region) { const other = footprint(brick, catalog); for (let z = brick.z; z < brick.z + partHeight(brick, catalog); z++) for (let y = brick.y; y < brick.y + other.depth; y++) for (let x = brick.x; x < brick.x + other.width; x++) points.push({ x, y, z }); }
         if (points.length > 768) continue;
         points.sort((a, b) => a.z - b.z || a.y - b.y || a.x - b.x);
-        const removed = new Set(region.map(brick => brick.id)), outside = bricks.filter(brick => !removed.has(brick.id)), outsideGraph = connections(outside);
+        const removed = new Set(region.map(brick => brick.id)), outside = bricks.filter(brick => !removed.has(brick.id)), outsideGraph = connections(outside, catalog);
         const outsideRoots = [...new Set(outside.map((_, index) => outsideGraph.root(index)))];
         const groupIndices = new Map(outsideRoots.map((root, index) => [root, index]));
         const remainingStock = new Map<string, number>();
@@ -125,13 +126,13 @@ export function repairPacking(design: Design, options: Options): Design | null {
           const brick: Brick = { id: '', partId: candidate.part.id, colorId: target.colorId, x: point.x, y: point.y, z: point.z, rotation: candidate.rotation };
           const joins = new Set<number>();
           let supported = brick.z === 0;
-          for (const site of partBottomSites(brick)) {
+          for (const site of partBottomSites(brick, catalog)) {
             const lower = outsideGraph.studs.get(key(site.x, site.y, site.z));
             if (lower !== undefined) { supported = true; joins.add(groupIndices.get(outsideGraph.root(lower))!); }
           }
           let below = 0n;
-          for (const site of partBottomSites(brick)) { const index = pointIndices.get(key(Math.floor(site.x), Math.floor(site.y), site.z - 1)); if (index !== undefined) below |= 1n << BigInt(index); }
-          for (const stud of partTopStuds(brick)) {
+          for (const site of partBottomSites(brick, catalog)) { const index = pointIndices.get(key(Math.floor(site.x), Math.floor(site.y), site.z - 1)); if (index !== undefined) below |= 1n << BigInt(index); }
+          for (const stud of partTopStuds(brick, catalog)) {
             const upper = outsideGraph.undersides.get(key(stud.x, stud.y, stud.z));
             if (upper !== undefined) {
               if (outsideGraph.grounded.has(outsideGraph.root(upper))) supported = true;
@@ -143,7 +144,7 @@ export function repairPacking(design: Design, options: Options): Design | null {
           // validation still checks grounding, connectivity and assembly motion.
           if (!supported && !below) continue;
           const choice = { brick, mask, stock, joins: [...joins], area: indices.length, supported, below,
-            bottom: partBottomSites(brick).map(site => key(site.x, site.y, site.z)), top: partTopStuds(brick).map(stud => key(stud.x, stud.y, stud.z)) };
+            bottom: partBottomSites(brick, catalog).map(site => key(site.x, site.y, site.z)), top: partTopStuds(brick, catalog).map(stud => key(stud.x, stud.y, stud.z)) };
           for (const index of indices) covering[index].push(choice);
           }
         }
@@ -195,7 +196,7 @@ export function repairPacking(design: Design, options: Options): Design | null {
         if (!search(0n) || !solution) continue;
         bricks = [...outside, ...solution];
         repairs++;
-        graph = connections(bricks);
+        graph = connections(bricks, catalog);
         if (!graph.unsupported.length && graph.count === 1) return result();
         improved = true;
         break;

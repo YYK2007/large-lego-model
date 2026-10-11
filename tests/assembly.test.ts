@@ -88,6 +88,60 @@ test('hanging siblings are both seated before their lower plate closes the inser
   assert.ok(placements.slice(3).every(p => p.waypoints[0].x < 0));
 });
 
+test('a newly eligible upper hanger is seated before its still-unplaced lower neighbor', () => {
+  // The previous two schedules installed lower after left, sealing right's
+  // lateral entry. Both upper hangers have a lower mate in the final graph,
+  // but that mate is not placed yet: eligibility must use the current assembly.
+  const design = { ...hangingDesign, bricks: [
+    hangingBrick('column', 2, 2, 0, '3003'),
+    hangingBrick('lower', 1, 1, 3, '3623'),
+    hangingBrick('support-front', 2, 1, 3, '3022', 90),
+    hangingBrick('support-rear', 2, 3, 3, '3022'),
+    hangingBrick('left', 0, 1, 4, '3023', 90),
+    hangingBrick('right', 0, 2, 4, '3020'),
+    hangingBrick('upright', 2, 2, 4, '3710'),
+    hangingBrick('anchor', 1, 0, 5, '3020'),
+  ] };
+  const before = JSON.stringify(design), check = validateDesign(design);
+  assert.equal(check.valid, true, check.errors.join('; '));
+  const placements = buildSteps(design).flatMap(step => step.placements);
+  assert.deepEqual(placements.map(p => p.brickId), ['column', 'support-front', 'support-rear', 'upright', 'anchor', 'left', 'right', 'lower']);
+  assert.deepEqual(placements.slice(-3).map(p => [p.approach, p.attachedTo]), [
+    ['-X', ['anchor']], ['-X', ['anchor']], ['-X', ['left', 'right']],
+  ]);
+  assert.equal(JSON.stringify(design), before);
+});
+
+test('the recorded 927-piece cap finds a legal order without modifying its packed geometry', t => {
+  // Frozen offline detailed-02 repair, X-major plate packing. All used part
+  // definitions match the bundled catalog, so no unrelated catalog snapshot is
+  // retained. This is evaluation evidence, never a generation fallback.
+  const design: Design = JSON.parse(readFileSync(new URL('./fixtures/mushroom-cap-assembly.json', import.meta.url), 'utf8'));
+  const before = JSON.stringify(design), started = performance.now();
+  assert.equal(design.bricks.length, 927);
+  const check = validateDesign(design);
+  assert.equal(check.valid, true, check.errors.join('; '));
+  assert.equal(check.connectedComponents, 1);
+  const placements = buildSteps(design).flatMap(step => step.placements);
+  assert.equal(new Set(placements.map(p => p.brickId)).size, design.bricks.length);
+  const byId = new Map(design.bricks.map(brick => [brick.id, brick])), placed = new Set<string>();
+  for (const placement of placements) {
+    const brick = byId.get(placement.brickId)!;
+    assert.deepEqual(placement.waypoints.at(-1), { x: brick.x, y: brick.y, z: brick.z });
+    assert.ok(placement.waypoints.every(point => point.z >= 0));
+    assert.ok(brick.z === 0 || placement.attachedTo.length > 0);
+    for (const id of placement.attachedTo) {
+      assert.ok(placed.has(id));
+      const lower = placement.approach === 'above' ? byId.get(id)! : brick;
+      const upper = placement.approach === 'above' ? brick : byId.get(id)!;
+      assert.ok(partTopStuds(lower).some(a => partBottomSites(upper).some(b => a.x === b.x && a.y === b.y && a.z === b.z)));
+    }
+    placed.add(brick.id);
+  }
+  assert.equal(JSON.stringify(design), before);
+  t.diagnostic(`Validation and assembly took ${(performance.now() - started).toFixed(1)} ms; full-suite timing includes concurrent tests.`);
+});
+
 test('the saved 925-piece turtle finds a complete connected sequence without changing its geometry', t => {
   // Actual general-02 turtle attempt 5, before the last provider patch. The
   // original greedy frontier trapped b272 after installing lower plate b149.

@@ -1,4 +1,7 @@
 import partColors from './part-colors.json';
+import { assertCatalogManifest, type CatalogManifest, type CatalogContext, type PartDefinition, type CatalogColor } from './catalog';
+export type { CatalogManifest, CatalogContext, PartDefinition, CatalogPart, CatalogColor } from './catalog';
+export { mergeCatalogManifests } from './catalog';
 import { isDesignResearch, type DesignResearch } from './references';
 import { planAssembly, placementInstruction, type AssemblyPart, type Placement } from './assembly';
 export type Brick = {
@@ -28,6 +31,7 @@ export type Design = {
   bricks: Brick[];
   source: 'sample' | 'ai';
   research?: DesignResearch;
+  catalog?: CatalogManifest;
   prompt: string;
   createdAt: string;
 };
@@ -38,8 +42,6 @@ export type InventoryItem = {
   quantity: number;
   source: string;
 };
-
-export type PartDefinition = { id: string; name: string; width: number; depth: number; heightPlates: number; kind: 'brick' | 'plate' | 'slope' | 'tile' | 'round-brick' | 'round-plate' | 'cone'; ldrawId: string; topStudStyle?: 'hollow' };
 
 const PART_DEFINITIONS: Record<string, PartDefinition> = {
   '3005': { id: '3005', name: 'Brick 1 × 1', width: 1, depth: 1, heightPlates: 3, kind: 'brick', ldrawId: '3005.dat' },
@@ -87,7 +89,7 @@ export const PARTS: Record<string, PartDefinition & { allowedColors: readonly nu
 );
 
 // Keys are Rebrickable color IDs. Keep the explicit LDraw mapping even where IDs match.
-export const COLORS: Record<number, { id: number; name: string; hex: string; ldrawId: number }> = {
+export const COLORS: Record<number, CatalogColor> = {
   0: { id: 0, name: 'Black', hex: '#05131D', ldrawId: 0 },
   1: { id: 1, name: 'Blue', hex: '#0055BF', ldrawId: 1 },
   2: { id: 2, name: 'Green', hex: '#237841', ldrawId: 2 },
@@ -103,8 +105,22 @@ export const COLORS: Record<number, { id: number; name: string; hex: string; ldr
   71: { id: 71, name: 'Light Bluish Gray', hex: '#A0A5A9', ldrawId: 71 },
 };
 
-export function footprint(brick: Brick): { width: number; depth: number } {
-  const part = Object.hasOwn(PARTS, brick.partId) ? PARTS[brick.partId] : undefined;
+export function resolveCatalog(manifest?: CatalogManifest): CatalogContext {
+  if (!manifest) return { parts: PARTS, colors: COLORS };
+  assertCatalogManifest(manifest);
+  for (const id of Object.keys(manifest.parts)) if (Object.hasOwn(PARTS, id)) throw new Error('A pinned catalog cannot replace built-in part geometry.');
+  const parts = { ...PARTS, ...manifest.parts };
+  for (const [id, row] of Object.entries(manifest.partColors || {})) {
+    if (!Object.hasOwn(PARTS, id)) throw new Error('Produced-color overrides must reference built-in geometry.');
+    parts[id] = { ...PARTS[id], allowedColors: row.allowedColors };
+  }
+  return { parts, colors: { ...COLORS, ...manifest.colors } };
+}
+
+export const catalogForDesign = (design: Pick<Design, 'catalog'>): CatalogContext => resolveCatalog(design.catalog);
+
+export function footprint(brick: Brick, catalog: CatalogContext = resolveCatalog()): { width: number; depth: number } {
+  const part = Object.hasOwn(catalog.parts, brick.partId) ? catalog.parts[brick.partId] : undefined;
   if (!part) throw new Error(`Unknown part ${brick.partId}.`);
   return brick.rotation === 90 || brick.rotation === 270
     ? { width: part.depth, depth: part.width }
@@ -114,6 +130,7 @@ export function footprint(brick: Brick): { width: number; depth: number } {
 /** Convert legacy full-brick heights once, without changing the saved source. */
 export function normalizeDesign(design: Design): Design {
   if (!design || typeof design !== 'object' || !Array.isArray(design.bricks)) throw new Error('Design bricks must be an array.');
+  if (design.catalog !== undefined) assertCatalogManifest(design.catalog);
   if (design.schemaVersion === SCHEMA_VERSION) {
     if (![CATALOG_VERSION, PREVIOUS_CATALOG_VERSION].includes(design.catalogVersion || '') || design.coordinateSystem !== COORDINATE_SYSTEM) throw new Error('Unsupported design catalog or coordinate system.');
     return { ...design, catalogVersion: CATALOG_VERSION, bricks: design.bricks.map(brick => ({ ...brick })) };
@@ -129,32 +146,34 @@ export function normalizeDesign(design: Design): Design {
   return { ...design, schemaVersion: SCHEMA_VERSION, catalogVersion: CATALOG_VERSION, coordinateSystem: COORDINATE_SYSTEM, bricks };
 }
 
-export const partHeight = (brick: Brick): number => PARTS[brick.partId].heightPlates;
+export const partHeight = (brick: Brick, catalog: CatalogContext = resolveCatalog()): number => catalog.parts[brick.partId].heightPlates;
 
 /** Rotate a local stud-space point and anchor it at the minimum footprint corner. */
-export function partPoint(brick: Brick, u: number, v: number): { x: number; y: number } {
-  const { width: w, depth: d } = PARTS[brick.partId];
+export function partPoint(brick: Brick, u: number, v: number, catalog: CatalogContext = resolveCatalog()): { x: number; y: number } {
+  const { width: w, depth: d } = catalog.parts[brick.partId];
   const [x, y] = brick.rotation === 0 ? [u, v] : brick.rotation === 90 ? [d - v, u] : brick.rotation === 180 ? [w - u, d - v] : [v, w - u];
   return { x: brick.x + x, y: brick.y + y };
 }
 
-export function partTopStuds(brick: Brick): { x: number; y: number; z: number }[] {
-  const part = PARTS[brick.partId];
+export function partTopStuds(brick: Brick, catalog: CatalogContext = resolveCatalog()): { x: number; y: number; z: number }[] {
+  const part = catalog.parts[brick.partId];
   const points: { x: number; y: number; z: number }[] = [];
+  if (part.geometry) return part.geometry.studs.map(stud => ({ ...partPoint(brick, stud.position[0], stud.position[1], catalog), z: brick.z + stud.position[2] }));
   if (part.kind === 'tile') return points;
-  for (let y = part.kind === 'slope' ? 1 : 0; y < part.depth; y++) for (let x = 0; x < part.width; x++) points.push({ ...partPoint(brick, x + 0.5, y + 0.5), z: brick.z + part.heightPlates });
+  for (let y = part.kind === 'slope' ? 1 : 0; y < part.depth; y++) for (let x = 0; x < part.width; x++) points.push({ ...partPoint(brick, x + 0.5, y + 0.5, catalog), z: brick.z + part.heightPlates });
   return points;
 }
 
-export function partBottomSites(brick: Brick): { x: number; y: number; z: number }[] {
-  const part = PARTS[brick.partId];
+export function partBottomSites(brick: Brick, catalog: CatalogContext = resolveCatalog()): { x: number; y: number; z: number }[] {
+  const part = catalog.parts[brick.partId];
   const points: { x: number; y: number; z: number }[] = [];
-  for (let y = 0; y < part.depth; y++) for (let x = 0; x < part.width; x++) points.push({ ...partPoint(brick, x + 0.5, y + 0.5), z: brick.z });
+  if (part.geometry) return part.geometry.receivers.map(site => ({ ...partPoint(brick, site[0], site[1], catalog), z: brick.z + site[2] }));
+  for (let y = 0; y < part.depth; y++) for (let x = 0; x < part.width; x++) points.push({ ...partPoint(brick, x + 0.5, y + 0.5, catalog), z: brick.z });
   return points;
 }
 
-function assemblyParts(bricks: Brick[]): AssemblyPart[] {
-  return bricks.map(brick => ({ id: brick.id, x: brick.x, y: brick.y, z: brick.z, ...footprint(brick), height: partHeight(brick), studs: partTopStuds(brick), receivers: partBottomSites(brick) }));
+function assemblyParts(bricks: Brick[], catalog: CatalogContext): AssemblyPart[] {
+  return bricks.map(brick => ({ id: brick.id, x: brick.x, y: brick.y, z: brick.z, ...footprint(brick, catalog), height: partHeight(brick, catalog), studs: partTopStuds(brick, catalog), receivers: partBottomSites(brick, catalog) }));
 }
 
 export function validateDesign(design: Design): { valid: boolean; errors: string[]; warnings: string[]; connectedComponents?: number } {
@@ -175,8 +194,8 @@ export function validateDesign(design: Design): { valid: boolean; errors: string
   if (!Array.isArray(design.bricks)) return { valid: false, errors: [...errors, 'Design bricks must be an array.'], warnings };
   if (design.bricks.length === 0) errors.push('Design must contain at least one brick.');
 
-  try { design = normalizeDesign(design); } catch (error) { return { valid: false, errors: [...errors, (error as Error).message], warnings }; }
-
+  let catalog: CatalogContext;
+  try { design = normalizeDesign(design); catalog = catalogForDesign(design); } catch (error) { return { valid: false, errors: [...errors, (error as Error).message], warnings }; }
   const usable: Brick[] = [];
   const ids = new Set<string>();
   design.bricks.forEach((brick, i) => {
@@ -186,18 +205,18 @@ export function validateDesign(design: Design): { valid: boolean; errors: string
     if (typeof brick.id !== 'string' || !brick.id.trim() || brick.id.length > 80) errors.push(`${label} needs an ID of at most 80 characters.`);
     else if (ids.has(brick.id)) errors.push(`${label} repeats ID ${brick.id}.`);
     else ids.add(brick.id);
-    if (typeof brick.partId !== 'string' || !Object.hasOwn(PARTS, brick.partId)) errors.push(`${label} has an unsupported part.`);
-    if (!Number.isInteger(brick.colorId) || !Object.hasOwn(COLORS, brick.colorId)) errors.push(`${label} has an unsupported color.`);
-    if (Object.hasOwn(PARTS, brick.partId) && Object.hasOwn(COLORS, brick.colorId) && !PARTS[brick.partId].allowedColors.includes(brick.colorId)) errors.push(`${label} uses a part/color pair absent from the verified catalog: ${brick.partId} in ${COLORS[brick.colorId].name}.`);
+    if (typeof brick.partId !== 'string' || !Object.hasOwn(catalog.parts, brick.partId)) errors.push(`${label} has an unsupported part.`);
+    if (!Number.isInteger(brick.colorId) || !Object.hasOwn(catalog.colors, brick.colorId)) errors.push(`${label} has an unsupported color.`);
+    if (Object.hasOwn(catalog.parts, brick.partId) && Object.hasOwn(catalog.colors, brick.colorId) && !catalog.parts[brick.partId].allowedColors.includes(brick.colorId)) errors.push(`${label} uses a part/color pair absent from the verified catalog: ${brick.partId} in ${catalog.colors[brick.colorId].name}.`);
     if (![0, 90, 180, 270].includes(brick.rotation)) errors.push(`${label} rotation must be 0, 90, 180, or 270.`);
     for (const axis of ['x', 'y', 'z'] as const) {
       const limit = axis === 'z' ? WORKSPACE.heightPlates : axis === 'x' ? WORKSPACE.width : WORKSPACE.depth;
       if (!Number.isInteger(brick[axis]) || brick[axis] < 0 || brick[axis] >= limit) errors.push(`${label} ${axis} must be an integer from 0 to ${limit - 1}.`);
     }
     if (errors.length !== before) return;
-    const { width, depth } = footprint(brick);
+    const { width, depth } = footprint(brick, catalog);
     if (brick.x + width > WORKSPACE.width || brick.y + depth > WORKSPACE.depth) { errors.push(`${label} extends beyond the ${WORKSPACE.width} × ${WORKSPACE.depth} stud workspace.`); return; }
-    if (brick.z + partHeight(brick) > WORKSPACE.heightPlates) { errors.push(`${label} extends beyond the vertical workspace.`); return; }
+    if (brick.z + partHeight(brick, catalog) > WORKSPACE.heightPlates) { errors.push(`${label} extends beyond the vertical workspace.`); return; }
     usable.push(brick);
   });
 
@@ -208,28 +227,29 @@ export function validateDesign(design: Design): { valid: boolean; errors: string
   const key = (x: number, y: number, z: number) => `${x},${y},${z}`;
   const bodies = new Map<string, number>();
   const studs = new Map<string, number>();
+  const receivers = usable.map(brick => new Set(partBottomSites(brick, catalog).map(site => key(site.x, site.y, site.z))));
   usable.forEach((brick, i) => {
-    const { width, depth } = footprint(brick);
+    const { width, depth } = footprint(brick, catalog);
     const collisions = new Set<number>();
-    for (let z = brick.z; z < brick.z + partHeight(brick); z++) for (let y = brick.y; y < brick.y + depth; y++) for (let x = brick.x; x < brick.x + width; x++) {
+    for (let z = brick.z; z < brick.z + partHeight(brick, catalog); z++) for (let y = brick.y; y < brick.y + depth; y++) for (let x = brick.x; x < brick.x + width; x++) {
       const cell = key(x, y, z);
       const existing = bodies.get(cell);
       if (existing !== undefined) collisions.add(existing);
       else bodies.set(cell, i);
     }
     for (const other of collisions) errors.push(`Bricks ${usable[other].id} and ${brick.id} overlap their body envelopes.`);
-    for (const stud of partTopStuds(brick)) studs.set(key(stud.x, stud.y, stud.z), i);
+    for (const stud of partTopStuds(brick, catalog)) studs.set(key(stud.x, stud.y, stud.z), i);
   });
   usable.forEach((brick, upper) => {
     const supports = new Set<number>();
-    for (const site of partBottomSites(brick)) {
+    for (const site of partBottomSites(brick, catalog)) {
       const lower = studs.get(key(site.x, site.y, site.z));
       if (lower !== undefined && lower !== upper) supports.add(lower);
     }
     for (const lower of supports) { neighbors[lower].push(upper); neighbors[upper].push(lower); supported.add(upper); }
-    for (const stud of partTopStuds(brick)) {
+    for (const stud of partTopStuds(brick, catalog)) {
       const target = bodies.get(key(Math.floor(stud.x), Math.floor(stud.y), stud.z));
-      if (target !== undefined && usable[target].z !== stud.z) errors.push(`Studs on ${brick.id} intersect ${usable[target].id} without a matching underside connection.`);
+      if (target !== undefined && (usable[target].z !== stud.z || !receivers[target].has(key(stud.x, stud.y, stud.z)))) errors.push(`Studs on ${brick.id} intersect ${usable[target].id} without a matching underside connection.`);
     }
   });
   const hanging = usable.some((brick, i) => brick.z > 0 && !supported.has(i));
@@ -250,7 +270,7 @@ export function validateDesign(design: Design): { valid: boolean; errors: string
   }
   if (connectedComponents > 1) errors.push('The model contains disconnected groups. Side-to-side contact does not connect studs.');
   if (hanging && errors.length === 0) {
-    const assembly = planAssembly(assemblyParts(usable));
+    const assembly = planAssembly(assemblyParts(usable, catalog));
     if (!assembly.valid) errors.push(`${assembly.error} Blocked pieces: ${assembly.blockedIds.slice(0, 10).join(', ')}.`);
     else warnings.push('Some pieces attach from below. Follow the checked entry path and hold the assembly as needed; hanging strength is unverified.');
   }
@@ -273,7 +293,7 @@ export type BuildStep = { index: number; z: number; bricks: Brick[]; placements:
 
 export function buildSteps(design: Design): BuildStep[] {
   design = normalizeDesign(design);
-  const assembly = planAssembly(assemblyParts(design.bricks));
+  const assembly = planAssembly(assemblyParts(design.bricks, catalogForDesign(design)));
   if (!assembly.valid) throw new Error(assembly.error);
   const byId = new Map(design.bricks.map(brick => [brick.id, brick]));
   const steps: BuildStep[] = [];
@@ -286,7 +306,7 @@ export function buildSteps(design: Design): BuildStep[] {
     steps.push({ index: steps.length + 1, z, bricks: [brick], placements: [placement],
       instruction: placement.approach !== 'above' ? placementInstruction(placement) : z === 0
         ? 'Arrange these bricks on a flat table at the marked stud coordinates. Keep the loose bricks in position; the following layers join them.'
-        : `Place these pieces at the marked stud coordinates, ${(z * 3.2).toFixed(1)} mm above the table. Match their underside connections to the supporting studs; slopes have studs only on their high edge.`,
+        : `Place these pieces at the marked stud coordinates, ${(z * 3.2).toFixed(1)} mm above the table. Match their underside connections to the supporting studs. Use only the connection points shown.`,
     });
   }
   return steps;
@@ -312,28 +332,53 @@ export function allocateInventory(design: Design, inventory: InventoryItem[]): {
 }
 
 export function exportLDraw(design: Design): string {
+  const catalog = catalogForDesign(design);
   const clean = (value: string) => value.replace(/[\r\n]/g, ' ');
-  const lines = [`0 ${clean(design.title)}`, '0 Unofficial brick model. Physical stability has not been verified.'];
+  const imported = [...new Set(design.bricks.map(brick => brick.partId))].map(id => catalog.parts[id]).filter(part => part.geometry);
+  const lines = [...(imported.length ? ['0 FILE model.ldr'] : []), `0 ${clean(design.title)}`, '0 Unofficial brick model. Physical stability has not been verified.'];
   for (const step of buildSteps(design)) {
     if (step.index > 1) lines.push('0 STEP');
     for (const brick of step.bricks) {
-      const part = PARTS[brick.partId];
-      const color = COLORS[brick.colorId];
-      const { width, depth } = footprint(brick);
+      const part = catalog.parts[brick.partId];
+      const color = catalog.colors[brick.colorId];
+      const { width, depth } = footprint(brick, catalog);
       const cos = [1, 0, -1, 0][brick.rotation / 90], sin = [0, 1, 0, -1][brick.rotation / 90];
+      if (part.geometry) {
+        const { matrix: m, offset } = part.geometry.ldraw;
+        const origin = partPoint(brick, offset[0], offset[1], catalog);
+        const matrix = [0, 1, 2].map(i => 20 * (cos * m[i] - sin * m[3 + i]))
+          .concat([0, 1, 2].map(i => -8 * m[6 + i]), [0, 1, 2].map(i => 20 * (sin * m[i] + cos * m[3 + i])));
+        lines.push(`1 ${color.ldrawId} ${origin.x * 20} ${-(brick.z + offset[2]) * 8} ${origin.y * 20} ${matrix.join(' ')} ${part.ldrawId}`);
+        continue;
+      }
       // Rectangular DATs have their long axis along X. Both upright slopes
       // have a rear-row origin, Z[-30,10], with top at Y0. Round parts are centered.
       const matrix = part.kind === 'slope'
         ? [cos, 0, -sin, 0, 1, 0, sin, 0, cos]
         : [sin, 0, cos, 0, 1, 0, -cos, 0, sin];
-      const origin = part.kind === 'slope' ? partPoint(brick, part.width / 2, part.depth - 0.5) : { x: brick.x + width / 2, y: brick.y + depth / 2 };
-      lines.push(`1 ${color.ldrawId} ${origin.x * 20} ${-(brick.z + partHeight(brick)) * 8} ${origin.y * 20} ${matrix.join(' ')} ${part.ldrawId}`);
+      const origin = part.kind === 'slope' ? partPoint(brick, part.width / 2, part.depth - 0.5, catalog) : { x: brick.x + width / 2, y: brick.y + depth / 2 };
+      lines.push(`1 ${color.ldrawId} ${origin.x * 20} ${-(brick.z + partHeight(brick, catalog)) * 8} ${origin.y * 20} ${matrix.join(' ')} ${part.ldrawId}`);
     }
   }
+  // Imported definitions are embedded, so a future library update cannot alter
+  // an accepted model. Both the body and each exact stud mesh are included.
+  for (const part of imported) {
+    const geometry = part.geometry!, offset = geometry.ldraw.offset;
+    lines.push(`0 FILE ${part.ldrawId}`, `0 ${clean(part.name)}`, '0 BFC CERTIFY CCW', '0 !LICENSE Geometry derived from LDraw CC BY 4.0; source credits follow.');
+    for (const asset of geometry.assets.filter(asset => asset.url.startsWith('https://library.ldraw.org/'))) lines.push(`0 Source ${asset.url} SHA256 ${asset.sha256} ${clean(asset.author || '')}`);
+    for (const mesh of [geometry.body, ...geometry.studs.map(stud => stud.mesh)]) for (const face of mesh.faces) {
+      const positions = face.flatMap(i => {
+        const [x, y, z] = mesh.vertices[i]; return [(x - offset[0]) * 20, -(z - offset[2]) * 8, (y - offset[1]) * 20].map(n => Math.round(n * 1e6) / 1e6);
+      });
+      lines.push(`${face.length} 16 ${positions.join(' ')}`);
+    }
+  }
+  if (imported.length) lines.push('0 NOFILE');
   return lines.join('\r\n') + '\r\n';
 }
 
 export function exportCsv(design: Design, inventory: InventoryItem[] = []): string {
+  const catalog = catalogForDesign(design);
   const cell = (value: string | number) => {
     const text = String(value);
     const safe = /^[=+@\-\t\r]/.test(text) ? `'${text}` : text;
@@ -341,7 +386,7 @@ export function exportCsv(design: Design, inventory: InventoryItem[] = []): stri
   };
   const rows: (string | number)[][] = [['Part ID', 'Part', 'Color ID', 'Color', 'Required', 'Owned', 'Missing', 'Sources']];
   for (const item of allocateInventory(design, inventory).items) {
-    rows.push([item.partId, PARTS[item.partId].name, item.colorId, COLORS[item.colorId].name, item.quantity, item.owned, item.missing,
+    rows.push([item.partId, catalog.parts[item.partId].name, item.colorId, catalog.colors[item.colorId].name, item.quantity, item.owned, item.missing,
       item.sources.map((source) => `${source.source}: ${source.quantity}`).join('; ')]);
   }
   return rows.map((row) => row.map(cell).join(',')).join('\r\n') + '\r\n';
