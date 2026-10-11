@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 2,
+  "coordinateSystem": "stud-xy-plate-z",
+  "title": "Coastal Observatory and Workshop",
+  "description": "A detailed 3D coastal observatory featuring a robust 2-course foundation, an interconnected hollow workshop with continuous perimeter walls and interior support piers directly under both the second floor and roof, an attached 4-level blue-and-white observation tower with solid interior piers supporting floor plates, an accessible terrace with stairs, open doorways and windows with structural headers, and red sloped roofs over white eaves.",
+  "boxes": [
+    {"x":0,"y":0,"z":0,"width":24,"depth":20,"height":6,"colorId":71},
+    {"x":2,"y":2,"z":6,"width":12,"depth":14,"height":18,"colorId":15,"cutouts":[{"x":2,"y":2,"z":0,"width":8,"depth":10,"height":18},{"x":4,"y":0,"z":0,"width":2,"depth":2,"height":9},{"x":0,"y":5,"z":6,"width":2,"depth":2,"height":6},{"x":0,"y":9,"z":6,"width":2,"depth":2,"height":6},{"x":5,"y":12,"z":6,"width":2,"depth":2,"height":6}]},
+    {"x":6,"y":6,"z":6,"width":4,"depth":2,"height":18,"colorId":15},
+    {"x":6,"y":10,"z":6,"width":4,"depth":2,"height":18,"colorId":15},
+    {"x":2,"y":2,"z":24,"width":12,"depth":14,"height":3,"colorId":71},
+    {"x":2,"y":2,"z":27,"width":12,"depth":14,"height":15,"colorId":15,"cutouts":[{"x":2,"y":2,"z":0,"width":8,"depth":10,"height":15},{"x":4,"y":0,"z":3,"width":2,"depth":2,"height":6},{"x":0,"y":6,"z":3,"width":2,"depth":2,"height":6},{"x":5,"y":12,"z":3,"width":2,"depth":2,"height":6}]},
+    {"x":6,"y":6,"z":27,"width":4,"depth":2,"height":15,"colorId":15},
+    {"x":6,"y":10,"z":27,"width":4,"depth":2,"height":15,"colorId":15},
+    {"x":2,"y":2,"z":42,"width":12,"depth":14,"height":3,"colorId":15},
+    {"x":4,"y":4,"z":45,"width":8,"depth":10,"height":3,"colorId":15},
+    {"x":6,"y":6,"z":48,"width":4,"depth":6,"height":3,"colorId":4},
+    {"x":14,"y":5,"z":6,"width":8,"depth":8,"height":45,"colorId":1,"cutouts":[{"x":2,"y":2,"z":0,"width":4,"depth":4,"height":45},{"x":0,"y":3,"z":0,"width":2,"depth":2,"height":9},{"x":3,"y":0,"z":9,"width":2,"depth":2,"height":6},{"x":6,"y":3,"z":9,"width":2,"depth":2,"height":6},{"x":3,"y":6,"z":9,"width":2,"depth":2,"height":6},{"x":3,"y":0,"z":27,"width":2,"depth":2,"height":6},{"x":6,"y":3,"z":27,"width":2,"depth":2,"height":6},{"x":3,"y":6,"z":27,"width":2,"depth":2,"height":6}]},
+    {"x":14,"y":5,"z":21,"width":8,"depth":8,"height":6,"colorId":15,"cutouts":[{"x":2,"y":2,"z":0,"width":4,"depth":4,"height":6}]},
+    {"x":14,"y":5,"z":39,"width":8,"depth":8,"height":6,"colorId":15,"cutouts":[{"x":2,"y":2,"z":0,"width":4,"depth":4,"height":6}]},
+    {"x":17,"y":8,"z":6,"width":2,"depth":2,"height":45,"colorId":15},
+    {"x":14,"y":5,"z":24,"width":8,"depth":8,"height":3,"colorId":71,"cutouts":[{"x":0,"y":0,"z":0,"width":2,"depth":2,"height":3},{"x":6,"y":0,"z":0,"width":2,"depth":2,"height":3},{"x":0,"y":6,"z":0,"width":2,"depth":2,"height":3},{"x":6,"y":6,"z":0,"width":2,"depth":2,"height":3}]},
+    {"x":14,"y":5,"z":42,"width":8,"depth":8,"height":3,"colorId":71,"cutouts":[{"x":0,"y":0,"z":0,"width":2,"depth":2,"height":3},{"x":6,"y":0,"z":0,"width":2,"depth":2,"height":3},{"x":0,"y":6,"z":0,"width":2,"depth":2,"height":3},{"x":6,"y":6,"z":0,"width":2,"depth":2,"height":3}]},
+    {"x":14,"y":5,"z":51,"width":8,"depth":8,"height":3,"colorId":71},
+    {"x":14,"y":5,"z":54,"width":8,"depth":8,"height":3,"colorId":1,"cutouts":[{"x":2,"y":2,"z":0,"width":4,"depth":4,"height":3}]},
+    {"x":16,"y":7,"z":54,"width":4,"depth":4,"height":9,"colorId":15},
+    {"x":17,"y":6,"z":60,"width":2,"depth":2,"height":3,"colorId":0},
+    {"x":16,"y":7,"z":63,"width":4,"depth":4,"height":3,"colorId":4},
+    {"x":14,"y":13,"z":6,"width":8,"depth":5,"height":6,"colorId":71},
+    {"x":14,"y":17,"z":12,"width":8,"depth":1,"height":3,"colorId":15},
+    {"x":21,"y":13,"z":12,"width":1,"depth":4,"height":3,"colorId":15},
+    {"x":20,"y":2,"z":6,"width":2,"depth":3,"height":3,"colorId":71},
+    {"x":18,"y":2,"z":6,"width":2,"depth":3,"height":6,"colorId":71}
+  ],
+  "slopes": [
+    {"kind":"upright45","x":2,"y":2,"z":45,"width":12,"colorId":4,"rotation":0},
+    {"kind":"upright45","x":2,"y":14,"z":45,"width":12,"colorId":4,"rotation":180},
+    {"kind":"upright45","x":4,"y":4,"z":48,"width":8,"colorId":4,"rotation":0},
+    {"kind":"upright45","x":4,"y":12,"z":48,"width":8,"colorId":4,"rotation":180}
+  ],
+  "repeats": [
+    {"boxes":[{"x":5,"y":1,"z":6,"width":2,"depth":1,"height":3,"colorId":71}],"slopes":[],"count":2,"dx":3,"dy":0,"dz":0}
+  ]
+}

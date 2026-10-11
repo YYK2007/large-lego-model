@@ -1,0 +1,26 @@
+.generation-job { margin-top: 16px; padding: 15px; border: 1px solid #b7d9e6; border-radius: 14px; background: #f3fbff; color: #24434d; font-size: 12px; }
+.job-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.job-heading strong { font-size: 14px; line-height: 1.4; }
+.job-heading > span { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.generation-job p { margin: 9px 0; line-height: 1.5; }
+.generation-job summary { cursor: pointer; margin-top: 12px; font-weight: 600; }
+.generation-job ol { max-height: 160px; overflow: auto; margin: 10px 0; padding: 0; list-style: none; }
+.generation-job li { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; }
+.generation-job time { white-space: nowrap; color: #577681; }
+.job-actions { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin-top: 12px; }
+.job-actions a { color: #086d8a; text-decoration: underline; font-weight: 600; }
+.generation-job small { display: block; margin-top: 12px; color: #577681; line-height: 1.5; }
+.generation-quality { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin: 16px 0 10px; font-size: 12px; }
+.generation-quality select { min-width: 0; border: 1px solid #bed6de; border-radius: 8px; padding: 8px; background: white; color: #24434d; }
+.job-stop { padding: 10px 16px; border: 1px solid #9b4c32; border-radius: 9px; background: #fff1e9; color: #843e26; font-weight: 700; cursor: pointer; }
+.job-attempts { margin-top: 18px; }
+.job-attempts h3 { margin: 0; font-size: 14px; }
+.job-attempt { margin-top: 10px; border: 1px solid #c5dbe2; border-radius: 10px; overflow: hidden; background: white; }
+.attempt-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; width: 100%; text-align: left; padding: 12px; border: 0; background: #edf5f8; color: #24434d; cursor: pointer; }
+.attempt-heading:disabled { opacity: 1; cursor: default; }
+.job-attempt.invalid .attempt-heading { background: #fff1d3; }
+.job-attempt.valid .attempt-heading { background: #e6f3ed; }
+.attempt-output { padding: 0 12px 12px; overflow-wrap: anywhere; }
+.attempt-output img { display: block; width: 100%; height: auto; margin: 8px 0; }
+.attempt-output ul { margin: 10px 0; padding-left: 18px; max-height: 230px; overflow: auto; }
+.attempt-output li { display: list-item; white-space: pre-wrap; }

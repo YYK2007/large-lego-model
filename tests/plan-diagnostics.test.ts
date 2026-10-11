@@ -1,0 +1,162 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { compilePlan, type ShapePlanV2 } from '../server/compiler.js';
+import { diagnosePlanSupport } from '../server/plan-diagnostics.js';
+import { footprint, partHeight, validateDesign } from '../shared/model.js';
+
+const base = (changes: Partial<ShapePlanV2> = {}): ShapePlanV2 => ({ schemaVersion: 2, coordinateSystem: 'stud-xy-plate-z', title: 'Diagnostics specimen', description: 'A source attribution specimen.', boxes: [], ...changes });
+const box = (x = 0, y = 0, z = 0, width = 2, depth = 2, height = 3, colorId = 4) => ({ x, y, z, width, depth, height, colorId });
+const piece = (z = 0, x = 0) => ({ partId: '3005', colorId: 4, x, y: 0, z, rotation: 0 as const });
+const inspect = (plan: ShapePlanV2) => diagnosePlanSupport(plan, compilePlan(plan, { prompt: plan.title }));
+
+test('floating cap diagnostics identify the source box and actual one-plate gap without mutating the plan', () => {
+  const plan = base({ boxes: [box(0, 0, 0, 2, 2, 9), box(0, 0, 10)] }), before = structuredClone(plan), result = inspect(plan);
+  assert.equal(result.unsupportedPieceCount, 1); assert.equal(result.disconnectedComponents, 2);
+  assert.deepEqual(result.groups[0].sources, [{ path: '/boxes/1' }]);
+  assert.equal(result.groups[0].bottomZ, 10);
+  assert.equal(result.groups[0].nearestAlignedStudGapPlates, 1);
+  assert.equal(result.groups[0].occupiedBodyEnvelopeSitesBelow, 0);
+  assert.deepEqual(plan, before);
+});
+
+test('later box overlays own their surviving colored cells rather than every intersecting box', () => {
+  const result = inspect(base({ boxes: [box(0, 0, 0, 4, 2), box(0, 0, 4, 4, 2), box(2, 0, 4, 2, 2, 3, 15)] }));
+  assert.equal(result.groups.length, 2);
+  assert.deepEqual(result.groups.map(group => [group.colorId, group.sources]), [[4, [{ path: '/boxes/1' }]], [15, [{ path: '/boxes/2' }]]]);
+});
+
+test('repeated explicit pieces retain their editable template pointer, copy index and translation', () => {
+  const result = inspect(base({ parts: [piece()], repeats: [{ parts: [piece(4)], count: 2, dx: 5, dy: 0, dz: 0 }] }));
+  assert.equal(result.groups.length, 2);
+  assert.deepEqual(result.groups.map(group => group.sources), [0, 1].map(copy => [{ path: '/repeats/0/parts/0', copy, translation: { x: 5 * copy, y: 0, z: 0 } }]));
+  assert.equal(result.groups[0].nearestAlignedStudGapPlates, 1);
+  assert.equal(result.groups[1].nearestAlignedStudGapPlates, null);
+});
+
+test('hollow room diagnostics point to the local cutout that removed material under a floating interior part', () => {
+  const plan = base({ boxes: [{ ...box(0, 0, 0, 5, 5), cutouts: [{ x: 1, y: 1, z: 0, width: 3, depth: 3, height: 3 }] }], parts: [{ ...piece(3, 2), y: 2 }] });
+  const result = inspect(plan), group = result.groups[0];
+  assert.deepEqual(group.sources, [{ path: '/parts/0' }]);
+  assert.deepEqual(group.cutoutsBelow, [{ source: { path: '/boxes/0' }, path: '/boxes/0/cutouts/0' }]);
+  assert.equal(group.occupiedBodyEnvelopeSitesBelow, 0);
+  assert.equal(group.nearestSameHeightStudDistance, 2);
+  assert.equal(group.nearestAlignedStudGapPlates, null);
+});
+
+test('translated local cuts retain the repeat copy and successful supports produce no false error group', () => {
+  const plan = base({ repeats: [{ boxes: [{ ...box(0, 0, 0, 5, 5), cutouts: [{ x: 1, y: 1, z: 0, width: 3, depth: 3, height: 3 }] }], parts: [{ ...piece(3, 2), y: 2 }], count: 2, dx: 8, dy: 0, dz: 0 }] });
+  const result = inspect(plan);
+  assert.deepEqual(result.groups[1].cutoutsBelow[0], { source: { path: '/repeats/0/boxes/0', copy: 1, translation: { x: 8, y: 0, z: 0 } }, path: '/repeats/0/boxes/0/cutouts/0' });
+  const supportedPlan = base({ boxes: [box(0, 0, 0, 2, 2, 9)] }), model = compilePlan(supportedPlan, { prompt: 'Supported tower' });
+  assert.equal(validateDesign(model).valid, true);
+  assert.equal(diagnosePlanSupport(supportedPlan, model).unsupportedPieceCount, 0);
+  assert.deepEqual(diagnosePlanSupport(supportedPlan, model).groups, []);
+});
+
+test('a studless tile occupying a cutout is distinguished from a missing body beneath a part', () => {
+  const plan = base({ boxes: [{ ...box(0, 0, 0, 5, 5, 1), cutouts: [{ x: 1, y: 1, z: 0, width: 3, depth: 3, height: 1 }] }],
+    parts: [{ partId: '3068b', colorId: 4, x: 1, y: 1, z: 0, rotation: 0 }, { ...piece(1, 1), y: 1 }] });
+  const result = inspect(plan);
+  assert.equal(result.unsupportedPieceCount, 1);
+  assert.equal(result.groups[0].occupiedBodyEnvelopeSitesBelow, 1);
+  assert.deepEqual(result.groups[0].cutoutsBelow, []);
+});
+
+test('group truncation reports omissions rather than silently hiding unexamined source structures', () => {
+  const result = inspect(base({ parts: Array.from({ length: 12 }, (_, i) => piece(3, i * 2)) }));
+  assert.equal(result.unsupportedPieceCount, 12); assert.equal(result.groups.length, 8); assert.equal(result.omittedGroups, 4);
+});
+
+test('profile diagnostics identify the editable contour section and repeated copy rather than generated row boxes', () => {
+  const profile = { shape: 'ellipse' as const, colorId: 4, sections: [
+    { z: 4, cx: 3, cy: 3, width: 4, depth: 4 }, { z: 7, cx: 3, cy: 3, width: 4, depth: 4 },
+  ] };
+  const result = inspect(base({ boxes: [box(0, 0, 0, 12, 6)], repeats: [{ profiles: [profile], count: 2, dx: 6, dy: 0, dz: 0 }] }));
+  assert.ok(result.unsupportedPieceCount > 0);
+  for (const copy of [0, 1]) assert.ok(result.groups.some(group => group.sources.some(source =>
+    source.path === '/repeats/0/profiles/0' && source.copy === copy && source.sections?.[0] === 0 && source.sections?.[1] === 1)));
+  assert.ok(result.groups.every(group => group.nearestAlignedStudGapPlates === 1));
+});
+
+test('hollow repeated profiles, detail boxes and local cuts share exact painting order with source diagnostics', () => {
+  const profile = { shape: 'rectangle' as const, colorId: 4, sections: [
+    { z: 3, cx: 2, cy: 2, width: 4, depth: 4 }, { z: 6, cx: 2, cy: 2, width: 4, depth: 4 },
+  ] };
+  const plan = base({ profiles: [profile],
+    boxes: [{ ...box(0, 0, 3, 2, 2, 3, 1), cutouts: [{ x: 0, y: 0, z: 0, width: 1, depth: 1, height: 3 }] }],
+    repeats: [{ profiles: [{ ...profile, colorId: 15, wall: 1 }], boxes: [box(1, 1, 3, 1, 1, 3, 14)], count: 2, dx: 6, dy: 0, dz: 0 }],
+  });
+  const model = compilePlan(plan, { prompt: plan.title }), result = diagnosePlanSupport(plan, model);
+  const actual = new Map<string, number>(), expected = new Map<string, number>();
+  for (const brick of model.bricks) {
+    const size = footprint(brick);
+    for (let z = brick.z; z < brick.z + partHeight(brick); z++) for (let y = brick.y; y < brick.y + size.depth; y++) for (let x = brick.x; x < brick.x + size.width; x++) actual.set(`${x},${y},${z}`, brick.colorId);
+  }
+  for (let z = 3; z < 6; z++) {
+    for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) expected.set(`${x},${y},${z}`, 4);
+    for (const offset of [0, 6]) for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) if (!x || !y || x === 3 || y === 3) expected.set(`${x + offset},${y},${z}`, 15);
+    for (const [x, y] of [[1, 0], [0, 1], [1, 1]]) expected.set(`${x},${y},${z}`, 1);
+    for (const x of [1, 7]) expected.set(`${x},1,${z}`, 14);
+  }
+  assert.deepEqual(actual, expected, 'Holes retain earlier material, empty holes stay empty, and repeated boxes paint last');
+  const sources = (color: number) => result.groups.filter(group => group.colorId === color).flatMap(group => group.sources);
+  assert.deepEqual(sources(4), [{ path: '/profiles/0', sections: [0, 1] }]);
+  assert.deepEqual(sources(1), [{ path: '/boxes/0' }]);
+  for (const color of [15, 14]) assert.deepEqual(sources(color), [0, 1].map(copy => ({
+    path: `/repeats/0/${color === 15 ? 'profiles' : 'boxes'}/0`, ...(color === 15 ? { sections: [0, 1] } : {}), copy, translation: { x: copy * 6, y: 0, z: 0 },
+  })));
+  assert.equal(result.omittedGroups, 0);
+});
+
+test('separate grounded assemblies expose positions even when every piece has support', () => {
+  const plan = base({ parts: [piece(0, 0), piece(3, 0), piece(0, 6), piece(3, 6)] });
+  const model = compilePlan(plan, { prompt: plan.title }), before = structuredClone(model);
+  const result = diagnosePlanSupport(plan, model);
+  assert.equal(result.unsupportedPieceCount, 0);
+  assert.deepEqual(result.groups, []);
+  assert.equal(result.disconnectedComponents, 2);
+  assert.deepEqual(result.disconnectedGroups.map(group => ({ grounded: group.grounded, count: group.pieceCount, bounds: group.bounds })), [
+    { grounded: true, count: 2, bounds: { x: 0, y: 0, z: 0, width: 1, depth: 1, height: 6 } },
+    { grounded: true, count: 2, bounds: { x: 6, y: 0, z: 0, width: 1, depth: 1, height: 6 } },
+  ]);
+  assert.equal(result.disconnectedGroups[1].examples[0].x, 6);
+  assert.equal(validateDesign(model).valid, false, 'Diagnostic detail never relaxes assembly validity');
+  assert.deepEqual(model, before);
+});
+
+test('assembly-blocked placements expose exact rotated bounds and editable repeat sources', () => {
+  const plan = base({ parts: [piece()], repeats: [{ parts: [{ partId: '3460', colorId: 4, x: 3, y: 4, z: 0, rotation: 90 }], count: 2, dx: 12, dy: 0, dz: 0 }] });
+  const model = compilePlan(plan, { prompt: plan.title, repair: false }), before = structuredClone({ plan, model });
+  const selected = model.bricks.find(brick => brick.x === 15)!;
+  const result = diagnosePlanSupport(plan, model, { assemblyBlockedIds: new Set([selected.id, 'missing-id']) });
+  assert.equal(result.assemblyBlockedPieceCount, 1);
+  assert.deepEqual(result.assemblyBlockedPieces, [{ ...selected,
+    bounds: { x: 15, y: 4, z: 0, width: 8, depth: 1, height: 1 },
+    sources: [{ path: '/repeats/0/parts/0', copy: 1, translation: { x: 12, y: 0, z: 0 } }], omittedSources: 0 }]);
+  assert.equal(result.omittedAssemblyBlockedPieces, 0);
+  assert.match(result.note, /not a proven obstructing neighbor/);
+  assert.deepEqual({ plan, model }, before);
+  assert.deepEqual(diagnosePlanSupport(plan, model).assemblyBlockedPieces, [], 'Existing callers do not invent assembly failures');
+});
+
+test('assembly-blocked ownership follows overlays and profile section pointers', () => {
+  const plan = base({ profiles: [{ shape: 'rectangle', colorId: 4, sections: [
+    { z: 0, cx: 2, cy: 2, width: 4, depth: 4 }, { z: 3, cx: 2, cy: 2, width: 4, depth: 4 },
+  ] }], boxes: [box(0, 0, 0, 2, 4, 3, 15)] });
+  const model = compilePlan(plan, { prompt: plan.title, repair: false });
+  const selected = [model.bricks.find(brick => brick.colorId === 4)!, model.bricks.find(brick => brick.colorId === 15)!];
+  const result = diagnosePlanSupport(plan, model, { assemblyBlockedIds: new Set(selected.map(brick => brick.id)) });
+  for (const piece of result.assemblyBlockedPieces) assert.deepEqual(piece.sources, piece.colorId === 4
+    ? [{ path: '/profiles/0', sections: [0, 1] }] : [{ path: '/boxes/0' }]);
+  assert.equal(result.assemblyBlockedPieceCount, 2);
+});
+
+test('assembly diagnostics bound output and report omitted placements', () => {
+  const plan = base({ parts: Array.from({ length: 12 }, (_, index) => piece(0, index * 2)) });
+  const model = compilePlan(plan, { prompt: plan.title, repair: false });
+  const result = diagnosePlanSupport(plan, model, { assemblyBlockedIds: new Set(model.bricks.map(brick => brick.id)) });
+  assert.equal(result.assemblyBlockedPieceCount, 12);
+  assert.equal(result.assemblyBlockedPieces.length, 8);
+  assert.equal(result.omittedAssemblyBlockedPieces, 4);
+  assert.deepEqual(result.assemblyBlockedPieces.map(piece => piece.id), model.bricks.slice(0, 8).map(brick => brick.id));
+});

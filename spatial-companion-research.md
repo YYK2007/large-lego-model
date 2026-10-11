@@ -43,10 +43,7 @@ The useful outcome is that a team can agree on what it tested and whether the ev
 
 The Shiu et al. model studies sensorimotor transformations, including gustatory input and feeding-related motor output, with a connectome-based leaky integrate-and-fire model. It offers a real basis for comparing activation and silencing interventions. Its assumptions omit important biology, so output is a model prediction. Use model-derived activity to drive the visualization; any fly-body animation is an explanatory mapping unless independently validated. [Published paper](https://pmc.ncbi.nlm.nih.gov/articles/PMC11446845/)
 
-I read the current local run manifest and silencing summary at:
-
-- [manifest.json](/Users/youssefkusibati/Documents/Random_Projects/flybrain/shiu-baseline/results/explore/20261010T125911025339Z/manifest.json)
-- [silencing_summary.csv](/Users/youssefkusibati/Documents/Random_Projects/flybrain/shiu-baseline/results/explore/20261010T125911025339Z/silencing_summary.csv)
+The local research notes used `manifest.json` and `silencing_summary.csv` from an exploratory FlyBrain run. Those separate-project artifacts are not included in this repository.
 
 The manifest records one-second simulations taking approximately 4.9–26.3 seconds, with one trial per condition. Its 100 Hz comparison gives MN9 output of 71 Hz for baseline, and 71, 62, and 73 Hz for three individual silencing conditions. These are exploratory saved results, not a replicated effect or a fresh benchmark. They suggest an asynchronous text-and-result workflow is practical. Use multiple seeds before making a scientific claim.
 

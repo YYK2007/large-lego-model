@@ -1,0 +1,49 @@
+{
+  "name": "large-lego-model",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n api,web \"node --watch --import tsx server/index.ts\" \"vite --host 127.0.0.1\"",
+    "build": "tsc --noEmit && vite build",
+    "start": "node --import tsx server/index.ts",
+    "test": "node --import tsx --test --test-concurrency=4 tests/*.test.ts",
+    "catalog:sync": "node --import tsx scripts/check-catalog.ts --all",
+    "check:large-export": "node scripts/check-large-export.mjs",
+    "photon": "node --import tsx server/photon.ts"
+  },
+  "dependencies": {
+    "@google/genai": "2.28.0",
+    "dotenv": "18.0.7",
+    "express": "5.3.0",
+    "lucide-react": "1.55.0",
+    "pdfkit": "0.20.2",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "sharp": "0.35.5",
+    "spectrum-ts": "12.10.1",
+    "svg-to-pdfkit": "0.1.8",
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.6",
+    "@types/node": "26.6.5",
+    "@types/pdfkit": "0.17.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@types/svg-to-pdfkit": "0.1.4",
+    "@types/three": "0.186.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "concurrently": "10.0.6",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "vite": "8.3.4"
+  },
+  "overrides": {
+    "@opentelemetry/core": "2.12.0"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

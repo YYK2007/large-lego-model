@@ -1,0 +1,672 @@
+{
+  "retrievedAt": "2026-10-10T20:30:49.814Z",
+  "description": "Colors with catalog inventory records in Rebrickable. This does not verify current stock, price, or user ownership.",
+  "parts": {
+    "2445": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/2445/colors/?page_size=1000",
+      "identitySource": "https://rebrickable.com/api/v3/lego/parts/2445/",
+      "ldrawSource": "https://library.ldraw.org/library/official/parts/2445.dat",
+      "retrievedAt": "2026-10-10T21:32:26.811Z"
+    },
+    "2465": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        70,
+        71,
+        72
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/2465/colors/?page_size=1000",
+      "identitySource": "https://rebrickable.com/api/v3/lego/parts/2465/",
+      "ldrawSource": "https://library.ldraw.org/library/official/parts/2465.dat",
+      "retrievedAt": "2026-10-10T21:32:24.165Z"
+    },
+    "3001": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3001/colors/?page_size=1000"
+    },
+    "3002": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3002/colors/?page_size=1000"
+    },
+    "3003": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3003/colors/?page_size=1000"
+    },
+    "3004": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3004/colors/?page_size=1000"
+    },
+    "3005": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3005/colors/?page_size=1000"
+    },
+    "3007": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3007/colors/?page_size=1000"
+    },
+    "3008": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3008/colors/?page_size=1000",
+      "identitySource": "https://rebrickable.com/api/v3/lego/parts/3008/",
+      "ldrawSource": "https://library.ldraw.org/library/official/parts/3008.dat",
+      "retrievedAt": "2026-10-10T21:32:16.490Z"
+    },
+    "3009": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3009/colors/?page_size=1000"
+    },
+    "3010": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3010/colors/?page_size=1000"
+    },
+    "3020": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3020/colors/?page_size=1000"
+    },
+    "3022": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3022/colors/?page_size=1000"
+    },
+    "3023": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3023/colors/?page_size=1000"
+    },
+    "3024": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3024/colors/?page_size=1000"
+    },
+    "3027": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3027/colors/?page_size=1000",
+      "identitySource": "https://rebrickable.com/api/v3/lego/parts/3027/",
+      "ldrawSource": "https://library.ldraw.org/library/official/parts/3027.dat",
+      "retrievedAt": "2026-10-10T21:32:34.482Z"
+    },
+    "3028": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3028/colors/?page_size=1000",
+      "identitySource": "https://rebrickable.com/api/v3/lego/parts/3028/",
+      "ldrawSource": "https://library.ldraw.org/library/official/parts/3028.dat",
+      "retrievedAt": "2026-10-10T21:32:31.979Z"
+    },
+    "3034": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3034/colors/?page_size=1000"
+    },
+    "3036": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3036/colors/?page_size=1000"
+    },
+    "3039": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3039/colors/?page_size=1000"
+    },
+    "3460": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3460/colors/?page_size=1000"
+    },
+    "3622": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3622/colors/?page_size=1000"
+    },
+    "3623": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3623/colors/?page_size=1000"
+    },
+    "3666": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3666/colors/?page_size=1000"
+    },
+    "3710": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3710/colors/?page_size=1000"
+    },
+    "4282": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/4282/colors/?page_size=1000",
+      "identitySource": "https://rebrickable.com/api/v3/lego/parts/4282/",
+      "ldrawSource": "https://library.ldraw.org/library/official/parts/4282.dat",
+      "retrievedAt": "2026-10-10T21:32:29.411Z"
+    },
+    "4589": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/4589/colors/?page_size=1000"
+    },
+    "6111": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/6111/colors/?page_size=1000",
+      "identitySource": "https://rebrickable.com/api/v3/lego/parts/6111/",
+      "ldrawSource": "https://library.ldraw.org/library/official/parts/6111.dat",
+      "retrievedAt": "2026-10-10T21:32:19.106Z"
+    },
+    "6112": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        70,
+        71,
+        72
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/6112/colors/?page_size=1000",
+      "identitySource": "https://rebrickable.com/api/v3/lego/parts/6112/",
+      "ldrawSource": "https://library.ldraw.org/library/official/parts/6112.dat",
+      "retrievedAt": "2026-10-10T21:32:21.571Z"
+    },
+    "6141": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/6141/colors/?page_size=1000",
+      "identitySource": "https://rebrickable.com/api/v3/lego/parts/6141/",
+      "brickLinkAlias": "4073"
+    },
+    "91405": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        15,
+        19,
+        25,
+        28,
+        71,
+        72
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/91405/colors/?page_size=1000",
+      "identitySource": "https://rebrickable.com/api/v3/lego/parts/91405/",
+      "ldrawSource": "https://library.ldraw.org/library/official/parts/91405.dat",
+      "retrievedAt": "2026-10-10T21:32:39.470Z"
+    },
+    "92438": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        71,
+        72
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/92438/colors/?page_size=1000",
+      "identitySource": "https://rebrickable.com/api/v3/lego/parts/92438/",
+      "ldrawSource": "https://library.ldraw.org/library/official/parts/92438.dat",
+      "retrievedAt": "2026-10-10T21:32:36.940Z"
+    },
+    "3069b": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3069b/colors/?page_size=1000"
+    },
+    "3068b": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3068b/colors/?page_size=1000"
+    },
+    "3040b": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        28,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3040b/colors/?page_size=1000"
+    },
+    "3062b": {
+      "allowedColorIds": [
+        0,
+        1,
+        2,
+        4,
+        14,
+        15,
+        19,
+        25,
+        70,
+        71,
+        72,
+        320
+      ],
+      "source": "https://rebrickable.com/api/v3/lego/parts/3062b/colors/?page_size=1000"
+    }
+  }
+}
