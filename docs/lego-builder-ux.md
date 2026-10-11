@@ -1,5 +1,7 @@
 # LEGO Builder visual review and Large LEGO Model changes
 
+Dated observations and design proposals. Use the [instruction checkpoint](INSTRUCTION-DELIVERY-CHECKPOINT.md) for implemented behavior; cooperative building remains future work.
+
 Reviewed 2026-10-10. I opened the official App Store carousel and played, paused, and advanced the 37-second explainer on LEGO's site in Chrome, inspecting screenshots of the rendered pages. LEGO Builder was absent from the available native-app inventory. **This was inspection of official published screens and video, not operation of the native Builder app or a completed physical build.** The proposals below are our design decisions, not claims about undocumented Builder behavior.
 
 ## Evidence actually viewed
@@ -10,7 +12,7 @@ The [official App Store screenshots](https://apps.apple.com/us/app/lego-builder-
 
 LEGO's [getting-started help](https://www.lego.com/en-us/service/help-topics/article/lego-builder-app-3d-building-instructions) makes the set-dependent distinction between 3D, PDF, Build Together and Missions. A PDF-only instruction set is not evidence of interactive 3D support. For deeper collaboration context, a [first-hand UX researcher case study](https://www.linestampe.com/projects/legobuilder) describes testing version 3.1.5, independently built modules, handovers and recovery problems. It is historical research, not current official app documentation.
 
-## Immediate changes for our existing React/Three viewer
+## Assembly design proposed after the review
 
 The main gap is guidance about the next physical action. A camera, layer slider and generic “add this layer” sentence do not tell someone which piece to pick up or where to put it. Keep a large clean model canvas and devote the surrounding controls to that action.
 
@@ -35,9 +37,11 @@ First add real assembly hierarchy and validated join operations as described in 
 
 A future collaborative session should assign independent modules, reserve their exact pieces, show who owns each task, and explicitly request the transfer when another builder needs it. A receiving builder confirms the handoff. Allow a participant to recover, pause or reassign unfinished work without losing everyone's progress. Synchronizing one global step counter across devices is not equivalent to splitting a build. These changes require real session state; a room code alone should not be presented as working multiplayer.
 
-## Manual appearance: stronger Frutiger Aero, with precise diagrams
+## Historical manual appearance proposal
 
-The requested direction is Windows XP-led Frutiger Aero/Y2K: rounded blue window frames, sky and grass greens, and glossy controls. The current PDF already has generous white space, small gradients and blue/green accents, but the repeated thin header strip reads closer to a technical report. Concentrate the stronger framing on the cover and navigation, leaving assembly geometry easy to inspect.
+This early proposal used a more literal Windows XP direction. The user later rejected desktop-window styling in favor of the calmer [current visual brief](OBJECTIVE.md#appearance-and-writing). The original proposal follows for context:
+
+Windows XP-led Frutiger Aero/Y2K: rounded blue window frames, sky and grass greens, and glossy controls. The current PDF already has generous white space, small gradients and blue/green accents, but the repeated thin header strip reads closer to a technical report. Concentrate the stronger framing on the cover and navigation, leaving assembly geometry easy to inspect.
 
 - Give the cover a luminous sky-blue gradient, a grass-green curved horizon and one rounded blue window frame with a glossy title bar and fine white highlight. Place the finished model large on its pale inner panel with a restrained contact shadow. Keep the title on an opaque or near-opaque field so contrast stays reliable. Decorative window controls must look like printed framing, not actionable PDF buttons.
 - Use rounded, softly shaded blue step-number capsules and a pale glass-like gather tray. Repeat the same icon positions and accent palette in the web viewer. Avoid large ornamental bubbles behind studs or coordinates.

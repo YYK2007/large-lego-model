@@ -1,5 +1,7 @@
 # Spatial work companion: camera, AR, iMessage, and FlyBrain
 
+Archived HackNC direction, explored before Large LEGO Model was selected. This proposal is preserved for context. Start with the [current project README](README.md) for the implemented product.
+
 Research and product assessment, October 10, 2026. Available hardware: iPhones and a laptop/webcam. This is a design proposal, not an implemented or user-validated product.
 
 ## The problem worth building around

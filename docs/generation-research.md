@@ -1,5 +1,7 @@
 # Large LEGO Model: generation research and implementation boundary
 
+Historical research from October 10, 2026. Implementation descriptions below refer to those checkpoints. Use the [architecture map](ARCHITECTURE.md), [current catalog guide](DYNAMIC-CATALOG.md) and [verification record](VERIFICATION.md) for the present system.
+
 Research checked October 10, 2026. “Large LEGO Model” names our application architecture; the MVP does not train a new foundation model.
 
 ## Decision

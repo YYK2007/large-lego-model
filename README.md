@@ -65,7 +65,7 @@ This enables real replies to messages sent to your configured Photon line. Follo
 
 All previews, guides, parts lists and exports derive from the same checked placements. Owned inventory records exact part, color, quantity and source set or loose-brick lot. Photo inventory estimates require confirmation.
 
-The bundled seed supplies **80 usable part types**: 36 built-in definitions and 44 imported definitions, plus 176 mapped opaque colors. Each part has its own supported color and connection combinations. Catalog discovery can resolve additional supported parts; a catalog listing alone does not make a connector usable or establish current marketplace stock.
+The bundled seed supplies 80 usable part types, with 36 built-in definitions, 44 imported definitions and 176 mapped opaque colors. Each part has its own supported color and connection combinations. Catalog discovery can resolve additional supported parts; a catalog listing alone does not make a connector usable or establish current marketplace stock.
 
 Compact PDF instructions use landscape placement diagrams, pictured parts and repeated assemblies. Phone models merge geometry for rendering while exact part accounting remains in the canonical build. Optional OpenUSD tools (`usdcat` and `usdzip` on `PATH`) provide additional lossless binary packaging. Exports still work without them, but may be larger. Photon has an attachment transport limit; this is separate from the model's piece count.
 
@@ -77,7 +77,9 @@ Current limits:
 - Clutch strength, tipping, torque and load-bearing stability are not physically simulated. A real hand-build remains necessary for physical validation.
 - Resemblance is not guaranteed. Review-disabled drafts are labeled as not visually reviewed. Never treat a passed geometry check as a promise that the model matches its subject.
 
-## Development
+## Documentation and development
+
+The [documentation index](docs/README.md) separates setup guides, implementation notes and historical research. Start with [the architecture map](docs/ARCHITECTURE.md) when working on the code, or [the live test guide](docs/live-testing.md) when checking the full flow.
 
 `main` contains the current implementation. Create a feature branch from it and submit a pull request. See [contributing](CONTRIBUTING.md).
 

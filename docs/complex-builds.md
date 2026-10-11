@@ -1,5 +1,7 @@
 # Complex, genuinely three-dimensional builds
 
+Historical research from October 10, 2026. Implementation descriptions below refer to those checkpoints. Use the [architecture map](ARCHITECTURE.md), [current catalog guide](DYNAMIC-CATALOG.md) and [verification record](VERIFICATION.md) for the present system.
+
 Research and proposed next increment, checked 2026-10-10. **Historical proposal with checkpoint 03 progress:** the piece cap is removed; plates/slopes, repeated-feature plans, and a curated 1,345-piece castle are implemented and checked. The live complex Gemini request produced no plan because the project's quota was exhausted. No generated model has been physically built. The original research below records the broader directions that remain to be validated; see `VERIFICATION.md` for current evidence.
 
 ## The immediate correction

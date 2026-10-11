@@ -2,6 +2,8 @@
 
 Start from `main` on Node.js 24 LTS, run `npm ci`, and create a feature branch. Copy `.env.example` to `.env` only when you need live integrations; samples and tests work without service keys.
 
+Use the [architecture map](docs/ARCHITECTURE.md) to find the relevant modules. The [verification record](docs/VERIFICATION.md) lists the latest evidence and open checks. Keep historical measurements in the archive rather than presenting them as current behavior.
+
 Keep changes focused and run:
 
 ```sh

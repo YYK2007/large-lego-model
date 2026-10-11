@@ -1,5 +1,7 @@
 # Plate and upright-slope increment
 
+Historical research from October 10, 2026. Implementation descriptions below refer to those checkpoints. Use the [architecture map](ARCHITECTURE.md), [current catalog guide](DYNAMIC-CATALOG.md) and [verification record](VERIFICATION.md) for the present system.
+
 Research/design checkpoint, 2026-10-10. **Implemented in checkpoint 03.** The original plan below records the source-grounded migration decision. Production now includes 3022/3020 plates and 3039 slopes, V2 plate-height coordinates, four yaw orientations, accurate high-edge slope studs, matching geometry/exports, and legacy normalization without rewriting old snapshots. See `VERIFICATION.md` for checks and remaining limits. This increment does not finish the broader part catalog.
 
 ## Checkpoint 05 preview: architectural parts
@@ -246,7 +248,7 @@ The LDCad shadow library has a **different license, CC BY-SA 4.0**. Its [maintai
 
 A production catalog package should contain its manifest, source URLs/hashes, asset licenses/attribution, canonical transforms, geometry, and authored connector test fixtures. Freeze its version into accepted revisions so an upstream origin/geometry correction cannot silently change a saved build. This research read live upstream files; it has **not** vendored, pinned, or shipped them.
 
-## Current evidence and immediate sequence
+## Evidence and next steps recorded at this checkpoint
 
 The parent run reports live Gemini rocket generation succeeded with **71 bricks**, followed by an exact red→green revision retaining all 71 placements with **25 green pieces**. Those establish live behavior of the current rectangular-brick path, not plate/slope support. A later owned-only pyramid run used only confirmed stock but added an unwanted fifth layer; a checker fix and repeat then produced the requested four layers with zero shortages. See `VERIFICATION.md` for both IDs and outcomes. Neither run establishes plate/slope support.
 

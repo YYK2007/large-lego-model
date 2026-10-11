@@ -1,8 +1,10 @@
 # Parts, geometry, and instruction research
 
+Historical research from October 10, 2026. Implementation descriptions below refer to those checkpoints. Use the [architecture map](ARCHITECTURE.md), [current catalog guide](DYNAMIC-CATALOG.md) and [verification record](VERIFICATION.md) for the present system.
+
 Verified 2026-10-10 against primary documentation. The current product is a limited upright-brick MVP, not a general LEGO CAD or structural simulation system.
 
-## Current implementation
+## Prototype implementation at this checkpoint
 
 - `shared/model.ts` owns catalog IDs, exact placements, BOM, source allocation, and step grouping.
 - `shared/illustration.ts` renders deterministic vector brick bodies and studs at the same coordinates. It uses the whole model's extent for every step, preventing camera jumps. These are procedural rectangular-brick illustrations, not imported LDraw meshes.

@@ -1,112 +1,106 @@
-# Large LEGO Model: Photon / HackNC setup
+# Photon setup
 
-Prize research was verified October 10, 2026 against the live HackNC guide, Devpost, Photon guidelines, and Photon documentation. Transport and instruction-guide behavior was updated October 11.
+Large LEGO Model uses Photon Spectrum for iMessage. A request produces a checked preview; feedback revises it; explicit approval sends the guide and final files. This guide was checked against the source on October 11, 2026. HackNC prize research is kept separately at the end.
 
-## Account setup
+## Set up and start
 
-1. Open [Photon's dashboard](https://app.photon.codes/dashboard), create or sign in to your account, and use **HACKWITHPHOTON**. Photon's hackathon guidelines offer **one month of Pro** with this code.
-2. Create a project and connect its managed iMessage line in the dashboard. Record the phone number for the demo.
-3. Copy the project ID and secret from project Settings into the local `.env` file as `SPECTRUM_PROJECT_ID` and `SPECTRUM_PROJECT_SECRET`. Keep them out of Git, browser code, screenshots, and Devpost.
-4. Add `GEMINI_API_KEY` for design generation. For phone instruction links, set `PUBLIC_BASE_URL` to an externally reachable HTTPS origin forwarding **only to the signed read-only gateway at `127.0.0.1:3002`**. Do not expose the private API on port 3001 or the Vite development server. A localhost URL will not work on someone else's phone.
-5. Run the web/API app and, when you are ready for real inbound messages to trigger replies, run `npm run photon` in a second terminal. Keep this process running for the demo. Starting it enables real replies to people who text the connected line.
+1. Open [Photon's dashboard](https://app.photon.codes/dashboard), create a project, and connect its managed iMessage line. Copy its project ID and secret from Settings. The [Spectrum quickstart](https://photon.codes/docs/spectrum-ts/getting-started) covers project credentials.
+2. Run `npm ci` and create `.env` from `.env.example` if it doesn't already exist. Fill in the fields below. Keep credentials out of Git, screenshots and chat.
+3. Run `npm run build`, then `npm start`. This starts the private app/API on `127.0.0.1:3001` and the signed, read-only guide gateway on `127.0.0.1:3002`. For development, `npm run dev` also starts Vite. Rebuild the assets before testing the phone guide. Don't restart the API while it has active builds unless you intend to interrupt them.
+4. Check `http://127.0.0.1:3001/api/status`. The listener requires `photonJobPolicy: 3` and `gemini: true`. The Gemini flag confirms configuration, not a successful provider request.
+5. In another terminal, run `npm run photon`. Keep one Photon process running for this project. It uses the API's existing job queue. Starting it enables real replies to incoming messages.
+6. Text `/status` to the connected line from the test phone. Confirm a reply about the current conversation. This does not start a build. The startup authentication message alone doesn't prove that iMessage delivery works.
 
-This worker uses **Spectrum** (`spectrum-ts`, checked against installed version **12.10.1**) and the managed cloud iMessage provider, as the prize requires. It uses the SDK's message stream; no public webhook or local Messages database access is needed. Spectrum discovers project-owned lines and renews their tokens. Use Node.js or Bun, not a browser or strict edge-worker runtime.
+| Field | Use |
+| --- | --- |
+| `SPECTRUM_PROJECT_ID` | Photon project ID |
+| `SPECTRUM_PROJECT_SECRET` | Photon project secret |
+| `GEMINI_API_KEY` | Generation and conversational interpretation |
+| `REBRICKABLE_API_KEY` | Live part and set lookups; see the main setup guide |
+| `PUBLIC_BASE_URL` | Public HTTPS origin for the signed guide, forwarding only to port 3002; leave empty for local-only work |
+| `PHOTON_API_BASE_URL` | Optional listener override; defaults to `http://127.0.0.1:3001` |
+| `PHOTON_VISUAL_REVIEW_ENABLED` | Defaults to `false`; see below |
 
-The implementation is separate from account setup. A successful local test or build does not prove that a phone line is connected or that a real iMessage was delivered. Verify a text round trip, an image input, a revision, and a PDF on an actual phone before claiming the integration is live.
+The installed SDK is `spectrum-ts` 12.10.1. The listener uses the [cloud iMessage provider](https://photon.codes/docs/spectrum-ts/providers/imessage) and filters the [message stream](https://photon.codes/docs/spectrum-ts/messages) to inbound iMessages. It doesn't need a public webhook or access to the local Messages database. [Webhooks](https://photon.codes/docs/spectrum-ts/webhooks) are a separate SDK option, not this implementation's transport.
 
-## Start and verify the transport
+## Share the phone guide
 
-1. Put the project ID and secret in `.env` using the exact fields above. Never paste credentials into chat or screenshots. The running API also needs Gemini configured.
-2. Run the latest API/web app with `npm run dev`. Do not restart an API with active jobs without first stopping them or deliberately accepting interruption. `GET http://127.0.0.1:3001/api/status` must report `photonJobPolicy: 3` and `gemini: true`.
-3. In a second terminal run `npm run photon`. `PHOTON_API_BASE_URL` defaults to `http://127.0.0.1:3001`; change it only if the API runs elsewhere. The transport uses that API's existing worker queue, never a second owner of the generation-job directory.
-4. The startup message confirms authenticated project lookup and line-token provisioning. It does **not** prove a live iMessage round trip. On the test phone, text `/status` to the connected Photon line. Expected result: a reply explaining that no build is active. This check makes no Gemini generation request.
-5. Text a simple recognizable subject, such as `Build a small red rocket`. Confirm it starts directly, acknowledges the request, and reports progress. Detail follows the subject and your instructions. It returns the first complete checked draft; queue wait is reported separately. Ask “what’s happening?” and confirm it reports the same job. Reply `make the fins blue` and confirm it revises without a mode question. After the revised preview, reply `Approve`; verify the guide, 3D model and parts CSV all describe that revision. `/stop` cancels generation and pending delivery while keeping checked drafts. Already handed-off messages cannot be recalled.
-6. Send `/instructions`, `/model` and `/manual`. Verify the guide opens and resumes, the actual phone can receive/rotate the viewing USDZ, and the optional PDF opens. Test one photo with a caption separately, then `/open <saved-design-id>` with owned stock.
+Attachments use [Spectrum buffers](https://photon.codes/docs/spectrum-ts/content/attachments), so PNG, USDZ, PDF and CSV delivery doesn't need a public URL. The web guide does.
 
-Spectrum sends PNG, USDZ, PDF and CSV bytes directly, so attachments do not need a public URL. The instruction guide does. Build the web assets with `npm run build`; the API process serves a separate read-only listener on port 3002. Its signed `/?build=<revision>&share=<token>` link permits the guide, required public assets, and that revision's allowed read-only files. It rejects mutations and job/configuration/catalog routes. Public design JSON omits prompts, photos and research; owned-stock allocation includes only parts required by the build. Keep `data/instruction-share-key` private and persistent. Links are bearer access: recipients can forward them, and replacing the key invalidates existing links.
+1. Build the web assets and run the API as above.
+2. Route an HTTPS origin only to `http://127.0.0.1:3002`. Never expose the private API on port 3001 or the Vite server to make the guide work.
+3. Set that origin as `PUBLIC_BASE_URL` in `.env`. The API reads it when creating a guide link. Restart the Photon listener gracefully to pick up its changed configuration; active API jobs can continue.
+4. Approve a checked preview, then open its signed link on the phone. The bare hostname should return 404. Test both the Spectrum card and the plain browser link.
 
-For a temporary authorized demo, `cloudflared tunnel --url http://127.0.0.1:3002` prints an HTTPS origin to use as `PUBLIC_BASE_URL`. A Quick Tunnel lasts only while its process runs, changes hostname when recreated, and has no production uptime guarantee. A named deployment is needed for durable links. Do not start a public tunnel before checking the gateway, and do not restart services with active jobs. [Cloudflare Quick Tunnels](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/)
-
-Only an approved revision receives a Spectrum instruction app card and a plain HTTPS fallback link. Before approval the agent sends a PNG preview for feedback, without a full guide or downloadable files. The recipient installs the [Spectrum iMessage launcher](https://apps.apple.com/ca/app/spectrum-apps-in-messages/id6777616651) once to open app cards; the same guide works in a normal browser without that extension. The guide's ordinary 3D instruction mode is primary. Camera access is unnecessary; AR is optional on a supported phone. The implementation uses `app(url, { layout })`, not a custom native iMessage extension or an asserted live-bubble renderer. Test actual gestures inside Spectrum separately. [Photon app cards](https://photon.codes/docs/spectrum-ts/content/app)
-
-## Current Cloudflare demo domain
-
-The registered domain is **llegomodel.site**. The mini-app uses **https://guide.llegomodel.site** so it does not depend on cached Namecheap parking records for the root. Both hostnames route to the same signed gateway; an unsigned homepage returns 404 intentionally.
-
-On the configured Mac, keep the API and Photon listener running, build current assets with `npm run build`, and run:
+The project demo uses `https://guide.llegomodel.site`. On the machine with its existing tunnel credentials and ignored configuration, the launch command is:
 
 ```sh
 cloudflared tunnel --config data/cloudflare/guide.yml run large-lego-model-guide
 ```
 
-The locally generated, ignored config routes only to `http://127.0.0.1:3002`, with a final 404 rule. Tunnel credentials stay under `~/.cloudflared`; never commit them. `.env` contains `PUBLIC_BASE_URL=https://guide.llegomodel.site`. Restart only the Photon listener gracefully after changing that value; active API jobs can continue. The domain uses Cloudflare's Free plan and automatic Universal SSL. This named tunnel keeps its hostname across restarts, but the Mac, API and tunnel must remain running for links to work.
+That local configuration isn't included in the repository. A fresh installation needs its own tunnel or deployment. Keep the API and tunnel running for links to resolve. For a temporary test, `cloudflared tunnel --url http://127.0.0.1:3002` supplies a random HTTPS hostname; it changes when the tunnel is recreated and has no uptime guarantee. [Cloudflare Quick Tunnels](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/)
 
-Send `/instructions` in an existing iMessage conversation to receive the selected approved build's signed card and browser link. The bare hostname is not a build browser. Keep `data/instruction-share-key` and saved designs persistent so previously sent links continue to resolve. Verify real phone card/browser opening, placement navigation, resumed progress, downloads and optional AR separately from HTTP tests.
+Links use `/?build=<revision>&share=<token>`. The gateway permits only that revision's geometry and read-only files, plus application assets. It excludes prompts, photos, research, jobs and unrelated inventory. Keep `data/instruction-share-key` and saved designs persistent and private. Anyone with a signed link can forward it; replacing the key invalidates existing links.
 
-## Demo visual-review switch
+After approval, the transport attempts a Spectrum app card and a plain HTTPS link. App cards open through the [Spectrum iMessage launcher](https://apps.apple.com/ca/app/spectrum-apps-in-messages/id6777616651), which recipients install once. The browser link works without it. Our card uses `app(url, { layout })`; we haven't enabled live rendering in the message bubble. [Photon app cards](https://photon.codes/docs/spectrum-ts/content/app)
 
-`PHOTON_VISUAL_REVIEW_ENABLED=false` is the demo default. It skips the separate concept study, post-build Gemini visual scoring and automatic visual refinement for newly submitted iMessage jobs. Reference photographs, independent subject requirements, planning, brick checks and structural repairs remain active. The first complete checked draft waits for user feedback or approval. Review metadata says **Not visually reviewed**, never a visual pass or failure.
+## Requests, feedback and approval
 
-To restore the reviewer, set `PHOTON_VISUAL_REVIEW_ENABLED=true` in `.env` and restart only the Photon listener. Each submitted job keeps its snapshotted setting; existing jobs are unchanged. Keep the API running while it has active jobs. The reviewer code and tests remain in place. Restored AI review still requires user approval before final delivery.
+New build requests start directly. Clear feedback revises the selected checked build, preserving its original request, photos and owned stock. `/new <idea>` starts another subject and clears the old design/photo context while keeping stock. A failed new subject retains the earlier preview and identifies it as the earlier build.
 
-## Conversation flow
+Before approval, the phone receives a PNG preview and a feedback prompt. Unfinished attempts stay private. Approval pins the successfully previewed or explicitly selected checked revision; a newer background draft can't replace it during delivery. A revision needs its own approval.
 
-Help covers `/status`, `/stop`, `/approve`, `/retry`, `/instructions` (or `/build`), `/model`, `/manual`, `/parts`, `/use N`, `/open ID` and `/new idea`. Archived mode commands are described only when mode selection is enabled.
+| Command | Result |
+| --- | --- |
+| `/status` | Current build or file-delivery progress; no new build |
+| `/stop` | Stops generation and pending delivery; keeps saved drafts and acknowledged files |
+| `/approve` | Approves the exact selected preview and sends its final bundle |
+| `/retry` | Sends only missing items from the saved approved bundle; no regeneration |
+| `/instructions` or `/build` | Reopens the selected approved build's guide |
+| `/model` | Sends its phone viewing USDZ |
+| `/manual` | Prepares its optional PDF |
+| `/parts` | Sends exact part/color quantities, owned allocations and catalog links |
+| `/use N` | Stops generation and selects checked attempt N for review |
+| `/open ID` | Loads a saved design and its inventory/catalog snapshot |
+| `/new <idea>` | Starts a new subject; bare `/new` asks for a description |
 
-- Natural questions and brainstorming use a bounded Gemini conversation call; clear actions route through the existing status, file, new-build and revision handlers. Feasibility questions do not start generation. Ambiguity asks for clarification; provider failure leaves the build unchanged. Stop supersedes late interpretation. Short confirmations can resolve a specific offered subject, while approval stays explicit. Up to eight user/assistant conversational messages persist for continuity. The user has confirmed a natural greeting/help reply on the phone without generation.
-- An explicit build request or photo-plus-caption starts directly with the detailed construction path. Quick mode is archived behind `QUICK_MODE_ENABLED=false` in `shared/generation-job.ts`; setting it to true restores the website choice and iMessage mode question. The generator implementation, stored job qualities and tests remain. New revisions use the same full construction capabilities. Existing jobs are unchanged; a saved request waiting for a mode can be resumed with its old mode reply or “go ahead.” With visual review disabled, the agent skips the separate concept study and returns the first complete checked draft for user feedback. Reference analysis, catalog discovery and structural repair remain. Neither geometric nor visual checks prove mechanical strength.
-- Checked drafts are sent promptly as PNGs. Provider failure still delivers an available checked draft rather than discarding it. Unfinished attempts stay private and never enter the normal design/export store. No automatic guide or final-file delivery occurs before explicit approval.
-- Stage updates are limited to one every 15 seconds, with a check-in after 30 seconds without another delivered update. Queue wait is reported separately. Natural status questions and `/status` reconnect to the existing job without starting generation. `/stop` ends it and keeps the checked draft. Natural Stop requests, `/stop`, and reply-wrapped controls bypass slow work. Stop aborts pending file/validation waits and drops older queued commands; acknowledged approved files stay recorded for an explicit `/retry`. It suppresses late previews and links, but cannot recall a message already handed to Photon. Unfinished attempts stay private in every mode; only complete saved drafts that pass brick checks are sent as previews. Approval and direct export commands report preparation and sending stages, with a check-in after 30 seconds of silence. Progress-text failures do not discard prepared files or acknowledged deliveries.
-- `/use 7` stops generation and selects that exact checked attempt. Unfinished attempts cannot be selected or exported. After that exact revision is approved, `/instructions` or `/build` opens its guide; `/model` sends its mobile viewing USDZ; `/manual` requests its PDF; `/parts` sends its parts CSV with catalog links. These commands, including natural-language equivalents, ask for approval when the selected revision is still a draft. A revision does not inherit approval from its parent. New approval sends **guide + 3D model + parts** for the exact previewed revision without generating again. PDF is on demand. Without an available signed guide URL, approval retains the model/PDF/parts bundle. Existing saved approvals retain their original bundle intent. `/retry` sends only missing items from the saved approved revision, even when another design is selected. Unknown slash commands show help instead of creating a build. Catalog links do not establish current stock or prices.
-- Ordinary feedback revises the selected or best checked draft. The planner starts with its exact existing placements and requests targeted edits, preserving the original request, photographs and owned inventory. Failed edits retain the old checked draft; they do not silently restart a new model. Before a checked draft exists, feedback retains the original requested subject. `/new your idea` resets subject/design/photo context, keeping owned inventory. Bare `/new` stops work and asks for a new description.
-- A photo without text asks for a description and is retained for the following request and revisions. Photo interpretation is inspiration, not a verified brick count. JPEG, PNG and WebP inputs are limited to 5 MiB; convert HEIC to JPEG first.
-- `/open <design-id>` explicitly imports a saved web design and its inventory/catalog snapshot. Nonempty stock limits future generation to owned pieces. This is a snapshot, not continuous browser sync. Imported part definitions survive future design switches. Malformed inventory is rejected.
-- Builds have no piece-count ceiling. The installed Photon transport limits one request to 100 MiB. Normal model delivery uses `/api/designs/:id/mobile.usdz`: every body, color, exposed stud and imported surface is retained, while covered ordinary stud detail is omitted for phone viewing. This is a viewing copy of the same selected revision, not the canonical export. The guide offers `/model.usdz` with full exact geometry; BOM and instructions remain canonical. USDZ files over 1 MiB try `usdcat` and `usdzip`, when installed, to encode shared geometry as binary USDC without flattening references. If tools are unavailable, the original file remains. A conservative size check reserves request-envelope space; files still too large use the guide download instead. An upload/send acknowledgment is not proof the recipient opened it.
+Guide and file commands ask for approval if the selected build is still a draft. With a guide URL available, approval sends the guide, model and parts CSV. Without one, it sends the model, PDF and parts CSV. Existing approval records keep their original bundle. `/retry` stays tied to that approved revision even after another selection. Catalog links don't confirm stock or prices.
 
-## Persistence and delivery limits
+A photo without text is held until a description arrives. Inputs accept JPEG, PNG or WebP up to 5 MiB; convert HEIC first. Photos guide the design, but don't establish an exact owned-parts count. Nonempty stock imported through `/open ID` constrains later builds; it is a snapshot, not ongoing browser sync.
 
-Conversation files under `data/photon-sessions/` use hashed names and private file permissions. They retain the current design, original unbuilt prompt, optional photo and inventory/catalog, job ID, pending request and mode choice, last delivered progress state, attempt delivery cursor, previewed and approved revision IDs, per-file final delivery acknowledgments, and up to 200 handled message IDs. Keep this directory and `data/designs/` on persistent disk and out of Git. Only one Photon process should own a project in this prototype.
+Status and Stop bypass slow exports. Progress updates are spaced at least 15 seconds apart, with check-ins after 30 seconds without another delivered update. Stop can cancel pending work and suppress later replies, but can't recall a message already handed to Photon.
 
-Inbound IDs are claimed before handling, so echoed/replayed messages do not silently trigger a second paid build. A crash before the job checkpoint can require a fresh user message. The job ID is saved before HTTP submission; an interrupted response is polled under that same ID and is never automatically resubmitted with a new ID. Definite API rejection or a user-confirmed missing request clears its stale binding, so the conversation can start another request.
+Quick mode is archived behind `QUICK_MODE_ENABLED=false` in `shared/generation-job.ts`. Restoring it brings back the website choice and iMessage mode question. Existing job qualities and old pending requests remain readable.
 
-Background outgoing cursors advance only after text/media sends are acknowledged. Failed sends remain pending and are retried after reconnect/restart. If text succeeds but its image fails, retry can repeat that text; exactly-once delivery is not claimed. A send acknowledgment is not proof the recipient opened or received it. On restart, only previously inbound conversations with pending jobs reconnect; there is no contact discovery or proactive outreach. API-server restart marks its jobs interrupted and requires an explicit new request; Photon does not silently restart paid generation.
+## Visual review and recovery
 
-## Building guide, native 3D and next device check
+`PHOTON_VISUAL_REVIEW_ENABLED=false` skips the separate concept study, post-build Gemini scoring and automatic visual refinement. References, subject requirements, part discovery, planning, brick checks and structural repairs still run. The first complete checked draft waits for feedback. It is labeled not visually reviewed, not visually passed.
 
-The primary experience is the signed mobile guide: rotate/zoom the model, gather step pieces, advance through checked placements, and resume saved device progress. Approval pins the previewed revision. Normal 3D viewing works without a camera; Safari Quick Look AR is optional. The canonical model keeps 8 mm stud pitch, 3.2 mm plate pitch and 9.6 mm full-brick height. `/model` sends the lighter viewing copy described above; the guide retains the full export and optional PDF.
+Set the field to `true` and restart the Photon listener to restore review for new jobs. Each job keeps the setting it started with. AI review still doesn't replace explicit user approval or physical build testing.
 
-Prior native attachment rotation was confirmed on the user's phone. The new mobile-copy artifact, guide gestures inside Spectrum, saved progress on the recipient device, and optional AR each require their own live check. A turntable is prerecorded motion, not user-controlled rotation. Voice memos remain later work. See [the source-grounded 3D preview plan](imessage-3d-preview.md).
+Private state lives in `data/photon-sessions/`, `data/generation-jobs/` and `data/designs/`. Keep it out of Git and on persistent disk. Conversations retain request context, photos, stock, job bindings, selected/approved revisions, file acknowledgements and the last 200 handled message IDs.
 
-Official API checks: installed `spectrum-ts` 12.10.1 still matches the [cloud iMessage provider](https://photon.codes/docs/spectrum-ts/providers/imessage), [message stream and outbound filtering](https://photon.codes/docs/spectrum-ts/messages), [attachment bytes API](https://photon.codes/docs/spectrum-ts/content/attachments), and [project credentials](https://photon.codes/docs/spectrum-ts/getting-started). No local Messages database access or public webhook is required. Runtime startup, live text delivery, photo input, revision, USDZ and PDF device checks are separate completion gates.
+Inbound IDs are recorded before handling. A crash before the job checkpoint may need a fresh user message. Outgoing delivery state advances after acknowledgement, so failed sends can retry; a text may repeat if its following image failed. Exactly-once delivery isn't guaranteed. Restarting Photon reconnects pending conversations without discovering contacts or starting new paid builds. Restarting the API marks unfinished jobs interrupted; continuing requires an explicit request.
 
-## Prize and submission facts
+## Phone check
 
-**Photon: Best iMessage Agent.** Projects must integrate Spectrum. First place is **$400 cash + $300 Photon credits + a fast track to the final interview round**; runner-up is **$200 cash + $100 credits**. These awards are per team. Photon judges vision, craft, depth, and traction, with emphasis on human collaboration, persistent context, and graceful fallbacks. A useful demo is: request a build, inspect the preview, ask for a change, and receive the revised manual.
+1. Send a simple build request and confirm the acknowledgement, progress and checked PNG preview. Ask a natural status question and verify it follows the same job.
+2. Request one visible change. Confirm the new preview preserves the subject. Before approval, `/model` should ask you to review and approve.
+3. Approve the revision. Check the guide, USDZ and CSV refer to that build. Open the guide from both the card and browser link; rotate, follow placements, then reload and check saved progress.
+4. Open and rotate the USDZ, then request `/manual`. Check its diagrams and part counts. Test a photo request and an owned-stock `/open ID` separately.
+5. During an export, send `/status` and `/stop`. Confirm responsiveness. Use `/retry` and verify that already acknowledged approved files aren't resent.
 
-**Frutiger Aero.** The track asks for the glossy optimistic aesthetic **and a real sustainability or nature-focused idea**. Reusing an existing brick collection is our practical connection. Show actual piece reuse and shortages; do not invent carbon or waste savings. First-place choices are an ocean mechanical keyboard or JBL Go 5 speaker; second-place choices are a jellyfish lamp, aqua mouse, or ocean projector.
+Earlier native model rotation and PDF opening were user-confirmed, including the Wilson attachment. The newer phone viewing copy, guide gestures inside Spectrum, recipient-device progress and AR need separate checks. HTTP success and a Photon send acknowledgement don't prove that the recipient opened a file. See [3D viewing and file details](imessage-3d-preview.md) and [recorded verification](VERIFICATION.md).
 
-**Track selection.** Choose General or Beginner before adding other tracks. Additional tracks are unlimited. Beginner requires more than half the team to have never participated in a hackathon. Gemini integration also fits the Best Use of Gemini API category, whose listed prize is MLH swag kits. Extra sponsor integrations should earn their place in the product.
+## HackNC research, recorded October 10, 2026
 
-**Deadline: Sunday, October 11, 2026 at 10:00 AM EDT.** The Devpost header provides EDT; some guide/body text mistakenly says EST. Each team submits one project with a GitHub link and a demo video no longer than two minutes. Both are mandatory. The rules reject cross-posted projects and projects developed before hacking officially began. Clearly credit libraries, models, and external data used in the new implementation.
+This is the event research record, not a current offer or submission-status check. The original sources are retained below.
 
-The demo fair is noon–1:30 PM on October 11. Each judge gets two minutes of demo and two minutes of questions. Keep at least one teammate at the assigned table. Closing is at 3 PM in Hamilton Hall 100.
+- Photon listed Best iMessage Agent, requiring Spectrum: first place $400 cash, $300 credits and a final-interview fast track; runner-up $200 cash and $100 credits, per team. The guidelines listed `HACKWITHPHOTON` for one month of Pro. Judging covered vision, craft, depth and traction.
+- Frutiger Aero required the visual theme plus a sustainability or nature idea. Reusing confirmed owned bricks is our connection; we haven't measured carbon or waste savings. Listed prizes were an ocean mechanical keyboard or JBL Go 5 for first, and a jellyfish lamp, aqua mouse or ocean projector for second.
+- Teams selected General or Beginner before additional tracks. Beginner required more than half the team to be first-time participants. The Gemini API category listed MLH swag kits.
+- Submission was listed for October 11 at 10:00 AM EDT. The Devpost header used EDT while some body text said EST. One entry per team required a GitHub link and a video of at most two minutes. Rules rejected cross-posted projects and work developed before hacking began; external libraries, models and data needed credit.
+- The fair was listed for noon–1:30 PM, with two minutes of demo and two minutes of questions per judge. Closing was listed for 3 PM in Hamilton Hall 100.
+- The HackNC guide and Photon guidelines listed the Photon prize; Devpost's prize list omitted it while showing the sponsor logo. That discrepancy needed confirmation in the submission UI or sponsor channel. This document is not evidence of a submission.
 
-At verification time, the official HackNC guide and Photon guidelines both listed the Photon prize, while the Devpost prize list omitted it despite displaying the Photon sponsor logo. Confirm the appropriate Photon category/entry route in the final submission UI or the event's sponsor channel. No submission has been made by this setup work.
-
-## Sources
-
-- [HackNC 2026 hacker guide](https://go.unc.edu/HackNC2026-guide)
-- [Official HackNC tracks, including Spectrum requirement and promo code](https://past-cushion-a6f.notion.site/HackNC-Tracks-756816442900834e900c016919f003e8)
-- [Official HackNC prizes](https://past-cushion-a6f.notion.site/Prizes-Merch-3e681644290082d9aacd8159f40a5f1e)
-- [Photon hackathon guidelines](https://somethingreat.notion.site/Hackathon-Guidelines-for-Photon-3dce443f36bb803696daf4135f063cd1)
-- [HackNC 2026 Devpost](https://hacknc-2026.devpost.com/)
-- [Submission instructions](https://past-cushion-a6f.notion.site/IMPORTANT-Submission-Instructions-648816442900823890388190be1f899e)
-- [Spectrum quickstart and credentials](https://photon.codes/docs/spectrum-ts/getting-started)
-- [Cloud iMessage provider](https://photon.codes/docs/spectrum-ts/providers/imessage)
-- [Incoming messages and outbound filtering](https://photon.codes/docs/spectrum-ts/messages)
-- [Sending attachments](https://photon.codes/docs/spectrum-ts/content/attachments)
-- [Webhook alternative and delivery semantics](https://photon.codes/docs/spectrum-ts/webhooks)
-
-## Live Quick check (October 10, 2026)
-
-The updated listener authenticated with API policy 2. An actual phone request selected Quick and finished in 67.3 seconds with a checked 180-piece rose. Photon acknowledged the preview and completion; the user confirmed `/model` opened and could be rotated. This verifies that tested device/conversation, not every Apple device or physical buildability.
+Event sources: [hacker guide](https://go.unc.edu/HackNC2026-guide), [tracks](https://past-cushion-a6f.notion.site/HackNC-Tracks-756816442900834e900c016919f003e8), [prizes](https://past-cushion-a6f.notion.site/Prizes-Merch-3e681644290082d9aacd8159f40a5f1e), [Photon guidelines](https://somethingreat.notion.site/Hackathon-Guidelines-for-Photon-3dce443f36bb803696daf4135f063cd1), [Devpost](https://hacknc-2026.devpost.com/), [submission instructions](https://past-cushion-a6f.notion.site/IMPORTANT-Submission-Instructions-648816442900823890388190be1f899e).

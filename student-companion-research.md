@@ -1,5 +1,7 @@
 # Student companion: a persistent partner across a student's work
 
+Archived HackNC direction, explored before Large LEGO Model was selected. This proposal is preserved for context. Start with the [current project README](README.md) for the implemented product.
+
 Research and product assessment, October 10, 2026. Canvas means the university learning platform. Proposed interface: iMessage first, with voice, camera sessions, and useful interactive pages. This is a product design and API assessment; UNC API access and the prototype have not been tested.
 
 ## The product thesis

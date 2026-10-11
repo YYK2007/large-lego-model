@@ -1,63 +1,75 @@
-# Large LEGO Model: accepted objective
+# What we're building
 
-Build a hackathon product that turns text, inspiration images, or the user's existing LEGO collection into a design the user can review, an exact list of pieces (including which owned set supplies them), and illustrated assembly instructions.
+Large LEGO Model turns a description, reference photo or confirmed collection of LEGO pieces into a design the user can revise and approve. The approved revision supplies the building guide, exact parts list and downloadable models.
 
-The initial surface is a website. The primary later surface is an AI agent in iMessage using **Photon Spectrum**, the framework required by the HackNC sponsor track. Use **Gemini** for multimodal interpretation and revisions. Evaluate **ElevenLabs** for incoming/outgoing voice memos after the main flow is working.
+This document records the accepted requirements. See [verification](VERIFICATION.md) for what we've tested and [stages](STAGES.md) for remaining work.
 
-## User experience
+## The conversation
 
-**Current instruction priority:** the primary instruction surface is a polished Photon iMessage mini-app, inspired by LEGO Builder. Its default is a normal interactive building app with a large rotatable/zoomable model, close placement views, exact part callouts, Back/Next, repeated steps and saved progress. **AR is optional**, reached through a separate “View in your room” action; ordinary building must work without camera permission or AR support. Keep a downloadable, compact, diagram-led LEGO-style PDF as a companion. Prefer close useful diagrams over distant full-model views or coordinate-heavy vertical pages. Keep the phone model small and responsive, with shared/merged geometry and lossless packaging before considering visual simplification. All quantities and assembly order still come from the checked canonical build. Measure generation latency, part economy, file size, and phone usability; preserve defining features instead of imposing a piece cap. The agent should speak naturally with a restrained playful brick-building personality within the Frutiger Aero brief.
+Request → checked preview → feedback → revised preview → approval → guide and files.
 
-**Current priority: resemblance to the real subject.** For named or recognizable real-world objects, retrieve existing reference photographs, verify the subject, feed actual image pixels into planning, and retain source/credit links. Compare the generated geometry with those references for silhouette, proportions, materials/colors, and distinctive features before calling it a successful match. Geometry validity alone is insufficient. Expand the usable scale and real-part catalog where they force crude approximations; preserve exact parts, connections, inventory, and matching exports. More pieces alone are not evidence of likeness. Evaluate a varied, held-out set of subjects across nature, architecture, natural wonders, manmade wonders and everyday objects. Never optimize the generator with subject-specific templates or count one familiar landmark as broad success. Complexity must follow the subject: preserve simple forms and allow extensive structure/detail where needed. Use distinct reference views rather than multiple edits of one photograph.
+Photon Spectrum is the main iMessage interface. Gemini interprets requests, studies references and plans revisions. The website supports model inspection, inventory and downloads.
 
-**Current delivery priority:** produce a usable, recognizable draft, then improve it through Gemini review and deliver it through Photon iMessage. After repeated construction failures, use simpler verified bricks and plates while preserving silhouette, proportions, dominant colors and defining features. Keep the best checked draft available while revisions continue. Do not erase a difficult feature from the review to manufacture a passing score, or label an invalid partial output buildable. Retain no application piece-count ceiling; preserve explicit user budgets and confirmed owned stock. When AI visual review is enabled, jobs stop when Gemini's complete visual review passes, after two unhelpful visual revisions, or after four attempts without measurable progress. Retain the best checked draft and disclose unresolved differences. All retries share one job deadline (5 minutes for new requests) and a safety limit of twelve construction attempts. The old Quick path is archived, including its original limits and tests. Stop remains available throughout. Prefer fewer pieces at equivalent likeness and construction quality, using modest bases, necessary internal support and larger suitable parts; do not sacrifice defining detail to meet an arbitrary count.
+Start a new request directly. Detail follows the subject and the user's instructions. Quick mode stays archived behind `QUICK_MODE_ENABLED=false`, with its code and tests preserved.
 
-**iMessage demo:** request → checked draft → user feedback → revisions → explicit approval → final bundle. Start directly, without a Quick/Detailed question. Detail follows the subject and the user’s instructions; prioritize a complete usable result. Quick mode is archived behind `QUICK_MODE_ENABLED=false` in `shared/generation-job.ts`, with its implementation and tests retained. `PHOTON_VISUAL_REVIEW_ENABLED=false` skips the separate concept study and post-build Gemini visual review for new iMessage jobs while retaining the reviewer for restoration, reference analysis and structural checks. Return the first complete checked draft for user feedback. Approval captures the exact previewed revision and sends its interactive build guide, phone-viewing USDZ and exact parts CSV, with PDF instructions available on demand. Without a configured public guide URL, retain the PDF bundle fallback. Approval never initiates another generation. Keep the previously approved revision and retry only unacknowledged final files. Re-enabling AI review never substitutes for user approval.
+Before approval, send the complete checked preview and ask what the user would change. Keep unfinished attempts private. Feedback starts from the selected saved placements and preserves the original request, photos and confirmed inventory. A failed edit keeps the earlier checked build; it must not silently replace the subject or start again from scratch.
 
-**iMessage pacing:** retain the request/photo and keep status questions, thanks and Stop from becoming build requests. Save the first checked draft promptly, using the same detailed construction capabilities for every new request. Reserve time for structural repairs and simpler-part recovery instead of allowing one planning call to consume the whole budget. Send truthful stage updates and check-ins. Simplification must preserve the subject’s defining features and colors; a partial compiler preview is not the full planned object.
+Approval freezes the exact previewed revision. It sends the interactive guide, phone-viewing USDZ and parts CSV. PDF instructions are available on request, or in the final bundle when a public guide isn't configured. Approval never starts another generation. Retain earlier approved revisions and retry only files that weren't acknowledged.
 
-**Natural conversation:** accept ordinary questions, brainstorming, explanations, feedback and requests for files without requiring slash commands. Use a short bounded conversational history for continuity, route clear actions through the existing handlers, and clarify ambiguity before generation. Preserve the original build request, photos, stock and selected revision. Provider failure leaves the build unchanged; Stop supersedes late interpretation. Conversation cannot approve the final build for the user.
+Accept ordinary questions, brainstorming, feedback and file requests. Clarify ambiguous messages before starting work. Status questions, thanks and Stop must not become build requests. Use short progress updates describing actual stages, without invented percentages, JSON or checker coordinates. Keep full diagnostics in local job records.
 
-**iMessage language:** explain progress, failed attempts and next steps in short, ordinary sentences. Never paste internal JSON, checker coordinates, stack traces or provider payloads into replies. Retain full diagnostics in the saved job for debugging. Distinguish an unfinished preview, a draft that passed brick checks, a visual match and a stopped run.
+Stop cancels generation and pending delivery. A message already handed to the transport may still arrive. Provider failures must leave saved builds intact.
 
-**Reference depth:** explicitly seek front, side and top/above photographs of the subject for every request, then additional views where useful. These are source references for accurate shape, depth and proportions. Pass the actual image pixels into planning and comparison. Prioritize distinct whole-object views over repeated front photos or close-ups. Duplicate images and failed downloads do not count as additional views; disclose missing angles and treat caption-based view labels as unverified until checked against the pixels. Look for optional existing 3D reference models when practical; their absence must not block generation. Clearly distinguish loaded model geometry, rendered reference views, and links whose files were not inspected. Reference geometry guides resemblance and never replaces the validated LEGO model.
+## Resemblance and references
 
-Models must support meaningful complexity and genuine three-dimensional structure, including depth, details on several faces, and ultimately internal structure and subassemblies. Flat pixel-art reliefs are not a sufficient demonstration. Use them only when a user explicitly requests a flat design. Validate representative models from several viewing angles and with actual assembly checks. Avoid inflated claims, generic marketing copy, and unnecessary implementation work.
+A model should look like the requested subject. Check its identity, silhouette, proportions, colors and defining features. A connected model or a large piece count does not establish a good likeness.
 
-**Required part variety:** designs must go beyond rectangular bricks. Expand to real plates, tiles, slopes, curved pieces, wedges, hinges, wheels, brackets, and connectors in verified increments. Part geometry and legal connections must drive generation, owned inventory, the 3D viewer, native exports, BOMs, and assembly instructions consistently. A seven-brick rectangular-only catalog is an initial prototype, not completion of this objective. Release each family only after its dimensions, connections, collisions, quantities, and instruction sequence are checked.
+For recognizable subjects, seek distinct front, side and top or overhead photographs. Verify the subject, pass actual image pixels into planning and retain source links and credits. Disclose missing angles. Duplicate crops, failed downloads and uninspected captions don't count as independent views.
 
-The current implementation contains 36 real part types and 13 colors, restricted to verified part/color combinations. Its 96×96-stud, 384-plate-height workspace supports larger models without introducing a piece-count ceiling. Tiles, upright slopes, round 1×1 parts and a small cone extend the brick/plate palette; they do not fulfill the entire catalog objective. Checkpoint 06 adds curved profiles, open curved shell sectors, plate-course packing and local seam repair. A fresh 5,910-piece Taj Mahal and two rose drafts reached visual review, which marked them as needing refinement. Other complex attempts still fail or time out. Reliable reference-backed likeness, particularly organic forms and hanging appendages, is not yet established.
+Use existing 3D references when suitable files are available. Their absence must not block a build. Distinguish inspected geometry and rendered views from links to files we haven't loaded. Reference geometry guides the design; exported LEGO models must still use the checked parts.
 
-1. User describes an object or shares an image. They may instead identify existing sets/loose bricks and ask for a new design using them.
-2. The system interprets the idea and builds a structured brick model. The user reviews the actual design and can request changes in a loop.
-3. Make the current build downloadable directly from the page as USDZ, using the exact displayed revision. This prepares the move to iMessage. In iMessage, the feedback preview must convey 3D shape. Prefer native user-controlled model viewing if supported; otherwise a rotating animation, with a clear distinction between interactive rotation and prerecorded motion. Evaluate what useful previews, model files, links, and follow-up actions the agent should send. Browser file verification does not establish iPhone or iMessage behavior.
-4. Freeze the accepted revision, allocate real parts/colors/quantities to the user's source sets where available, and disclose any missing pieces.
-5. Generate a LEGO-style illustrated manual with a Frutiger Aero treatment. Show exact repeated placement patterns once with a clear repeat count and each final location instead of repeating whole pages. Preserve assembly order and distinguish stacked layers from independent copies. All models, diagrams, instructions, and piece counts must remain consistent.
-6. Give the user direct part and set references: which confirmed owned set or loose-brick lot supplies each required part/color/quantity, remaining shortages, and catalog links for finding those missing pieces. Carry this through iMessage responses and linked/downloadable instructions; do not confuse catalog references with checked stock, prices, or completed purchases.
+Preserve defining features through simplification and repair. A red mass isn't enough to establish a rose: the requested form needs recognizable petal structure. Evaluate varied subjects across nature, architecture, natural and manmade wonders, and everyday objects. Don't add subject-specific templates or treat one successful landmark as broad reliability.
 
-The finished objective includes any LEGO piece sold individually, including specialty/non-brick shapes and their actual produced colors. Replace the fixed catalog ceiling with catalog-backed discovery, geometry and legal connection data. A catalog record does not prove current marketplace availability; check purchasability separately. Do not claim unsupported connector families are already usable.
+## Generation and recovery
 
-## Engineering process
+Produce a usable draft before chasing extra detail. Save the first checked result promptly and retain the best one while refinement continues. After repeated construction failures, try simpler supported parts while preserving the subject's proportions, colors and defining features.
 
-**Design direction:** calm, playful Frutiger Aero / Y2K with sky, greenery, selective gloss, and dimensional model lighting. Windows XP remains an influence, but the literal desktop-window treatment was rejected. Keep a coherent identity across the website, iMessage previews, and manual, with readable diagrams and faithful brick colors.
+New requests share a five-minute generation deadline across retries, with at most twelve construction attempts. Leave time for checking, repairs and saving. These are execution limits, not promises that every request will finish.
 
-**Explicit LEGO Builder research requirement:** inspect actual app screens and official walkthroughs before finalizing step-by-step UX. Record how it handles added pieces, orientation, part counts, camera movement, subassemblies, and progress. Distinguish operating the app from observing its official demo. Continue researching beyond the first functional prototype.
+For the iMessage demo, `PHOTON_VISUAL_REVIEW_ENABLED=false` skips the separate concept study and post-build Gemini visual critic. Reference analysis, construction checks and structural repairs remain active. Return the first complete checked draft and wait for the user. Label it `not-reviewed`.
 
-- Research alternatives before adopting the supplied LegoGPT fork or proposed workflow.
-- Use delegated research/implementation where helpful; maintain shared contracts and independently review the result.
-- Work in a Git repository with a clean baseline and reviewable feature branch. Keep stage checklists, verification evidence, and commits that teammates can inspect.
-- Publish the collaboration repository to GitHub and invite teammates when their usernames are supplied.
-- Be precise about implemented, locally verified, configured, live-tested, physically tested, and future behavior.
-- Whenever account setup, credentials, inventory details, or device checks require the user, provide numbered steps, direct links, exact fields, and an observable completion check. Avoid vague requests for API codes; keep secret values in local configuration.
+Keep the reviewer implementation and tests so the setting can restore it for new jobs. With review enabled, retain the best checked result and stop when the complete review passes, visual revisions stop helping, construction stops progressing or the shared limits are reached. Gemini's review never replaces user approval.
 
-## Later stages retained
+## Real parts and three-dimensional builds
 
-Native/interactive iMessage model viewing, augmented reality, a richer step-by-step 3D assembly experience, cooperative multi-person building, and ElevenLabs voice notes. Native viewing is being investigated during the Photon work; actual device testing remains required.
+Build meaningful depth and details on several faces. Use flat reliefs only when requested. Openings, interiors, repeated features and subassemblies should follow the subject rather than serve as decoration.
 
-## Names
+Don't impose a global piece-count ceiling or a default small-piece budget. Preserve explicit user budgets and confirmed owned quantities. Prefer fewer pieces when they preserve the same shape and construction quality.
 
-**Large LEGO Model** is the user-chosen project, product, and architecture name. Use this exact capitalization in the app, exported instructions, and documentation.
+The bundled seed currently has 80 usable part types and 176 mapped opaque colors, with per-part produced-color constraints. The finished objective is broader: any individually purchasable LEGO part, including specialty shapes and actual produced colors. Discovery alone doesn't establish usable connections or current marketplace stock.
 
-- Establish visual acceptance features from the original request and reference pixels before construction. Preserve them through every repair and simplification. Judge identity, silhouette, proportions and defining surface structure on actual model renders: a similarly colored mass cannot substitute for visible folds, overlapping layers or openings. Uncertain identity remains an explicitly labeled draft.
+Release each part family only after checking geometry, allowed orientations, mating connections, collisions, quantities and assembly order. Prefer verified curved, shaped and botanical pieces when they fit the request. Standard bricks and plates remain a recovery option.
 
-- Specialized pieces are available in every mode. Prefer verified curved, shaped or botanical pieces when they improve the requested form; Quick reuses trusted resolved pieces without a new discovery pass, while Detailed can also resolve additional candidates. Standard bricks and plates remain a construction-recovery option after failures, not a mandatory first-plan palette. Preserve actual produced colors, exact geometry and usable connector limits.
+All previews, native files, parts lists, allocations and instructions must derive from the same checked placements. Preserve the direct website USDZ download and capture the selected revision before exporting. Phone-viewing optimizations must retain the canonical model and its exact part accounting.
+
+Show the exact part, color and quantity required, which confirmed set or loose-brick lot supplies it, and any shortage. Provide useful part and set links. Don't imply ownership, current stock, a checked price or a purchase without evidence.
+
+## Building instructions
+
+The main instruction surface is a normal 3D mini-app inspired by LEGO Builder. Show the whole model, rotation and zoom, close placement views, part callouts, replay, Back/Next, step selection and saved progress. AR is an optional “View in your room” action. Ordinary building must work without camera permission.
+
+Keep a compact PDF companion with close diagrams, pictured quantities and clear orientation. Explain repeated placements once with counts and final locations. Distinguish stacked layer cycles from separate copies, and preserve the checked assembly order.
+
+Study actual LEGO Builder screens and official demonstrations before changing assembly UX. Record sources and observations about camera behavior, added pieces, subassemblies and progress. Distinguish observing a demonstration from operating the app.
+
+## Appearance and writing
+
+Use the name Large LEGO Model throughout the product and technical documentation. Keep a calm, playful Frutiger Aero / Y2K identity: sky colors, greenery, selective gloss and dimensional model lighting. Windows XP is an influence; the literal desktop-window treatment was rejected. Preserve actual part colors and readable diagrams.
+
+Write short, concrete explanations. Report what was made and tested without generic marketing claims. Keep geometric checks, visual review, phone tests and physical hand-building distinct.
+
+## Working on the project
+
+Work from `main` with focused commits and reviewable changes. Keep setup instructions and verification records current. Use research and delegated work where useful, then review the result. When the user needs to act, give numbered steps, direct links, exact fields and a completion check. Keep credentials and private runtime data out of Git and reports.
+
+Cooperative building, ElevenLabs voice notes, broader connector families and physical load simulation remain future work. Reliable likeness across varied subjects remains an open requirement, even when a build passes structural checks.

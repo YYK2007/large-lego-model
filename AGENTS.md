@@ -4,9 +4,23 @@ Read `docs/OBJECTIVE.md`, `docs/STAGES.md`, and `docs/VERIFICATION.md` before ch
 
 ## Product requirements
 
-**Delivery priority:** give the user a working, recognizable draft before optimizing detail. After repeated construction failures, simplify to supported parts and preserve the best checked result. The iMessage demo follows request → checked draft → user feedback → revisions → explicit approval → final files. Start directly and infer detail from the request. Quick mode is archived behind `QUICK_MODE_ENABLED=false`; preserve its implementation and tests. `PHOTON_VISUAL_REVIEW_ENABLED=false` temporarily skips the separate concept study and post-build Gemini visual review; reference analysis and brick checks remain. Preserve the reviewer behind the switch. User approval always selects the exact previewed revision, even when AI review is enabled. Report remaining differences honestly and keep Stop responsive.
+### Delivery
 
-**Current priority: resemblance to the real subject.** For named or recognizable real-world objects, retrieve existing reference photographs, verify the subject, feed actual image pixels into planning, and retain source/credit links. Compare the generated geometry with those references for silhouette, proportions, materials/colors, and distinctive features before calling it a successful match. Geometry validity alone is insufficient. Expand the usable scale and real-part catalog where they force crude approximations; preserve exact parts, connections, inventory, and matching exports. More pieces alone are not evidence of likeness. Evaluate a varied, held-out set of subjects across nature, architecture, natural wonders, manmade wonders and everyday objects. Never optimize the generator with subject-specific templates or count one familiar landmark as broad success. Complexity must follow the subject: preserve simple forms and allow extensive structure/detail where needed. Use distinct reference views rather than multiple edits of one photograph.
+Give the user a working, recognizable draft before optimizing detail. After repeated construction failures, simplify to supported parts and preserve the best checked result. The iMessage demo follows request → checked draft → user feedback → revisions → explicit approval → final files.
+
+Start directly and infer detail from the request. Quick mode is archived behind `QUICK_MODE_ENABLED=false`; preserve its implementation and tests. `PHOTON_VISUAL_REVIEW_ENABLED=false` temporarily skips the separate concept study and post-build Gemini visual review; reference analysis and brick checks remain.
+
+Preserve the reviewer behind the switch. User approval always selects the exact previewed revision, even when AI review is enabled. Report remaining differences honestly and keep Stop responsive.
+
+### Resemblance
+
+For named or recognizable real-world objects, retrieve existing reference photographs, verify the subject, feed actual image pixels into planning, and retain source/credit links. Compare the generated geometry with those references for silhouette, proportions, materials/colors, and distinctive features before calling it a successful match. Geometry validity alone is insufficient.
+
+Expand the usable scale and real-part catalog where they force crude approximations; preserve exact parts, connections, inventory, and matching exports. More pieces alone are not evidence of likeness.
+
+Evaluate a varied, held-out set of subjects across nature, architecture, natural wonders, manmade wonders and everyday objects. Never optimize the generator with subject-specific templates or count one familiar landmark as broad success. Complexity must follow the subject: preserve simple forms and allow extensive structure/detail where needed. Use distinct reference views rather than multiple edits of one photograph.
+
+### Shared requirements
 
 - Call the project, product, and architecture **Large LEGO Model**.
 - **Use a calm, playful building-assistant identity within the Frutiger Aero / Y2K brief.** Windows XP is an influence, but the literal desktop-window theme was rejected. Use light sky colors, greenery, selective glossy controls, clear spacing, and dimensional model lighting across the website, iMessage media, and manual. Keep actual part colors faithful and diagrams readable.
@@ -28,6 +42,8 @@ The finished objective includes any LEGO piece sold individually, including spec
 
 ## Validation
 
-Checkpoint 05 is in progress, not complete. The working catalog includes rectangular bricks/plates, tiles, two upright slopes, round 1×1 parts and a small cone within a 96×96-stud, 384-plate-height workspace. Ordinary upright stud connections are supported; hinge, bar/hole, sideways and physical load behavior remain unimplemented. Checkpoint 06 adds curved profiles/open shell sectors, plate-course tiling and bounded local repair. A fresh 5,910-piece Taj Mahal reached review, but the critic marked likeness as needing refinement. Organic attempts remain unreliable. Checkpoint 07 permits grounded upright hanging pieces only through exact mates and a checked entry/seating sequence, including one bounded local-order retry. The viewer, PDF and LDraw use that sequence. Arbitrary rotations, subassembly search and mechanical strength remain unimplemented. Checkpoint 08 adds asymmetric polygon contours, explicit per-feature likeness reviews and retention of the earlier better-reviewed draft; these are general mechanisms, not subject templates. Broad live generation still fails or produces inaccurate drafts; see the checkpoint evidence rather than treating a connected model as a successful likeness.
+The bundled catalog has 80 usable part types and 176 mapped opaque colors within a 96×96-stud, 384-plate-height workspace. Ordinary upright stud connections, four yaw orientations and bounded insertion schedules are supported. Hinges, bar/clip connections, arbitrary rotations, general subassembly search and mechanical strength remain unimplemented.
+
+Use `docs/VERIFICATION.md` for current evidence and its linked archive for historical results. Broad live generation can still fail or produce inaccurate drafts. Keep geometric validity, resemblance, phone delivery and physical assembly as separate acceptance checks.
 
 Run relevant tests and `npm run build` after meaningful changes. Inspect the running desktop/mobile UI and generated manual pages; code passing a test does not establish visual quality. Keep `docs/VERIFICATION.md` current and preserve remaining live-test requirements.
