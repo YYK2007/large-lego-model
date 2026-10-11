@@ -135,7 +135,7 @@ export type DesignResearch = {
     limitations: string[];
   };
   comparison: {
-    status: 'matched' | 'needs-work';
+    status: 'matched' | 'needs-work' | 'not-reviewed';
     summary: string;
     issues: string[];
     features?: FeatureReview[];
@@ -166,8 +166,9 @@ export function isDesignResearch(value: unknown): value is DesignResearch {
       && text(source.fetchedAt, 64) && Number.isFinite(Date.parse(source.fetchedAt)))
     && Boolean(observation) && text(observation.silhouette) && text(observation.proportions)
     && texts(observation.features) && texts(observation.colors) && texts(observation.limitations)
-    && Boolean(comparison) && ['matched', 'needs-work'].includes(comparison.status)
+    && Boolean(comparison) && ['matched', 'needs-work', 'not-reviewed'].includes(comparison.status)
     && text(comparison.summary) && texts(comparison.issues) && texts(research.warnings)
+    && (comparison.status !== 'not-reviewed' || comparison.features === undefined && comparison.identity === undefined)
     && (comparison.features === undefined || isFeatureReviews(comparison.features, observation.features.length)
       && (comparison.status !== 'matched' || comparison.issues.length === 0 && comparison.features.every(feature => feature.status === 'present')))
     && (comparison.identity === undefined || isIdentityReview(comparison.identity)

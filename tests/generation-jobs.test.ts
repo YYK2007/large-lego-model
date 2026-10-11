@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, stat, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, stat, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GenerationJobs } from '../server/generation-jobs.js';
@@ -10,7 +10,7 @@ import { renderConceptSvg } from '../server/concept.js';
 import type { SavedDesign } from '../server/store.js';
 import type { GenerationJob } from '../shared/generation-job.js';
 
-async function harness(options: { maxWorkers?: number; maxQueued?: number; workerTimeoutMs?: number; beforeSave?: (design: SavedDesign) => Promise<void> } = {}) {
+async function harness(options: { maxWorkers?: number; maxQueued?: number; workerTimeoutMs?: number; workerUrl?: URL; beforeSave?: (design: SavedDesign) => Promise<void> } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'generation-jobs-'));
   const designs = new Map<string, SavedDesign>();
   const settings = { directory, workerUrl: new URL('./fixtures/generation-job-worker.mjs', import.meta.url), ...options,
@@ -195,6 +195,35 @@ test('Stop retains an already received attempt while its save is in flight, with
   } finally { release(); await h.close(); }
 });
 
+test('Stop retains the first received checked draft while its disk save is in flight', async () => {
+  let release!: () => void, entered!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const saving = new Promise<void>(resolve => { entered = resolve; });
+  const h = await harness({ beforeSave: async () => { entered(); await held; } });
+  try {
+    const id = randomUUID();
+    await h.jobs.submit(id, { prompt: 'wait', quality: 'detailed' }, undefined, { visualReview: false });
+    await saving;
+    const stop = h.jobs.cancel(id);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    release();
+    const stopped = await stop;
+    assert.equal(stopped.status, 'cancelled');
+    assert.equal(stopped.resultId, undefined);
+    assert.equal(stopped.attempts?.length, 0, 'The first draft is saved before attempt output');
+    assert.ok(stopped.bestDraftId);
+    assert.equal(h.designs.size, 1);
+    assert.ok(h.designs.has(stopped.bestDraftId!));
+    await new Promise(resolve => setTimeout(resolve, 60));
+    assert.equal((await h.jobs.get(id)).status, 'cancelled');
+    assert.equal((await h.jobs.get(id)).resultId, undefined, 'A late complete callback cannot revive the cancelled job');
+    assert.equal(JSON.parse(await readFile(join(h.directory, `${id}.json`), 'utf8')).job.bestDraftId, stopped.bestDraftId);
+    await h.restart();
+    assert.equal((await h.jobs.get(id)).bestDraftId, stopped.bestDraftId);
+    assert.equal((await h.jobs.get(id)).status, 'cancelled');
+  } finally { release(); await h.close(); }
+});
+
 test('bounded legacy execution reaches the worker and cannot be changed by reusing its request ID', async () => {
   const h = await harness();
   try {
@@ -274,6 +303,33 @@ test('Quick messaging deadline without a checked draft stops and offers a concre
   } finally { await h.close(); }
 });
 
+test('review-disabled Detailed deadline delivers the exact saved draft instead of a timeout failure', async () => {
+  const h = await harness({ workerTimeoutMs: 1200 });
+  try {
+    const id = randomUUID();
+    await h.jobs.submit(id, { prompt: 'quick-retries', quality: 'detailed' }, undefined, { continuous: true, stopWhenMatched: true, visualReview: false });
+    const early = await until(h.jobs, id, job => Boolean(job.bestDraftId));
+    const final = await until(h.jobs, id, job => job.status === 'succeeded');
+    assert.equal(final.resultId, early.bestDraftId);
+    assert.equal(final.error, undefined);
+    assert.equal(h.designs.size, 1);
+    assert.equal(h.jobs.activeCount, 0);
+  } finally { await h.close(); }
+});
+
+test('review-disabled deadline without a checked draft never reports success', async () => {
+  const h = await harness({ workerTimeoutMs: 1200 });
+  try {
+    const id = randomUUID();
+    await h.jobs.submit(id, { prompt: 'quick-no-draft', quality: 'detailed' }, undefined, { visualReview: false });
+    const final = await until(h.jobs, id, job => job.status === 'failed');
+    assert.equal(final.resultId, undefined);
+    assert.equal(h.designs.size, 0);
+    assert.match(final.error!.message, /simpler interpretation/);
+    assert.doesNotMatch(final.error!.message, /Quick|Detailed/);
+  } finally { await h.close(); }
+});
+
 test('Quick time budget starts when its worker runs, excluding queue wait', async () => {
   const h = await harness({ maxWorkers: 1, workerTimeoutMs: 1200 });
   try {
@@ -310,4 +366,75 @@ test('all workers have a total deadline, including legacy continuous jobs', asyn
       await h.jobs.cancel(id);
     } finally { await h.close(); }
   });
+});
+
+// Echo the actual workerData before executing the existing lifecycle fixture.
+const reviewWorker = new URL('data:text/javascript,' + encodeURIComponent(`
+  import { parentPort, workerData } from 'node:worker_threads';
+  parentPort.postMessage({ type: 'progress', progress: { stage: 'planning', attempt: 1, maxAttempts: 1, detail: 'Visual review: ' + workerData.visualReview } });
+  await import(${JSON.stringify(new URL('./fixtures/generation-job-worker.mjs', import.meta.url).href)});
+`));
+
+test('visual review defaults true and false is snapshotted through worker execution, persistence and idempotency', async t => {
+  for (const setting of [undefined, true, false]) await t.test(String(setting), async () => {
+    const h = await harness({ workerUrl: reviewWorker });
+    try {
+      const id = randomUUID(), input = { prompt: 'complete' }, expected = setting ?? true;
+      const execution = { visualReview: setting };
+      await h.jobs.submit(id, input, undefined, execution);
+      execution.visualReview = !expected;
+      const job = await until(h.jobs, id, value => value.status === 'succeeded');
+      assert.equal(job.visualReview, expected);
+      assert.ok(job.milestones.some(event => event.detail === `Visual review: ${expected}`));
+      assert.equal(JSON.parse(await readFile(join(h.directory, `${id}.json`), 'utf8')).job.visualReview, expected);
+      await h.restart();
+      assert.equal((await h.jobs.get(id)).visualReview, expected);
+      assert.equal((await h.jobs.submit(id, input, undefined, { visualReview: setting })).resultId, job.resultId);
+      assert.equal((await h.jobs.submit(id, input, undefined, { visualReview: expected })).resultId, job.resultId);
+      await assert.rejects(h.jobs.submit(id, input, undefined, { visualReview: !expected }), /different build/);
+      if (!expected) await assert.rejects(h.jobs.submit(id, input), /different build/);
+      assert.equal(h.jobs.activeCount, 0);
+    } finally { await h.close(); }
+  });
+});
+
+test('resume preserves the saved visual-review policy and legacy jobs restore true', async t => {
+  for (const setting of [undefined, true, false]) await t.test(String(setting), async () => {
+    const h = await harness({ workerUrl: reviewWorker });
+    try {
+      const id = randomUUID(), expected = setting ?? true;
+      await h.jobs.submit(id, { prompt: 'wait' }, undefined, { visualReview: setting });
+      const before = await until(h.jobs, id, value => Boolean(value.bestDraftId));
+      await h.jobs.close();
+      if (setting === undefined) {
+        const path = join(h.directory, `${id}.json`);
+        const record = JSON.parse(await readFile(path, 'utf8'));
+        delete record.job.visualReview;
+        await writeFile(path, JSON.stringify(record));
+      }
+      await h.restart();
+      assert.equal((await h.jobs.get(id)).visualReview, expected);
+      const resumedId = randomUUID();
+      await h.jobs.resume(id, resumedId);
+      const resumed = await until(h.jobs, resumedId, value => value.status === 'succeeded');
+      assert.equal(resumed.visualReview, expected);
+      assert.equal(resumed.resumeMode, 'draft');
+      assert.ok(resumed.milestones.some(event => event.detail === `Visual review: ${expected}`));
+      assert.ok(resumed.milestones.some(event => event.detail === `Resumed ${before.bestDraftId}`));
+      assert.equal((await h.jobs.resume(id, resumedId)).resultId, resumed.resultId);
+    } finally { await h.close(); }
+  });
+});
+
+test('non-boolean visualReview settings are rejected before job persistence or worker launch', async () => {
+  const h = await harness();
+  try {
+    for (const visualReview of ['false', 0, 1, null, {}, []]) {
+      const id = randomUUID();
+      await assert.rejects(h.jobs.submit(id, { prompt: 'complete' }, undefined, { visualReview: visualReview as boolean }),
+        (error: unknown) => error instanceof Error && 'status' in error && error.status === 400 && /visualReview must be a boolean/.test(error.message));
+      await assert.rejects(h.jobs.get(id), /not found/);
+    }
+    assert.equal(h.jobs.activeCount, 0); assert.equal(h.designs.size, 0);
+  } finally { await h.close(); }
 });

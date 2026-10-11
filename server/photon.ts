@@ -11,6 +11,7 @@ import { photonJobsApi } from './photon-api.js';
 import { PhotonConversation, type PhotonReply } from './photon-conversation.js';
 import { PhotonInputError, parseConversation, sessionKey, type Conversation } from './photon-routing.js';
 import { compactUsdz } from './usdz-package.js';
+import { QUICK_MODE_ENABLED } from '../shared/generation-job.js';
 
 const sessionsDirectory = resolve('data/photon-sessions');
 async function loadConversation(key: string): Promise<Conversation> {
@@ -29,11 +30,13 @@ export const PHOTON_FILE_LIMIT = 100 * 1024 * 1024 - 64 * 1024;
 export function photonReplies(space: Pick<Space, 'send'>): PhotonReply {
   const sendFile = async (bytes: Buffer, name: string, mimeType: string) => {
     const model = mimeType === 'model/vnd.usdz+zip';
-    if (model && bytes.length > 8 * 1024 * 1024) {
+    // Shared geometry already keeps detailed models small. Flattening these
+    // archives repeats every piece; only try it when delivery requires it.
+    if (model && bytes.length > PHOTON_FILE_LIMIT) {
       try { bytes = await compactUsdz(bytes); }
       catch { console.error('Photon file preparation failed; keeping the original USDZ.'); }
     }
-    const retry = mimeType === 'application/pdf' ? '/manual' : model ? '/model' : '/status';
+    const retry = mimeType === 'application/pdf' ? '/manual' : model ? '/model' : mimeType === 'text/csv' ? '/parts' : '/status';
     const tooLarge = `This ${model ? '3D model' : 'file'} is too large to send through iMessage (${(bytes.length / 1024 / 1024).toFixed(1)} MB). Your checked build is saved. Open its build page to download it${model ? ' using Download 3D (.usdz)' : ''}.`;
     if (bytes.length > PHOTON_FILE_LIMIT) throw new PhotonInputError(tooLarge);
     try { await space.send(attachment(bytes, { name, mimeType })); }
@@ -61,6 +64,7 @@ export function photonReplies(space: Pick<Space, 'send'>): PhotonReply {
       await sendFile(bytes, 'checked-build.png', 'image/png');
     },
     manual: async bytes => { await sendFile(bytes, 'large-lego-model-instructions.pdf', 'application/pdf'); },
+    parts: async bytes => { await sendFile(bytes, 'large-lego-model-parts.csv', 'text/csv'); },
     model: async bytes => {
       await sendFile(bytes, 'large-lego-model.usdz', 'model/vnd.usdz+zip');
       try { await space.send('Tap the 3D file to open and rotate your build.'); }
@@ -78,12 +82,14 @@ export async function startPhoton(): Promise<void> {
     if (url.protocol !== 'https:' || url.username || url.password) throw new Error('PUBLIC_BASE_URL must use HTTPS without embedded credentials.');
   }
   const apiBaseUrl = process.env.PHOTON_API_BASE_URL?.trim() || 'http://127.0.0.1:3001';
-  const api = photonJobsApi(apiBaseUrl);
+  const visualReview = process.env.PHOTON_VISUAL_REVIEW_ENABLED?.trim().toLowerCase() || 'false';
+  if (!['true', 'false'].includes(visualReview)) throw new Error('PHOTON_VISUAL_REVIEW_ENABLED must be true or false.');
+  const api = photonJobsApi(apiBaseUrl, fetch, visualReview === 'true');
   // Check the same generation service we will use before subscribing to messages.
   const health = await fetch(new URL('/api/status', apiBaseUrl), { signal: AbortSignal.timeout(10_000) });
   const status = await health.json();
   if (!health.ok || !status.gemini) throw new Error('The build API is unavailable or Gemini is not configured. Start npm run dev first.');
-  if (status.photonJobPolicy !== 2) throw new Error('The build API needs the current Photon job policy. Restart it after active work is stopped; no Photon connection was started.');
+  if (status.photonJobPolicy !== 3) throw new Error('The build API needs the current Photon job policy. Restart it after active work is stopped; no Photon connection was started.');
   const app = await Spectrum({ projectId: process.env.SPECTRUM_PROJECT_ID!, projectSecret: process.env.SPECTRUM_PROJECT_SECRET!, providers: [imessage.config()], options: { logLevel: 'error' } });
   const conversations = new Map<string, PhotonConversation>();
   const loading = new Map<string, Promise<PhotonConversation>>();
@@ -93,7 +99,7 @@ export async function startPhoton(): Promise<void> {
     if (loading.has(key)) return loading.get(key)!;
     const pending = (async () => {
       const saved = await loadConversation(key); saved.spaceId = space.id;
-      const conversation = new PhotonConversation(saved, api, photonReplies(space), value => saveConversation(key, value), publicBaseUrl);
+      const conversation = new PhotonConversation(saved, api, photonReplies(space), value => saveConversation(key, value), publicBaseUrl, undefined, QUICK_MODE_ENABLED);
       conversations.set(key, conversation); return conversation;
     })();
     loading.set(key, pending);

@@ -9,7 +9,7 @@ import { prepareUsdzDownload } from './usdz-download';
 import { BrickScene } from './BrickScene';
 import { AssemblyView } from './AssemblyView';
 import { BuildRequestError, summarizeBuildChecks } from './generation-stream';
-import { isActiveJob, type GenerationJob, type JobProgress, type JobAttempt } from '../shared/generation-job';
+import { QUICK_MODE_ENABLED, isActiveJob, type GenerationJob, type JobProgress, type JobAttempt } from '../shared/generation-job';
 import { cancelJob, readJob, resumeJob, submitJob, stopAndReadAttempt, validJobId, JOB_STORAGE_KEY, JobRequestError } from './generation-jobs';
 import { GenerationJobPanel } from './GenerationJobPanel';
 import { readCollection, saveCollection } from './inventory-state';
@@ -243,7 +243,7 @@ export function App() {
     const id = crypto.randomUUID();
     submittedPhoto.current = inspiration; setJob(null); trackJob(id);
     try {
-      const accepted = await submitJob(id, { prompt, image: inspiration, previous: refining ? design : undefined, inventory, inventoryCatalog: inventory.length ? ownedCatalog : undefined, inventoryMode, quality });
+      const accepted = await submitJob(id, { prompt, image: inspiration, previous: refining ? design : undefined, inventory, inventoryCatalog: inventory.length ? ownedCatalog : undefined, inventoryMode, quality: QUICK_MODE_ENABLED ? quality : 'detailed' });
       if (requestedJob.current === id) setJob(accepted);
     } catch (error) {
       if (error instanceof JobRequestError) { trackJob(null); setBusy(false); setError(error); }
@@ -321,7 +321,7 @@ export function App() {
             <div className="prompt-divider" />
             <span className="field-label">YOUR BUILDING BLOCKS</span>
             <div className="segmented"><button aria-pressed={inventoryMode === 'unlimited'} className={inventoryMode === 'unlimited' ? 'selected' : ''} onClick={() => setInventoryMode('unlimited')}><Cuboid size={14} /> Any bricks</button><button aria-pressed={inventoryMode === 'owned'} className={inventoryMode === 'owned' ? 'selected' : ''} onClick={() => { setInventoryMode('owned'); if (!inventory.length) setModal('inventory'); }}><Box size={14} /> Only my bricks</button></div>
-            <label className="generation-quality">Build detail<select aria-label="Build detail" value={quality} disabled={busy} onChange={event => setQuality(event.target.value as typeof quality)}><option value="detailed">Detailed · up to 5 min</option><option value="quick">Quick · about 2.5 min</option></select></label>
+            {QUICK_MODE_ENABLED && <label className="generation-quality">Build detail<select aria-label="Build detail" value={quality} disabled={busy} onChange={event => setQuality(event.target.value as typeof quality)}><option value="detailed">Detailed · up to 5 min</option><option value="quick">Quick · about 2.5 min</option></select></label>}
             <p className="prompt-footnote">Both modes can use curved and specialty pieces.</p>
             <button className="primary-button generate-button" onClick={generate} disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} /> : <WandSparkles size={17} />}{busy ? generationProgress?.stage === 'researching' ? 'Finding reference photos…' : generationProgress?.stage === 'comparing' ? 'Comparing with the photos…' : generationProgress?.stage === 'checking' ? 'Checking brick connections…' : (generationProgress?.attempt || 0) > 1 || generationProgress?.stage === 'repairing' ? 'Repairing the design…' : 'Planning your build…' : photo && photoMode === 'inventory' ? 'Review the bricks in my photo' : refining ? 'Refine my build' : 'Generate design'}{!busy && <ArrowRight size={17} />}</button>
             <p className="prompt-footnote" role={busy ? 'status' : undefined}>{busy ? `${photo && photoMode === 'inventory' ? 'Reading the photo' : job?.continuous ? 'Attempt ' + (generationProgress?.attempt || 1) + ' · automatic stopping enabled' : (generationProgress?.attempt || 0) > 1 ? 'Repair ' + generationProgress?.attempt + ' of ' + generationProgress?.maxAttempts : generationProgress?.stage === 'researching' ? 'Identifying the subject and references' : generationProgress?.stage === 'comparing' ? 'Checking likeness' : 'Planning and checking'} · ${elapsed}s elapsed` : status?.gemini ? 'Powered by Gemini · checked by Large Lego Model' : 'Explore samples now. Connect Gemini for your own ideas.'}</p>

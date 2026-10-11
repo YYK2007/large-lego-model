@@ -25,7 +25,7 @@ test('discovery retains article evidence, sanitizes attribution, and does not ce
     return json([photo(), photo('File:A different tower.jpg')]);
   });
   const found = await discoverReferences({ name: 'Morehead-Patterson Bell Tower', location: 'Chapel Hill' });
-  assert.equal(calls.length, 6);
+  assert.equal(calls.length, 8);
   assert.equal(calls[1].searchParams.get('gsrsearch'), '"Morehead" "Patterson" "Bell" "Tower" "Chapel" "Hill"');
   assert.equal(calls[1].searchParams.get('gsrnamespace'), '6');
   assert.equal(calls[1].searchParams.get('iiurlwidth'), '1280');
@@ -212,7 +212,7 @@ test('bounded alternate searches use canonical names and aliases without requiri
       return json([photo(`File:${subject.name} view.jpg`)]);
     });
     const found = await discoverReferences(subject);
-    assert.equal(searches.length, 4);
+    assert.equal(searches.length, 6);
     assert.ok(searches[1].includes(subject.aliases[0].split(' ').map(word => `"${word}"`).join(' ')));
     assert.ok(!subject.location || !searches[1].includes(`"${subject.location.split(/[ ,]/)[0]}"`));
     assert.equal(found.candidates.length, 1);
@@ -335,10 +335,10 @@ test('expired metadata and pixels refetch, while failed and empty API results ar
   assert.equal(calls, initial * 2);
   resetReferenceStateForTests(); fail = true;
   await discoverReferences({ name: 'Tower' }); const failures = calls;
-  await discoverReferences({ name: 'Tower' }); assert.equal(calls, failures + 4);
+  await discoverReferences({ name: 'Tower' }); assert.equal(calls, failures + 6);
   fail = false; empty = true;
   await discoverReferences({ name: 'Tower' }); const empties = calls;
-  await discoverReferences({ name: 'Tower' }); assert.equal(calls, empties + 4);
+  await discoverReferences({ name: 'Tower' }); assert.equal(calls, empties + 6);
 });
 
 test('decoded image cache is LRU bounded and failed decodes are not retained', async t => {
@@ -421,15 +421,15 @@ test('all research sizes actively search other angles while targeted wrong-subje
       const url = new URL(String(input));
       if (url.hostname === 'en.wikipedia.org') return json([]);
       const search = url.searchParams.get('gsrsearch')!; searches.push(search);
-      return json(search.includes(' rear filetype:bitmap') ? [photo('File:Specimen rear.jpg'), photo('File:Different object rear.jpg')]
+      return json(search.includes(' front filetype:bitmap') ? [photo('File:Specimen front.jpg'), photo('File:Different object front.jpg')]
         : search.includes('side view') ? [photo('File:Specimen side view.jpg')]
-        : [photo('File:Specimen front.jpg'), photo('File:Specimen front edit2.jpg')]);
+        : search.includes('top view') || search.includes(' aerial ') ? [photo('File:Specimen top view.jpg')] : [photo('File:Specimen front.jpg'), photo('File:Specimen front edit2.jpg')]);
     });
     const found = await discoverReferences({ name: 'Specimen' }, { complexity });
-    assert.equal(searches.length, 3, 'One canonical and two targeted searches, within the existing discovery deadline');
-    assert.ok(searches.some(query => query.includes(' rear filetype:bitmap'))); assert.ok(searches.some(query => query.includes('side view')));
-    assert.ok(searches.slice(-2).every(query => query.endsWith('filetype:bitmap') && !query.includes(' OR ')), 'Supplemental searches exclude PDF text and common front hero shots');
-    assert.deepEqual(found.candidates.slice(0, 3).map(candidate => candidate.viewHints), [['front'], ['rear'], ['side']]);
+    assert.equal(searches.length, 5, 'One canonical and four targeted searches, within the existing discovery deadline');
+    assert.ok(searches.some(query => query.includes(' front filetype:bitmap'))); assert.ok(searches.some(query => query.includes('side view')));
+    assert.ok(searches.slice(-4).every(query => query.endsWith('filetype:bitmap') && !query.includes(' OR ')), 'Supplemental searches request raster images with simple view terms');
+    assert.deepEqual(found.candidates.slice(0, 3).map(candidate => candidate.viewHints), [['front'], ['side'], ['above']]);
     assert.equal(found.candidates.some(candidate => candidate.fileTitle.includes('Different object')), false);
   });
 });
@@ -447,7 +447,7 @@ test('failed or duplicate angle candidates are replaced by genuinely different p
       return new Response(new Uint8Array(index === 3 ? side : index === 4 ? rear : original), { headers: { 'content-type': 'image/png' } });
     });
     const images = await loadReferenceImages(candidates, { maxImages: 3 });
-    assert.deepEqual(calls, [0, 1, 3, 4]);
+    assert.deepEqual(calls, [0, 3, 1, 4]);
     assert.deepEqual(images.map(image => image.metadata.artist), ['Photographer 0', 'Photographer 3', 'Photographer 4']);
     assert.equal(new Set(images.map(image => image.metadata.sha256)).size, 3);
     assert.match(referenceViewWarnings(images).join(' '), /front, side, rear.*labels do not prove/);
@@ -460,5 +460,22 @@ test('coverage disclosures distinguish unknown angles, a single photo and extern
   assert.match(referenceViewWarnings([one, external]).join(' '), /Only one.*Other sides.*unverified/);
   assert.match(referenceViewWarnings([photo([]), photo([])]).join(' '), /distinct camera angles could not be established/);
   assert.match(referenceViewWarnings([one, photo(['front'])]).join(' '), /distinct camera angles could not be established/);
-  assert.deepEqual(referenceViewWarnings([external]), []);
+  assert.match(referenceViewWarnings([one, photo(['side']), photo(['above', 'detail'])]).join(' '), /not established from photo metadata: top\/above/);
+  assert.match(referenceViewWarnings([one, photo(['side']), photo(['above'])]).join(' '), /Front, side and top\/above are suggested.*only/);
+  assert.match(referenceViewWarnings([external]).join(' '), /No reference photographs.*Front, side and top\/above.*unverified/);
+});
+
+test('an unlabeled identity anchor leaves room for full front, side and top photos before rear and detail slots', async t => {
+  const hints: ReferenceCandidate['viewHints'][] = [[], ['rear'], ['front', 'detail'], ['front'], ['side'], ['above']];
+  const candidates = hints.map((viewHints, index) => ({ ...sample(`https://upload.wikimedia.org/required-${index}.jpg`), fileTitle: `File:Independent view ${index}.jpg`, viewHints }));
+  const colors = ['#102030', '#203040', '#304050', '#405060', '#506070', '#607080'];
+  t.mock.method(globalThis, 'fetch', async (input: URL) => {
+    const index = Number(String(input).match(/required-(\d)/)![1]);
+    const bytes = await sharp({ create: { width: 64, height: 64, channels: 3, background: colors[index] } }).jpeg().toBuffer();
+    return new Response(new Uint8Array(bytes), { headers: { 'content-type': 'image/jpeg' } });
+  });
+  const loaded = await loadReferenceImages(candidates, { maxImages: 4 });
+  assert.deepEqual(loaded.map(image => image.metadata.viewHints), [[], ['front'], ['side'], ['above']]);
+  assert.equal(new Set(loaded.map(image => image.metadata.sha256)).size, 4);
+  assert.match(referenceViewWarnings(loaded).join(' '), /Verify each requested view in the pixels/);
 });

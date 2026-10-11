@@ -81,7 +81,7 @@ test('Quick reference ranking prefers available different view hints without ext
     return pages(['front one', 'front two', 'rear'].map(view => ({ title: `File:Test pavilion ${view}.jpg`, imageinfo: [{ ...modelPage.imageinfo[0], mime: 'image/jpeg' }] })));
   });
   const found = await discoverReferences({ name: 'Test pavilion' });
-  assert.equal(calls.length, 4); assert.deepEqual(found.candidates[0].viewHints, ['front']); assert.deepEqual(found.candidates[1].viewHints, ['rear']);
+  assert.equal(calls.length, 6); assert.deepEqual(found.candidates[0].viewHints, ['front']); assert.deepEqual(found.candidates[1].viewHints, ['rear']);
 });
 
 test('Detailed research keeps photos distinct from optional source-mesh views and preserves auditable metadata', async t => {
@@ -96,7 +96,7 @@ test('Detailed research keeps photos distinct from optional source-mesh views an
   });
   const result = await researchReferences({ name: 'Test pavilion' }, { complexity: 'complex' });
   assert.equal(result.images.length, 4); assert.equal(result.brief.photos.length, 1); assert.deepEqual(result.brief.models?.[0].viewImageIndices, [1, 2, 3]);
-  assert.ok(calls.some(url => /rear filetype:bitmap/.test(url.searchParams.get('gsrsearch') || ''))); assert.ok(calls.some(url => /"side view" filetype:bitmap/.test(url.searchParams.get('gsrsearch') || '')));
+  assert.ok(calls.some(url => /front filetype:bitmap/.test(url.searchParams.get('gsrsearch') || ''))); assert.ok(calls.some(url => /"side view" filetype:bitmap/.test(url.searchParams.get('gsrsearch') || '')));
   assert.equal(isReferenceResearchBrief(result.brief), true);
   const saved: DesignResearch = { subject: result.brief.subject, sources: result.images.map(image => image.metadata), uploadedImage: false, observations: { silhouette: '', proportions: '', features: [], colors: [], limitations: [] }, comparison: { status: 'needs-work', summary: '', issues: [] }, warnings: result.warnings, brief: result.brief };
   assert.equal(isDesignResearch(saved), true);

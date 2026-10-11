@@ -33,6 +33,7 @@ function ReferencePhoto({ source }: { source: DesignResearch['sources'][number] 
 }
 
 export function ReferenceReview({ research, sessionPhoto }: { research: DesignResearch; sessionPhoto?: { data: string; mimeType: string } }) {
+  const notReviewed = research.comparison?.status === 'not-reviewed';
   const needsWork = research.comparison?.status === 'needs-work';
   const compared = needsWork || research.comparison?.status === 'matched';
   const sources = Array.isArray(research.sources) ? research.sources.filter(source => source && typeof source === 'object') : [];
@@ -46,7 +47,7 @@ export function ReferenceReview({ research, sessionPhoto }: { research: DesignRe
     feature.status !== 'present' && issue.startsWith(`Feature ${feature.index + 1} (${observations.features[feature.index].slice(0, 600)}):`)));
   const uploadedPhoto = research.uploadedImage && sessionPhoto && ['image/jpeg', 'image/png', 'image/webp'].includes(sessionPhoto.mimeType) ? `data:${sessionPhoto.mimeType};base64,${sessionPhoto.data}` : undefined;
   return <section className="reference-review" aria-label="Visual references and likeness review">
-    <div className="reference-heading"><h3>{research.uploadedImage ? 'Your photo reference' : 'Visual references'}</h3><span className={needsWork ? 'needs-work' : ''}>{needsWork ? 'Needs refinement' : compared ? 'AI comparison' : 'Comparison unavailable'}</span></div>
+    <div className="reference-heading"><h3>{research.uploadedImage ? 'Your photo reference' : 'Visual references'}</h3><span className={needsWork || notReviewed ? 'needs-work' : ''}>{notReviewed ? 'Not visually reviewed' : needsWork ? 'Needs refinement' : compared ? 'AI comparison' : 'Comparison unavailable'}</span></div>
     {text(research.subject) && <p className="reference-subject">{text(research.subject)}</p>}
     <p>{text(research.comparison?.summary) || 'No visual comparison is available for this saved design.'}</p>
     {issues.length > 0 && <ul>{issues.map((issue, index) => <li key={index}>{issue}</li>)}</ul>}
@@ -94,6 +95,6 @@ export function ReferenceReview({ research, sessionPhoto }: { research: DesignRe
       {strings(observations?.colors).length > 0 && <p>Observed colors: {strings(observations?.colors).join(', ')}.</p>}
       {[...strings(observations?.limitations), ...strings(research.warnings)].map((warning, index) => <p key={index}>{warning}</p>)}
     </details>
-    <small>AI visual comparison. Review the model yourself; geometry checks do not establish likeness or physical strength.</small>
+    <small>{notReviewed ? 'Visual review was skipped.' : 'AI visual comparison.'} Review the model yourself; geometry checks do not establish likeness or physical strength.</small>
   </section>;
 }

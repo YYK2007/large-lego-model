@@ -25,7 +25,7 @@ const providerResponse = (value: unknown) => new Response(JSON.stringify({ candi
 type RequestBody = { contents: { parts: { text?: string; inlineData?: { mimeType: string; data: string } }[] }[]; generationConfig: { responseJsonSchema: { properties: Record<string, unknown> }; maxOutputTokens: number } };
 type Recorded = { kind: 'subject' | 'plan' | 'critic'; body: RequestBody };
 
-async function mockedFlow(t: TestContext, settings: { plans?: unknown[]; critics?: unknown[]; viewLabels?: string[]; failReferences?: boolean; onRequest?: (kind: Recorded['kind'], request: RequestBody, init: RequestInit) => void; onLookup?: (url: URL) => void } = {}) {
+async function mockedFlow(t: TestContext, settings: { plans?: unknown[]; critics?: unknown[]; viewLabels?: string[]; uploadSubject?: { kind: 'specific' | 'original'; name: string; location?: string; aliases?: string[]; complexity?: 'simple' | 'complex' | 'intricate' }; failReferences?: boolean; onRequest?: (kind: Recorded['kind'], request: RequestBody, init: RequestInit) => void; onLookup?: (url: URL) => void } = {}) {
   const key = process.env.GEMINI_API_KEY, model = process.env.GEMINI_MODEL;
   t.mock.method(dotenv, 'config', () => ({ parsed: {} }));
   process.env.GEMINI_API_KEY = 'fake-test-key-never-sent'; process.env.GEMINI_MODEL = 'gemini-3.8-flash';
@@ -33,7 +33,7 @@ async function mockedFlow(t: TestContext, settings: { plans?: unknown[]; critics
     if (key === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = key;
     if (model === undefined) delete process.env.GEMINI_MODEL; else process.env.GEMINI_MODEL = model;
   });
-  const originals = await Promise.all(['#a01010', '#1060a0', '#109030'].map(background => sharp({ create: { width: 80, height: 120, channels: 3, background } }).jpeg().toBuffer()));
+  const originals = await Promise.all(['#a01010', '#1060a0', '#109030', '#bb8050'].slice(0, settings.viewLabels?.length || 3).map(background => sharp({ create: { width: 80, height: 120, channels: 3, background } }).jpeg().toBuffer()));
   const records: Recorded[] = [], targets: RequestBody[] = [], lookups: URL[] = [];
   let planIndex = 0, criticIndex = 0;
   t.mock.method(globalThis, 'fetch', async (input: string | URL, init: RequestInit = {}) => {
@@ -41,6 +41,7 @@ async function mockedFlow(t: TestContext, settings: { plans?: unknown[]; critics
     if (url.hostname === 'generativelanguage.googleapis.com') {
       const body = JSON.parse(String(init.body)) as RequestBody;
       const properties = body.generationConfig.responseJsonSchema.properties;
+      if (properties.kind && body.contents[0].parts.some(part => part.inlineData)) return providerResponse(settings.uploadSubject || { kind: 'original', name: '', location: '', aliases: [] });
       if (properties.usedImages) { targets.push(body); return providerResponse((settings.plans?.[0] as { observations?: unknown } | undefined)?.observations || observations); }
       const kind = properties.kind ? 'subject' : properties.matches ? 'critic' : 'plan';
       records.push({ kind, body }); settings.onRequest?.(kind, body, init);
@@ -86,26 +87,32 @@ test('downloaded pixels reach planning and actual-render comparison; only confir
   assert.equal(result.research?.comparison.status, 'matched');
   assert.ok(result.research?.sources.every(source => source.sha256.length === 64 && source.licenseUrl && source.sourcePageUrl));
   assert.equal(JSON.stringify(result.research).includes(plannerImages[0].data), false, 'Source bytes never enter saved design metadata');
+  for (const context of [flow.targets[0], flow.records[2].body, result.research]) {
+    assert.match(JSON.stringify(context), /not established from photo metadata: front, side, top\/above/, 'Missing required reference angles reach the independent brief, critic and saved evidence');
+  }
   assert.deepEqual(events.map(event => event.stage), ['researching', 'planning', 'checking', 'comparing']);
 });
 
 test('Quick passes actual distinct-angle pixels and unverified hints through independent requirements, planning and review', async t => {
-  const flow = await mockedFlow(t, { viewLabels: ['front', 'rear', 'side view'], plans: [{ ...plan, observations: { ...observations, usedImages: [0, 1, 2] } }] });
+  const flow = await mockedFlow(t, { viewLabels: ['identity hero', 'front', 'side view', 'top view'], plans: [{ ...plan, observations: { ...observations, usedImages: [0, 1, 2, 3] } }] });
   const result = await generateDesign({ prompt: 'Build Example Tower using views from several sides' });
   const planned = images(flow.records[1]);
-  assert.equal(new Set(planned.map(image => image.data)).size, 3);
+  assert.equal(new Set(planned.map(image => image.data)).size, 4);
   assert.deepEqual(flow.targets[0].contents[0].parts.flatMap(part => part.inlineData ? [part.inlineData] : []), planned);
   assert.deepEqual(images(flow.records[2]).filter(image => image.mimeType === 'image/jpeg'), planned);
   const labels = flow.records[1].body.contents[0].parts.filter(part => part.text?.startsWith('REFERENCE IMAGE')).map(part => part.text!);
-  assert.ok(labels.some(label => label.includes('"viewHints":["rear"]')));
+  assert.ok(labels.some(label => label.includes('"viewHints":["above"]')));
   assert.ok(labels.every(label => label.includes('metadata only; verify the actual pixels')));
-  assert.match(result.research!.warnings.join(' '), /metadata suggests front, rear, side views.*unseen sides remain uncertain/);
-  assert.equal(result.research!.sources.length, 3);
-  assert.ok(flow.lookups.some(url => url.searchParams.get('gsrsearch')?.includes(' rear filetype:bitmap')));
+  assert.match(result.research!.warnings.join(' '), /metadata suggests front, side, above views.*unseen sides remain uncertain/);
+  assert.equal(result.research!.sources.length, 4);
+  assert.ok(flow.lookups.some(url => url.searchParams.get('gsrsearch')?.includes(' front filetype:bitmap')));
   assert.ok(flow.lookups.some(url => url.searchParams.get('gsrsearch')?.includes('side view')));
+  assert.ok(flow.lookups.some(url => url.searchParams.get('gsrsearch')?.includes('top view')));
+  assert.ok(flow.lookups.some(url => url.searchParams.get('gsrsearch')?.includes(' aerial ')));
+  assert.match(JSON.stringify(flow.targets[0]), /FRONT, SIDE and TOP\/ABOVE/);
 });
 
-test('user image pixels skip online identity lookup but still receive a visual comparison', async t => {
+test('an original uploaded fixture avoids web substitutes and still receives a visual comparison', async t => {
   const flow = await mockedFlow(t);
   const result = await generateDesign({ prompt: 'Build this object', image: flow.uploadedImage });
   assert.deepEqual(flow.records.map(record => record.kind), ['plan', 'critic']);
@@ -115,6 +122,47 @@ test('user image pixels skip online identity lookup but still receive a visual c
   assert.equal(result.research?.uploadedImage, true);
   assert.match(result.research!.warnings.join(' '), /Only the supplied reference image.*angles.*unverified/);
   assert.deepEqual(result.research?.sources, []);
+});
+
+test('an identified upload stays image zero while confirmed supplemental photos reach planning and review', async t => {
+  const flow = await mockedFlow(t, { uploadSubject: { kind: 'specific', name: 'Example Tower', aliases: [] },
+    plans: [{ ...plan, observations: { ...observations, usedImages: [0, 1, 3] } }] });
+  const result = await generateDesign({ prompt: 'Build this Example Tower', image: flow.uploadedImage });
+  const planned = images(flow.records[0]);
+  assert.equal(planned.length, 4); assert.deepEqual(planned[0], flow.uploadedImage);
+  assert.deepEqual(flow.targets[0].contents[0].parts.flatMap(part => part.inlineData ? [part.inlineData] : []), planned);
+  assert.deepEqual(images(flow.records[1]).filter(part => part.mimeType === 'image/jpeg'), [planned[0], planned[1], planned[3]]);
+  assert.match(JSON.stringify(flow.targets[0]), /SUPPLEMENTAL candidate; identity must be verified against uploaded image 0/);
+  assert.equal(result.research?.uploadedImage, true);
+  assert.deepEqual(result.research!.sources.map(source => source.artist), ['Photographer 0', 'Photographer 2'], 'Upload offset cannot shift saved source credits');
+  assert.ok(flow.lookups.some(url => url.searchParams.get('gsrsearch')?.includes('top view')));
+});
+
+test('unavailable supplements do not block a usable upload or silently replace its subject', async t => {
+  const flow = await mockedFlow(t, { uploadSubject: { kind: 'specific', name: 'Example Tower', aliases: [] }, failReferences: true });
+  const result = await generateDesign({ prompt: 'Build this Example Tower', image: flow.uploadedImage });
+  assert.deepEqual(images(flow.records[0]), [flow.uploadedImage]);
+  assert.equal(result.research?.comparison.status, 'matched'); assert.deepEqual(result.research!.sources, []);
+  assert.match(result.research!.warnings.join(' '), /No usable supplemental reference photo.*uploaded photo remains/);
+});
+
+test('skipping visual review retains online supplemental research and its actual planning pixels', async t => {
+  const flow = await mockedFlow(t, { uploadSubject: { kind: 'specific', name: 'Example Tower', aliases: [] },
+    plans: [{ ...plan, observations: { ...observations, usedImages: [0, 1, 3] } }] });
+  const result = await generateDesign({ prompt: 'Build this Example Tower', image: flow.uploadedImage }, undefined, { visualReview: false });
+  assert.deepEqual(flow.records.map(record => record.kind), ['plan']);
+  assert.equal(images(flow.records[0]).length, 4);
+  assert.ok(flow.lookups.some(url => url.searchParams.get('gsrsearch')?.includes('top view')));
+  assert.equal(result.research?.comparison.status, 'not-reviewed');
+  assert.deepEqual(result.research!.sources.map(source => source.artist), ['Photographer 0', 'Photographer 2']);
+});
+
+test('supplemental identity confirmation cannot discard the primary upload', async t => {
+  const flow = await mockedFlow(t, { uploadSubject: { kind: 'specific', name: 'Example Tower', aliases: [] },
+    plans: [{ ...plan, observations: { ...observations, usedImages: [1, 2] } }] });
+  await assert.rejects(generateDesign({ prompt: 'Build this Example Tower', image: flow.uploadedImage }),
+    (error: unknown) => error instanceof GenerationError && error.status === 422);
+  assert.equal(flow.records.some(record => record.kind === 'plan'), false);
 });
 
 test('unconfirmed subjects and out-of-range image citations fail before visual comparison', async t => {

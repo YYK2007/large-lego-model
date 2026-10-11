@@ -3,6 +3,37 @@ import test from 'node:test';
 import type { Space } from 'spectrum-ts';
 import { photonReplies, PHOTON_FILE_LIMIT } from '../server/photon.js';
 import { PhotonInputError } from '../server/photon-routing.js';
+import { photonJobsApi } from '../server/photon-api.js';
+
+test('Photon snapshots its reversible visual-review setting and fetches parts for the exact revision', async () => {
+  for (const visualReview of [false, true]) {
+    const calls: { url: string; body?: Record<string, unknown> }[] = [];
+    const request: typeof fetch = async (url, options) => {
+      calls.push({ url: String(url), ...(options?.body ? { body: JSON.parse(String(options.body)) } : {}) });
+      return String(url).endsWith('/parts.csv') ? new Response('exact-parts') : Response.json({ id: 'test-job', status: 'queued', milestones: [] });
+    };
+    const api = photonJobsApi('http://127.0.0.1:3001', request, visualReview);
+    await api.submit('test-job', { prompt: 'A flower' });
+    assert.equal(calls[0].body?.visualReview, visualReview);
+    assert.equal(calls[0].body?.stopWhenMatched, true, 'Review configuration does not replace the existing execution policy');
+    assert.equal((await api.file('approved-revision', 'parts.csv')).toString(), 'exact-parts');
+    assert.match(calls[1].url, /\/designs\/approved-revision\/parts\.csv$/);
+  }
+});
+
+test('parts delivery retains CSV bytes and offers the parts command after a failed send', async () => {
+  const bytes = Buffer.from('Part ID,Required\r\n3005,4\r\n');
+  let delivered: { name: string; mimeType: string; read(): Promise<Buffer> } | undefined;
+  const reply = photonReplies({ send: async (value: unknown) => {
+    delivered = await (value as { build(): Promise<typeof delivered> }).build();
+  } } as Pick<Space, 'send'>);
+  await reply.parts(bytes);
+  assert.equal(delivered?.name, 'large-lego-model-parts.csv');
+  assert.equal(delivered?.mimeType, 'text/csv');
+  assert.deepEqual(await delivered?.read(), bytes);
+  const failed = photonReplies({ send: async () => { throw new Error('network'); } } as unknown as Pick<Space, 'send'>);
+  await assert.rejects(failed.parts(bytes), /Send \/parts to retry/);
+});
 
 test('model delivery keeps its USDZ name and bytes and explains opening only after sending', async () => {
   const sent: unknown[] = [], bytes = Buffer.from('small-model');
@@ -15,6 +46,20 @@ test('model delivery keeps its USDZ name and bytes and explains opening only aft
   assert.equal(file.mimeType, 'model/vnd.usdz+zip');
   assert.deepEqual(await file.read(), bytes);
   assert.match(String(sent[1]), /Tap the 3D file/);
+});
+
+test('manual delivery retains PDF bytes and gives the manual retry command after a failed send', async () => {
+  const bytes = Buffer.from('%PDF-1.7\nmanual');
+  let file: { name: string; mimeType: string; read(): Promise<Buffer> } | undefined;
+  const reply = photonReplies({ send: async (value: unknown) => {
+    file = await (value as { build(): Promise<typeof file> }).build();
+  } } as Pick<Space, 'send'>);
+  await reply.manual(bytes);
+  assert.equal(file?.name, 'large-lego-model-instructions.pdf');
+  assert.equal(file?.mimeType, 'application/pdf');
+  assert.deepEqual(await file?.read(), bytes);
+  const failed = photonReplies({ send: async () => { throw new Error('network'); } } as unknown as Pick<Space, 'send'>);
+  await assert.rejects(failed.manual(bytes), /Send \/manual to retry/);
 });
 
 test('delivery failures explain size or timeout without forwarding provider payloads', async () => {

@@ -13,11 +13,11 @@ export interface PhotonJobsApi {
   stop(id: string): Promise<GenerationJob>;
   design(id: string): Promise<SavedDesign>;
   preview(id: string, attempt: number): Promise<Buffer>;
-  file(id: string, format: 'manual.pdf' | 'model.usdz'): Promise<Buffer>;
+  file(id: string, format: 'manual.pdf' | 'model.usdz' | 'parts.csv'): Promise<Buffer>;
 }
 
 /** Uses the API's existing worker queue; never opens a second job-store owner. */
-export function photonJobsApi(base = 'http://127.0.0.1:3001', request: typeof fetch = fetch): PhotonJobsApi {
+export function photonJobsApi(base = 'http://127.0.0.1:3001', request: typeof fetch = fetch, visualReview = false): PhotonJobsApi {
   const origin = new URL(base);
   if (!['http:', 'https:'].includes(origin.protocol) || origin.username || origin.password) throw new Error('PHOTON_API_BASE_URL must be an HTTP(S) URL without credentials.');
   async function response(path: string, body?: unknown, timeout = 15_000) {
@@ -36,7 +36,7 @@ export function photonJobsApi(base = 'http://127.0.0.1:3001', request: typeof fe
   }
   const idPath = (id: string) => `/generation-jobs/${encodeURIComponent(id)}`;
   return {
-    submit: (id, input) => job('/generation-jobs', id, { requestId: id, input, stopWhenMatched: true }),
+    submit: (id, input) => job('/generation-jobs', id, { requestId: id, input, stopWhenMatched: true, visualReview }),
     get: id => job(idPath(id), id),
     stop: id => job(`${idPath(id)}/cancel`, id, {}),
     design: async id => {
@@ -45,6 +45,8 @@ export function photonJobsApi(base = 'http://127.0.0.1:3001', request: typeof fe
       return design;
     },
     preview: async (id, attempt) => Buffer.from(await (await response(`${idPath(id)}/attempts/${attempt}/preview.svg`)).arrayBuffer()),
-    file: async (id, format) => Buffer.from(await (await response(`/designs/${encodeURIComponent(id)}/${format}`, undefined, 120_000)).arrayBuffer()),
+    // Large manuals contain hundreds of exact assembly steps. Their first
+    // export can take minutes; subsequent requests use the PDF content cache.
+    file: async (id, format) => Buffer.from(await (await response(`/designs/${encodeURIComponent(id)}/${format}`, undefined, format === 'manual.pdf' ? 600_000 : 120_000)).arrayBuffer()),
   };
 }

@@ -22,10 +22,15 @@ export class CompilationDeadlineError extends Error {
 
 /** Reuse the fixed-piece and stock snapshot from a quick compile, without
  * exposing compiler state in saved designs or repainting the source volume. */
-export function repairCompiledPlan(design: Design, options: { deadline?: number } = {}): Design {
+export function repairCompiledPlan(design: Design, options: { deadline?: number; globalDeadline?: number; assemblyBlockedIds?: ReadonlySet<string> } = {}): Design {
   const context = repairContexts.get(design);
   if (!context) throw new Error('Only a freshly compiled design can be repacked.');
-  return repairPacking(design, { ...context, deadline: Math.min(context.deadline ?? Infinity, options.deadline ?? Infinity) }) ?? design;
+  const result = repairPacking(design, { ...context, ...options, deadline: Math.min(context.deadline ?? Infinity, options.deadline ?? Infinity),
+    globalDeadline: Math.min(context.deadline ?? Infinity, options.globalDeadline ?? Infinity) }) ?? design;
+  const placement = (brick: Brick) => JSON.stringify([brick.partId, brick.colorId, brick.x, brick.y, brick.z, brick.rotation]);
+  const fixed = new Set(design.bricks.filter(brick => context.fixedIds.has(brick.id)).map(placement));
+  repairContexts.set(result, { ...context, fixedIds: new Set(result.bricks.filter(brick => fixed.has(placement(brick))).map(brick => brick.id)) });
+  return result;
 }
 
 // The planner describes space and supported surface primitives. Only this compiler chooses real parts.

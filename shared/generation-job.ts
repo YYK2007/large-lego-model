@@ -1,3 +1,7 @@
+// Archived UI/conversation choice. Keep the generator path and its tests so
+// setting this to true restores Quick without changing saved or active jobs.
+export const QUICK_MODE_ENABLED = false;
+
 export type JobProgress = {
   stage: 'researching' | 'outlining' | 'comparing-outline' | 'selecting-parts' | 'planning' | 'checking' | 'comparing' | 'repairing';
   attempt: number;
@@ -21,6 +25,7 @@ export type GenerationJob = {
   quality: 'quick' | 'detailed';
   continuous?: boolean;
   stopWhenMatched?: boolean;
+  visualReview?: boolean;
   attempts?: JobAttempt[];
   createdAt: string;
   updatedAt: string;

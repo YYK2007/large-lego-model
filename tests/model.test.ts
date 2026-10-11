@@ -141,4 +141,6 @@ test('CSV retains provenance and safely quotes commas, quotes, and spreadsheet f
   assert.match(csv, /"Required","Owned","Missing","Sources"/);
   assert.ok(csv.includes('"1","1","0"'));
   assert.ok(csv.includes('"\'=SUM(1,2) ""set"": 1"'));
+  assert.match(csv, /"Part catalog link"/);
+  assert.ok(csv.includes('"https://rebrickable.com/parts/3005/?color=4"'));
 });

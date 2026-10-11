@@ -57,9 +57,9 @@ function saved(result: Awaited<ReturnType<typeof researchReferences>>): DesignRe
     comparison: { status: 'needs-work', summary: 'Review pending.', issues: [] }, warnings: result.warnings };
 }
 
-test('adaptive research returns three, six or twelve distinct decoded photos with source claims kept separate', async t => {
+test('adaptive research returns four, six or twelve distinct decoded photos with source claims kept separate', async t => {
   const calls = await archive(t);
-  for (const [complexity, count] of [['simple', 3], ['complex', 6], ['intricate', 12]] as const) {
+  for (const [complexity, count] of [['simple', 4], ['complex', 6], ['intricate', 12]] as const) {
     const result = await researchReferences({ name: 'Test pavilion' }, { complexity });
     assert.equal(result.images.length, count);
     assert.equal(result.brief.requestedImageCount, count);
@@ -109,7 +109,7 @@ test('independent view metadata outranks edits while ambiguous identity and inci
     return pages([file(0), { ...file(0), title: 'File:Test pavilion front edit2.jpg' }, { ...file(0), title: 'File:Test pavilion another front.jpg' }, file(1), file(7), file(0, 'Wrong subject'), file(0, 'Test pavilion logo')]);
   });
   const found = await discoverReferences({ name: 'Test pavilion' }, { complexity: 'complex' });
-  assert.deepEqual(found.candidates.slice(0, 3).map(item => item.viewHints), [['front'], ['rear'], ['above']]);
+  assert.deepEqual(found.candidates.slice(0, 3).map(item => item.viewHints), [['front'], ['above'], ['rear']]);
   assert.ok(found.candidates.every(item => !/Wrong|logo/.test(item.fileTitle)));
   assert.equal(found.candidates.at(-1)?.fileTitle, 'File:Test pavilion front edit2.jpg');
   assert.ok(found.candidates.every(item => item.identityEvidence === 'metadata-match'));

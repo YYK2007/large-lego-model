@@ -90,6 +90,7 @@ test('Quick uses a source-backed cached curved part on its first plan and preser
   globalThis.fetch = async (url, init) => {
     assert.equal(new URL(String(url)).hostname, 'generativelanguage.googleapis.com', 'Quick must not perform catalog discovery');
     const body = JSON.parse(String(init!.body)), fields = body.generationConfig.responseJsonSchema.properties;
+    if (fields.kind) return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ kind: 'original', name: '', location: '', aliases: [] }) }] }, finishReason: 'STOP' }] }), { headers: { 'content-type': 'application/json' } });
     const kind = fields.usedImages ? 'target' : fields.matches ? 'critic' : 'plan'; stages.push(kind);
     if (kind === 'plan') {
       const brief = JSON.parse(body.contents[0].parts[0].text.split('\n')[0]);

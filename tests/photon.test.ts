@@ -51,6 +51,32 @@ test('manual commands do not swallow requests mentioning instructions', () => {
   assert.deepEqual(routeText('/new'), { kind: 'new', prompt: '' });
 });
 
+test('approval phrases are exact; qualified approval remains feedback and parts is an explicit command', () => {
+  for (const value of ['/approve', 'Approved!', 'Looks good.', 'That looks good']) assert.deepEqual(routeText(value), { kind: 'approve', prompt: '' });
+  for (const value of ['Looks good but widen the petals', 'Looks good, but make it taller', 'approve a new design']) assert.deepEqual(routeText(value), { kind: 'design', prompt: value });
+  assert.deepEqual(routeText('/parts'), { kind: 'parts', prompt: '' });
+  assert.deepEqual(routeText('thanks'), { kind: 'chat', prompt: '' });
+  assert.deepEqual(routeText("I don't like it"), { kind: 'clarify', prompt: '' });
+});
+
+test('/retry is a file command and unknown slash commands cannot become generation prompts', () => {
+  for (const value of ['/retry', ' /RETRY! ']) assert.deepEqual(routeText(value), { kind: 'retry', prompt: '' });
+  for (const value of ['/restart', '/retry-model', '/retry make a boat', '/foo using detailed mode', '/manual in detailed mode', '/newer a boat', '/', '/help']) {
+    assert.throws(() => routeText(value), /\/retry to resend missing files/);
+  }
+  assert.deepEqual(routeText('/detailed a boat'), { kind: 'quality', quality: 'detailed', prompt: 'a boat' });
+  assert.deepEqual(routeText('/new a boat'), { kind: 'new', prompt: 'a boat' });
+});
+
+test('approval history is detached on restore, retained across imports, and rejects damaged acknowledgement values', () => {
+  const value = { handledIds: [], feedbackDesignId: savedBuild.id, approvedDesignId: savedBuild.id, approvedDeliveries: { [savedBuild.id]: { model: true as const, parts: true as const } } };
+  const restored = parseConversation(value); value.approvedDeliveries[savedBuild.id].model = false as true;
+  assert.deepEqual(restored.approvedDeliveries?.[savedBuild.id], { model: true, parts: true });
+  const imported = importSavedDesign(restored, savedBuild);
+  assert.equal(imported.approvedDesignId, savedBuild.id); assert.deepEqual(imported.approvedDeliveries, restored.approvedDeliveries);
+  for (const approvedDeliveries of [null, [], { '../path': {} }, { valid: { model: false } }, { valid: { unknown: true } }]) assert.throws(() => parseConversation({ handledIds: [], approvedDeliveries }), /approval deliveries/);
+});
+
 test('conversational status and explicit quality phrases route without becoming new build subjects', () => {
   for (const phrase of ['I sent you a build request already, what’s going on?', 'Hey, what is happening with my build?', 'Whats going on?']) {
     assert.deepEqual(routeText(phrase), { kind: 'status', prompt: '' });

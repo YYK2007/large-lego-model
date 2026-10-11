@@ -44,6 +44,8 @@ async function setup(t: TestContext, reply: (record: Recorded, construction: num
     }
     assert.equal(host, 'generativelanguage.googleapis.com', 'Tests must never fetch external pixels or a real catalog');
     const body = JSON.parse(String(init.body)) as Recorded['body'], fields = body.generationConfig.responseJsonSchema.properties;
+    if (body.systemInstruction.parts.some(part => part.text.includes('Identify the visual subject'))
+      && body.contents[0].parts.some(part => part.inlineData)) return providerResponse({ kind: 'original', name: '', location: '', aliases: [] });
     if (fields.usedImages) {
       targetRequests.push({ kind: 'target', body });
       return providerResponse(targets?.[targetRequests.length - 1] ?? { ...observations, usedImages: body.contents[0].parts.some(part => part.inlineData) ? [0] : [] });
@@ -104,7 +106,7 @@ test('an original text-only target receives an actual rendered critic and stops 
   assert.match(flow.records[2].body.systemInstruction.parts[0].text, /No reference photographs were available/);
   assert.equal(result.research!.comparison.status, 'matched');
   assert.equal(result.research!.uploadedImage, false); assert.deepEqual(result.research!.sources, []);
-  assert.ok(result.research!.warnings.some(warning => /without reference photographs/.test(warning)));
+  assert.ok(result.research!.warnings.some(warning => /No reference photographs were available.*text request/.test(warning)));
 });
 
 test('an independent target needs concrete features before any construction can start', async t => {

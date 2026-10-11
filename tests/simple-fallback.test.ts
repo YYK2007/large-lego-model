@@ -29,6 +29,7 @@ async function flow(t: TestContext, plans: unknown[], critics: unknown[] = [matc
   t.mock.method(globalThis, 'fetch', async (url: string, init: RequestInit = {}) => {
     assert.equal(new URL(String(url)).hostname, 'generativelanguage.googleapis.com', 'The fallback keeps the original uploaded pixels without restarting research');
     const body = JSON.parse(String(init.body)), fields = body.generationConfig.responseJsonSchema.properties;
+    if (body.systemInstruction?.parts.some((part: { text?: string }) => part.text?.includes('Identify the visual subject'))) return response({ kind: 'original', name: '', location: '', aliases: [] });
     if (fields.usedImages) return response(observed);
     const kind = fields.matches ? 'critic' : fields.edits ? 'patch' : 'plan';
     requests.push({ kind, body });

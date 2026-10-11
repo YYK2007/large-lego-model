@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { discoverReferences, loadArticleEvidence, loadReferenceImages, loadReferenceModel, loadWikidataEntities, referenceViewWarnings, type ReferenceSubject, type ReferenceImage, type ReferenceArticle } from './references.js';
 import type { ReferenceComplexity, ReferenceResearchBrief, ReferenceTextSource } from '../shared/references.js';
 
-const photoTargets = { simple: 3, complex: 6, intricate: 12 } as const;
+const photoTargets = { simple: 4, complex: 6, intricate: 12 } as const;
 const quantities = { P2048: 'Height', P2049: 'Width', P2043: 'Length', P1101: 'Floors above ground' } as const;
 const plain = (value: unknown, limit = 600) => typeof value === 'string' ? value.replace(/<[^>]*>/g, ' ').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, limit) : '';
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');

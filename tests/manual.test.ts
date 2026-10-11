@@ -1,8 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash, randomUUID } from 'node:crypto';
+import { readFile, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { deflateSync, inflateSync } from 'node:zlib';
 import sharp from 'sharp';
+import PDFDocument from 'pdfkit';
 import { generateManualPdf } from '../server/manual';
+import { renderManualPdf } from '../server/manual-render';
+import { groupManualSteps } from '../server/manual-repeats';
 import { renderDesignSvg } from '../shared/illustration';
 import { partSurfaces } from '../shared/part-surfaces';
 import { buildSteps, validateDesign, type Design } from '../shared/model';
@@ -76,7 +83,9 @@ test('hanging-piece PDF follows the anchor-first order and prints exact upward e
   assert.match(content, /17\.6 mm above the table/);
   assert.match(content, /8\.0 mm above the table/);
   assert.equal((content.match(/then raise it 1\.6 mm/g) || []).length, 2);
-  assert.equal((content.match(/Body bottom:/g) || []).length, 6);
+  assert.equal((content.match(/Body bottom:/g) || []).length, 3, 'Beam and both side-entry placements retain their own full instructions');
+  assert.match(content, /Repeat these placements x3/);
+  for (let i = 0; i < 3; i++) assert.ok(content.includes(`${i + 1}  /  ${i + 1}  /  (0, 0, ${i * 3})`), 'Repeated column steps retain their exact destinations');
 });
 
 test('layer illustrations retain the full-model camera and exact geometry', () => {
@@ -220,6 +229,43 @@ test('mixed-height PDF prints actual body-bottom heights, all slope directions a
   assert.ok(!content.includes('Build layer'), 'Step indices must not be presented as full-brick heights');
 });
 
+test('repeated stack PDF gathers total quantities and prints every original step and height once', async () => {
+  const repeated: Design = { ...mixed, id: randomUUID(), title: 'Repeated plate stack', bricks: [
+    { id: 'base', partId: '3001', colorId: 1, x: 3, y: 4, z: 0, rotation: 0 },
+    ...Array.from({ length: 8 }, (_, i) => ({ id: `plate-${i}`, partId: '3020', colorId: 15, x: 3, y: 4, z: i + 3, rotation: 0 as const })),
+  ] };
+  assert.equal(validateDesign(repeated).valid, true);
+  assert.equal(buildSteps(repeated).length, 9);
+  assert.equal(groupManualSteps(buildSteps(repeated)).length, 2);
+  const inventory = [{ partId: '3020', colorId: 15, quantity: 8, source: 'My plate box' }, { partId: '3001', colorId: 1, quantity: 1, source: 'My base box' }];
+  const pdf = await generateManualPdf(repeated, inventory), content = pdfText(pdf);
+  for (const expected of ['9 PIECES', '9 BUILD STEPS', 'Repeat these placements x8', '1 piece per repeat / 8 total',
+    'GATHER FOR ALL 8 REPEATS', '8x 3020 / 15', 'ONE REPEAT: EACH ROW IS ONE PIECE',
+    'STACK IN PLACE', 'Do not build separate copies.', 'My plate box', 'My base box', 'All required pieces are allocated', '06 / 06']) {
+    assert.ok(content.includes(expected), `Missing repetition detail: ${expected}`);
+  }
+  for (let i = 0; i < 8; i++) assert.ok(content.includes(`${i + 1}  /  ${i + 2}  /  (3, 4, ${i + 3})`));
+  assert.equal((pdf.toString('latin1').match(/\/Type \/Page\b/g) ?? []).length, 6, 'The exact 9 checked steps fit on 2 instruction pages');
+});
+
+test('same-height translated PDF uses repeated placements with exact destinations and total gather counts', async () => {
+  const repeated: Design = { ...mixed, id: randomUUID(), title: 'Repeated base rows', bricks: [
+    ...Array.from({ length: 24 }, (_, i) => ({ id: `base-${i}`, partId: '3024', colorId: 1, x: i % 12, y: Math.floor(i / 12), z: 0, rotation: 0 as const })),
+    ...[0, 4, 8].map(x => ({ id: `cap-${x}`, partId: '3020', colorId: 15, x, y: 0, z: 1, rotation: 90 as const })),
+    ...[2, 6].map(x => ({ id: `bridge-${x}`, partId: '3020', colorId: 14, x, y: 0, z: 2, rotation: 90 as const })),
+  ] };
+  assert.equal(validateDesign(repeated).valid, true);
+  const groups = groupManualSteps(buildSteps(repeated));
+  assert.equal(groups[0].kind, 'placements');
+  assert.equal(groups[0].steps.length, 2);
+  const pdf = await generateManualPdf(repeated), content = pdfText(pdf);
+  for (const expected of ['29 PIECES', 'Repeat these placements x2', '12 pieces per repeat / 24 total', '24x 3024 / 1',
+    'REPEAT AT THE LISTED LOCATIONS', 'not an off-model subassembly', '1  /  1  /  (0, 0, 0)', '2  /  2  /  (0, 1, 0)', '06 / 06']) {
+    assert.ok(content.includes(expected), `Missing translated-placement detail: ${expected}`);
+  }
+  assert.equal((pdf.toString('latin1').match(/\/Type \/Page\b/g) ?? []).length, 6);
+});
+
 test('narrow-plate SVG and manual retain one-plate steps, correct exposed studs and source quantities', async () => {
   const narrow: Design = { ...mixed, id: 'narrow-plate-guide', title: 'Narrow plate stair', bricks: ['3710', '3623', '3023', '3024'].map((partId, z) => ({
     id: `narrow-${z}`, partId, colorId: 15, x: 0, y: 0, z, rotation: 0,
@@ -251,6 +297,49 @@ test('PDF rendering leaves the main event loop available and shares identical pe
   await new Promise<void>(resolve => setImmediate(resolve));
   assert.equal(finished, false, 'other requests must be able to run before the PDF finishes');
   assert.equal((await first).subarray(0, 5).toString(), '%PDF-');
+});
+
+test('manuals flush completed vector pages and retain exact page totals and placements', async t => {
+  const addPage = PDFDocument.prototype.addPage;
+  const buffered: number[] = [];
+  t.mock.method(PDFDocument.prototype, 'addPage', function (this: PDFKit.PDFDocument, ...args: Parameters<typeof addPage>) {
+    const result = addPage.apply(this, args);
+    buffered.push(this.bufferedPageRange().count);
+    return result;
+  });
+  const pdf = await renderManualPdf(design, [{ partId: '3004', colorId: 1, quantity: 1, source: 'Page count source' }]);
+  const pages = (pdf.toString('latin1').match(/\/Type\s*\/Page\b/g) || []).length;
+  const expected = 4 + buildSteps(design).length; // cover, BOM, allocation, guide, steps
+  assert.equal(pages, expected);
+  assert.equal(buffered.length, expected);
+  assert.ok(buffered.every(count => count === 1), 'Only the active vector page stays buffered, regardless of manual length');
+  assert.ok(!pdf.toString('latin1').includes('/Subtype /Image'), 'Small manuals retain vector model diagrams');
+  const content = pdfText(pdf);
+  for (let index = 1; index <= pages; index++) assert.ok(content.includes(`${String(index).padStart(2, '0')} / ${String(pages).padStart(2, '0')}`));
+  assert.ok(content.includes('Page count source'));
+  for (const step of buildSteps(design)) assert.ok(content.includes(`Build step ${step.index}`));
+});
+
+test('manual cache survives process restart and keys exact design and inventory content', async t => {
+  const original = { ...design, id: `manual-cache-${randomUUID()}` };
+  const inventory = [{ partId: '3004', colorId: 1, quantity: 1, source: 'Cached source lot' }];
+  const changed = { ...original, title: 'Changed cached revision' };
+  const inputs = [{ design: original, inventory }, { design: changed, inventory }, { design: original, inventory: [] }];
+  const filenames = inputs.map(input => `data/manual-cache/manual-v4-repeated-placements-${createHash('sha256').update(JSON.stringify(input)).digest('hex')}.pdf`);
+  t.after(() => Promise.all(filenames.map(filename => rm(filename, { force: true }))));
+  const first = await generateManualPdf(original, inventory);
+  assert.deepEqual(await readFile(filenames[0]), first);
+  const script = `import { generateManualPdf } from './server/manual.ts'; import { createHash } from 'node:crypto';
+    const input = ${JSON.stringify(inputs[0])}; const pdf = await generateManualPdf(input.design, input.inventory);
+    process.stdout.write(createHash('sha256').update(pdf).digest('hex'));`;
+  const child = await promisify(execFile)(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script]);
+  assert.equal(child.stdout, createHash('sha256').update(first).digest('hex'), 'A new process returns the exact cached PDF bytes');
+  assert.match(pdfText(await generateManualPdf(changed, inventory)), /Changed cached revision/);
+  const empty = pdfText(await generateManualPdf(original, []));
+  assert.match(empty, /4 bricks missing/);
+  assert.ok(!empty.includes('Cached source lot'));
+  await writeFile(filenames[0], 'incomplete PDF cache');
+  assert.match(pdfText(await generateManualPdf(original, inventory)), /Cached source lot/, 'A truncated cache entry must be regenerated');
 });
 
 test('a rejected export does not stall the queue and queued inputs retain their original snapshot', async () => {

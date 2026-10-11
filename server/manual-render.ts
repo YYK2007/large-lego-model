@@ -1,8 +1,10 @@
 import PDFDocument from 'pdfkit';
 import SVGtoPDF from 'svg-to-pdfkit';
+import sharp from 'sharp';
 import { allocateInventory, billOfMaterials, buildSteps, catalogForDesign, footprint, normalizeDesign, partHeight, partPoint, partTopStuds, validateDesign, type Brick, type Design, type InventoryItem, type CatalogContext } from '../shared/model';
 import { renderDesignSvg } from '../shared/illustration';
 import { partSurfaces } from '../shared/part-surfaces';
+import { groupManualSteps, type ManualStepGroup } from './manual-repeats';
 
 const INK = '#133a50';
 const BLUE = '#127faa';
@@ -36,6 +38,15 @@ function illustration(doc: PDFKit.PDFDocument, design: Design, x: number, y: num
   SVGtoPDF(doc, renderDesignSvg(design, { width, height, visibleIds, highlightIds }), x, y, { width, height, assumePt: true });
 }
 
+async function assemblyIllustration(doc: PDFKit.PDFDocument, design: Design, x: number, y: number, width: number, height: number, visibleIds?: string[], highlightIds?: string[]) {
+  if (design.bricks.length <= 1000) return illustration(doc, design, x, y, width, height, visibleIds, highlightIds);
+  // Large manuals repeat thousands of pieces on hundreds of pages. Rasterize
+  // the exact scene at 4 pixels per PDF point (288 dpi); maps and text stay vector.
+  const svg = renderDesignSvg(design, { width, height, visibleIds, highlightIds });
+  const png = await sharp(Buffer.from(svg), { density: 288 }).png().toBuffer();
+  doc.image(png, x, y, { width, height });
+}
+
 function placementRows(doc: PDFKit.PDFDocument, bricks: Brick[], x: number, y: number, width: number, catalog: CatalogContext) {
   bricks.forEach((brick, index) => {
     const yy = y + index * 24;
@@ -47,7 +58,7 @@ function placementRows(doc: PDFKit.PDFDocument, bricks: Brick[], x: number, y: n
   });
 }
 
-function placementMap(doc: PDFKit.PDFDocument, design: Design, bricks: Brick[], x: number, y: number, width: number, height: number) {
+function placementMap(doc: PDFKit.PDFDocument, design: Design, bricks: Brick[], x: number, y: number, width: number, height: number, readableTemplate = false) {
   const catalog = catalogForDesign(design);
   const columns = Math.max(...design.bricks.map((brick) => brick.x + footprint(brick, catalog).width));
   const rows = Math.max(...design.bricks.map((brick) => brick.y + footprint(brick, catalog).depth));
@@ -55,8 +66,10 @@ function placementMap(doc: PDFKit.PDFDocument, design: Design, bricks: Brick[], 
   const originX = x + 25 + (width - 32 - columns * cell) / 2;
   const originY = y + 23 + (height - 32 - rows * cell) / 2;
   doc.save();
-  for (let column = 0; column < columns; column++) text(doc, String(column), originX + column * cell, originY - 15, cell, Math.min(8, cell * 0.55), MUTED);
-  for (let row = 0; row < rows; row++) text(doc, String(row), originX - 18, originY + row * cell + cell / 2 - 4, 16, Math.min(8, cell * 0.55), MUTED);
+  const tickStride = readableTemplate ? Math.max(1, Math.ceil(15 / cell)) : 1;
+  const tickSize = readableTemplate ? 7 : Math.min(8, cell * 0.55);
+  for (let column = 0; column < columns; column += tickStride) text(doc, String(column), originX + column * cell, originY - 15, cell * tickStride, tickSize, MUTED);
+  for (let row = 0; row < rows; row += tickStride) text(doc, String(row), originX - 18, originY + row * cell + cell / 2 - 4, 16, tickSize, MUTED);
   doc.lineWidth(0.4).strokeColor('#d6e4e8');
   for (let column = 0; column <= columns; column++) doc.moveTo(originX + column * cell, originY).lineTo(originX + column * cell, originY + rows * cell).stroke();
   for (let row = 0; row <= rows; row++) doc.moveTo(originX, originY + row * cell).lineTo(originX + columns * cell, originY + row * cell).stroke();
@@ -90,7 +103,7 @@ function placementMap(doc: PDFKit.PDFDocument, design: Design, bricks: Brick[], 
       doc.moveTo(left[0], left[1]).lineTo(tip[0], tip[1]).lineTo(right[0], right[1]).stroke();
       for (const stud of partTopStuds(brick, catalog)) doc.circle(originX + stud.x * cell, originY + stud.y * cell, cell * 0.13).fillAndStroke('#ffffff', INK);
     }
-    const labelSize = Math.min(10, cell * 0.68);
+    const labelSize = Math.min(10, cell * 0.68 * (readableTemplate ? Math.min(size.width, size.depth) : 1));
     const cx = bx + size.width * cell / 2;
     const cy = by + size.depth * cell / 2;
     doc.roundedRect(cx - labelSize * 0.8, cy - labelSize * 0.6, labelSize * 1.6, labelSize * 1.3, 2).fill('#ffffff');
@@ -103,13 +116,47 @@ function placementMap(doc: PDFKit.PDFDocument, design: Design, bricks: Brick[], 
   doc.restore();
 }
 
+async function repeatedStepPage(doc: PDFKit.PDFDocument, design: Design, group: ManualStepGroup, visibleIds: string[], totalSteps: number, catalog: CatalogContext) {
+  const first = group.steps[0], last = group.steps.at(-1)!, origin = group.origins[0];
+  const newIds = group.steps.flatMap(step => step.bricks.map(brick => brick.id));
+  const template = { ...design, bricks: first.bricks.map(brick => ({ ...brick, x: brick.x - origin.x, y: brick.y - origin.y, z: brick.z - origin.z })) };
+  const count = group.steps.length, pieces = first.bricks.length;
+  page(doc, `Steps ${first.index}-${last.index} / ${totalSteps}`, `Repeat these placements x${count}`,
+    `${pieces} ${pieces === 1 ? 'piece' : 'pieces'} per repeat / ${pieces * count} total in this group / ${visibleIds.length} of ${design.bricks.length} placed`);
+  doc.roundedRect(36, 123, 523, 66, 9).fill('#edf6ef');
+  text(doc, `GATHER FOR ALL ${count} REPEATS (PART / COLOR ID)`, 45, 131, 505, 9, BLUE, true);
+  billOfMaterials({ ...design, bricks: group.steps.flatMap(step => step.bricks) }).forEach((item, index) => {
+    const x = 45 + index % 4 * 128, y = 149 + Math.floor(index / 4) * 13;
+    doc.rect(x, y, 9, 9).fillAndStroke(catalog.colors[item.colorId].hex, MUTED);
+    text(doc, `${item.quantity}x ${item.partId} / ${item.colorId}`, x + 14, y, 111, 9, INK, true);
+  });
+  doc.roundedRect(36, 196, 300, 118, 12).fill('#f3f9fc');
+  illustration(doc, template, 42, 198, 288, 114);
+  text(doc, 'ONE REPEAT: EACH ROW IS ONE PIECE', 353, 199, 205, 9, BLUE, true);
+  placementRows(doc, template.bricks, 353, 224, 205, catalog);
+  text(doc, 'TEMPLATE MAP: LOCAL OFFSETS (dx, dy)', 36, 326, 310, 9, BLUE, true);
+  placementMap(doc, template, template.bricks, 36, 346, 300, 155, true);
+  text(doc, group.kind === 'stack' ? 'STACK IN PLACE - BUILD UPWARD' : 'REPEAT AT THE LISTED LOCATIONS', 36, 513, 523, 11, BLUE, true);
+  text(doc, group.kind === 'stack'
+    ? 'Place the same pattern at each listed height, in step order. Each layer joins the previous one. Do not build separate copies.'
+    : 'Repeat the numbered placements directly on the model, in step order. This is a placement pattern, not an off-model subassembly.', 36, 535, 523, 10, MUTED);
+  text(doc, 'AFTER THIS GROUP', 36, 579, 285, 9, BLUE, true);
+  await assemblyIllustration(doc, design, 36, 596, 300, 137, [...visibleIds], newIds);
+  text(doc, 'REPEAT / STEP / ORIGIN (X, Y, Z)', 350, 579, 210, 9, BLUE, true);
+  group.steps.forEach((step, index) => {
+    const at = group.origins[index];
+    text(doc, `${index + 1}  /  ${step.index}  /  (${at.x}, ${at.y}, ${at.z})`, 354, 599 + index * 17, 202, 9, INK, true);
+  });
+  text(doc, 'For every piece: X = origin X + dx; Y = origin Y + dy; body-bottom Z = origin Z. X/Y are studs; Z is plate heights (3.2 mm). Keep every numbered placement in the printed order.', 36, 746, 523, 9, MUTED);
+}
+
 /** Derives every page from the accepted design; no model-written part counts or coordinates. */
 export async function renderManualPdf(design: Design, inventory?: InventoryItem[]): Promise<Buffer> {
   const validation = validateDesign(design);
   if (!validation.valid) throw new Error(`Cannot create instructions for an invalid design: ${validation.errors.join('; ')}`);
   design = normalizeDesign(design);
   const catalog = catalogForDesign(design);
-  const doc = new PDFDocument({ autoFirstPage: false, size: 'A4', margin: MARGIN, bufferPages: true,
+  const doc = new PDFDocument({ autoFirstPage: false, size: 'A4', margin: MARGIN, bufferPages: false,
     info: { Title: `${design.title} - Building instructions`, Author: 'Sprout', Subject: `Design ${design.id}` } });
   const chunks: Buffer[] = [];
   const result = new Promise<Buffer>((resolve, reject) => {
@@ -118,8 +165,33 @@ export async function renderManualPdf(design: Design, inventory?: InventoryItem[
     doc.on('error', reject);
   });
   const steps = buildSteps(design);
+  const instructionGroups = groupManualSteps(steps);
   const bom = billOfMaterials(design);
   const allocation = inventory ? allocateInventory(design, inventory) : undefined;
+  const imported = [...new Set(design.bricks.map(brick => brick.partId))].map(id => catalog.parts[id]).filter(part => part.geometry);
+  const credits = imported.map(part => {
+    const title = `${part.id} / ${part.name}`;
+    const authors = [...new Set(part.geometry!.assets.map(asset => asset.author).filter(Boolean))].join('; ');
+    const titleHeight = doc.font('Helvetica-Bold').fontSize(10).heightOfString(title, { width: 520, lineGap: 2 });
+    const authorHeight = doc.font('Helvetica').fontSize(8).heightOfString(authors, { width: 520, lineGap: 2 });
+    return { part, title, authors, titleHeight, rowHeight: titleHeight + authorHeight + 22 };
+  });
+  let creditPages = 0, creditY = 721;
+  for (const row of credits) {
+    if (creditY + row.rowHeight > 720) { creditPages++; creditY = 194; }
+    creditY += row.rowHeight;
+  }
+  const allocationRows = allocation?.items.reduce((sum, item) => sum + item.sources.length + (item.missing ? 1 : 0), 0) ?? 0;
+  const totalPages = 2 + Math.ceil(bom.length / 18) + Math.ceil(allocationRows / 20) + instructionGroups.length + creditPages;
+  let pageNumber = 0;
+  // Finalize each vector page immediately instead of retaining hundreds of
+  // cumulative diagrams solely for the final page-number pass.
+  doc.on('pageAdded', () => {
+    pageNumber++;
+    doc.strokeColor('#d7e8eb').lineWidth(0.6).moveTo(MARGIN, 780).lineTo(PAGE_WIDTH - MARGIN, 780).stroke();
+    text(doc, 'SPROUT  /  Original brick-building guide', MARGIN, 790, 410, 8, MUTED);
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(BLUE).text(`${String(pageNumber).padStart(2, '0')} / ${String(totalPages).padStart(2, '0')}`, 501, 790, { width: 58, align: 'right', lineBreak: false });
+  });
 
   page(doc, 'Your building guide', design.title);
   text(doc, design.description.slice(0, 360), MARGIN, 100, 520, 12, MUTED);
@@ -137,7 +209,7 @@ export async function renderManualPdf(design: Design, inventory?: InventoryItem[
     .fill(doc.linearGradient(0, 478, 0, 533).stop(0, '#9fd86e').stop(1, '#5caf50'));
   doc.fillOpacity(0.78).roundedRect(53, 211, 489, 314, 13).fill('#ffffff');
   doc.restore();
-  illustration(doc, design, 46, 203, 503, 323);
+  await assemblyIllustration(doc, design, 46, 203, 503, 323);
   text(doc, `${design.bricks.length} PIECES     ${steps.length} BUILD STEPS     ${bom.length} PART / COLOR TYPES`, MARGIN, 558, 523, 11, BLUE, true);
   text(doc, 'Your parts and assembly steps.', MARGIN, 595, 510, 22, INK, true);
   text(doc, 'Gather your parts, follow the numbered steps, and keep the front of your model facing you. Each diagram and placement is generated from this exact design.', MARGIN, 632, 500, 12, MUTED);
@@ -197,7 +269,7 @@ export async function renderManualPdf(design: Design, inventory?: InventoryItem[
     ['1. Keep the same front', 'The isometric view keeps one camera for every step. +X points down-right; +Y points down-left. The top-down map has +X to the right and +Y downward.'],
     ['2. Count from zero', 'The green dot is grid origin (0, 0). A placement such as (2, 3) starts two studs right and three studs down from that origin. Coordinates mark the smallest X and Y corner of the brick body.'],
     ['3. Read the footprint', 'Each placement lists the body height in mm, then width x depth in studs after rotation. Width follows +X and depth follows +Y. All studs point upward. Slope arrows point down the ramp; dots mark its high stud row.'],
-    ['4. Add only the vivid pieces', 'The assembly view shows all earlier steps in pale colors. Add the vivid pieces labeled on the top-down map. Labels restart at 1 for each step and match that step\'s placement list.'],
+    ['4. Add only the vivid pieces', 'Pale pieces are already placed. Map numbers match the placement list. On xN pages, follow each listed step and add its origin to the template offsets. Stack pages repeat upward on the model.'],
     ['5. Check the body-bottom height', 'Place each piece at the printed height above the table. Z counts plate heights: z = 1 is 3.2 mm; z = 3 is 9.6 mm. A step can mix part heights. A step number is not a physical layer height.'],
     ['6. Support pieces as you build', 'Keep loose base pieces aligned until joined. Some later steps attach from below: follow the printed entry side and height, then raise the piece. Hold the built section as needed. These paths do not verify strength or hand clearance.'],
   ];
@@ -209,12 +281,17 @@ export async function renderManualPdf(design: Design, inventory?: InventoryItem[
   text(doc, 'Slope high edge: 0 deg = +Y; 90 deg = -X; 180 deg = -Y; 270 deg = +X. Rectangular parts use catalog width along X at 0 deg; 90 / 270 deg swap width and depth.', MARGIN, 716, 518, 10, MUTED);
 
   const visibleIds: string[] = [];
-  for (const step of steps) {
-    const newIds = step.bricks.map((brick) => brick.id);
+  for (const group of instructionGroups) {
+    const step = group.steps[0];
+    const newIds = group.steps.flatMap(step => step.bricks.map((brick) => brick.id));
     visibleIds.push(...newIds);
+    if (group.steps.length > 1) {
+      await repeatedStepPage(doc, design, group, visibleIds, steps.length, catalog);
+      continue;
+    }
     page(doc, `Step ${step.index} / ${steps.length}`, `Build step ${step.index}`, `${step.bricks.length} new pieces  /  Body bottom: ${(step.z * 3.2).toFixed(1)} mm (z = ${step.z})  /  ${visibleIds.length} of ${design.bricks.length} placed`);
     doc.roundedRect(36, 123, 523, 256, 15).fill('#f3f9fc');
-    illustration(doc, design, 42, 126, 330, 245, [...visibleIds], newIds);
+    await assemblyIllustration(doc, design, 42, 126, 330, 245, [...visibleIds], newIds);
     text(doc, step.placements[0].approach === 'above' ? 'ADD THESE PIECES' : 'ATTACH FROM BELOW', 390, 146, 145, 9, BLUE, true);
     text(doc, step.instruction, 390, 171, 145, 11, INK);
     text(doc, 'Vivid = new pieces\nPale = previous steps', 390, 329, 145, 9, MUTED);
@@ -226,15 +303,9 @@ export async function renderManualPdf(design: Design, inventory?: InventoryItem[
     text(doc, 'Map numbers match the placement list. Keep the same front before adding the next step.', 36, 744, 523, 9, MUTED);
   }
 
-  const imported = [...new Set(design.bricks.map(brick => brick.partId))].map(id => catalog.parts[id]).filter(part => part.geometry);
   if (imported.length) {
     let y = 721;
-    for (const part of imported) {
-      const title = `${part.id} / ${part.name}`;
-      const authors = [...new Set(part.geometry!.assets.map(asset => asset.author).filter(Boolean))].join('; ');
-      const titleHeight = doc.font('Helvetica-Bold').fontSize(10).heightOfString(title, { width: 520, lineGap: 2 });
-      const authorHeight = doc.font('Helvetica').fontSize(8).heightOfString(authors, { width: 520, lineGap: 2 });
-      const rowHeight = titleHeight + authorHeight + 22;
+    for (const { part, title, authors, titleHeight, rowHeight } of credits) {
       if (y + rowHeight > 720) {
         page(doc, 'Part geometry credits', 'Pinned catalog sources', 'These part drawings use official LDraw geometry. Parts and colors are identified by Rebrickable.');
         text(doc, 'LDraw geometry: CC BY 4.0. Connector metadata: LDCad Shadow Library, CC BY-SA 4.0. Meshes were transformed into the build coordinate system. Exact source URLs and hashes accompany the saved design and embedded LDraw export.', 36, 122, 523, 10, MUTED);
@@ -248,13 +319,6 @@ export async function renderManualPdf(design: Design, inventory?: InventoryItem[
     }
   }
 
-  const range = doc.bufferedPageRange();
-  for (let index = 0; index < range.count; index++) {
-    doc.switchToPage(index);
-    doc.strokeColor('#d7e8eb').lineWidth(0.6).moveTo(MARGIN, 780).lineTo(PAGE_WIDTH - MARGIN, 780).stroke();
-    text(doc, 'SPROUT  /  Original brick-building guide', MARGIN, 790, 410, 8, MUTED);
-    doc.font('Helvetica-Bold').fontSize(8).fillColor(BLUE).text(`${String(index + 1).padStart(2, '0')} / ${String(range.count).padStart(2, '0')}`, 501, 790, { width: 58, align: 'right', lineBreak: false });
-  }
   doc.end();
   return result;
 }

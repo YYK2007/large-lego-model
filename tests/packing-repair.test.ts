@@ -3,8 +3,9 @@ import test from 'node:test';
 import { repairPacking } from '../server/packing-repair.js';
 import { compilePlan, repairCompiledPlan, CompilationDeadlineError } from '../server/compiler.js';
 import { compileGeneratedPlan } from '../server/generation.js';
-import { PARTS, allocateInventory, buildSteps, footprint, partHeight, validateDesign, CATALOG_VERSION, type Brick, type Design, type InventoryItem } from '../shared/model.js';
+import { PARTS, allocateInventory, billOfMaterials, buildSteps, footprint, partHeight, validateDesign, CATALOG_VERSION, type Brick, type Design, type InventoryItem } from '../shared/model.js';
 import { ELLIPSE_GREEDY_BRICKS } from './fixtures/ellipse-greedy-packing.js';
+import { STRANDED_COURSE_BRICKS } from './fixtures/stranded-course.js';
 
 const design = (bricks: Brick[]): Design => ({ id: 'packing-test', title: 'Packing specimen', description: 'A structural packing regression.', prompt: 'A three dimensional specimen', source: 'ai', createdAt: '2026-10-10T00:00:00Z', schemaVersion: 2, coordinateSystem: 'stud-xy-plate-z', catalogVersion: CATALOG_VERSION, bricks });
 const brick = (id: string, partId: string, x: number, z: number): Brick => ({ id, partId, x, y: 0, z, rotation: 0, colorId: 15 });
@@ -20,6 +21,60 @@ function occupied(model: Design) {
   }
   return cells;
 }
+
+test('bounded seam repair visits small stranded courses before exhausting search on the main body', () => {
+  const input = design(STRANDED_COURSE_BRICKS), before = structuredClone(input);
+  assert.equal(validateDesign(input).connectedComponents, 4);
+  const repaired = repairPacking(input, { fixedIds: new Set(), deadline: Date.now() + 6000 });
+  assert.ok(repaired, 'The bounded search must reach and join the small edge course');
+  const check = validateDesign(repaired);
+  assert.equal(check.connectedComponents, 2, 'Prioritizing the main body only joins one of these seams before exhausting the same search budget');
+  assert.equal(check.valid, false, 'Remaining disconnected courses must still fail final admission');
+  assert.deepEqual(check.errors, ['The model contains disconnected groups. Side-to-side contact does not connect studs.']);
+  assert.deepEqual(occupied(repaired), occupied(input), 'Every colored cell, opening and outer boundary is unchanged');
+  assert.deepEqual(input, before);
+});
+
+function enclosedPlateSeam(): Design {
+  const input = design([]);
+  const add = (id: string, partId: string, x: number, y: number, z: number, rotation: 0 | 90 = 0) => input.bricks.push({ id, partId, colorId: 71, x, y, z, rotation });
+  add('floor', '91405', 0, 0, 0);
+  for (const x of [1, 5, 9]) add(`front-wall-${x}`, '3001', x, 1, 1, 90);
+  for (const x of [1, 11]) add(`side-wall-${x}`, '3001', x, 3, 1);
+  for (const x of [3, 7]) add(`rear-wall-${x}`, '3001', x, 7, 1, 90);
+  add('rear-support', '3034', 3, 5, 1, 90);
+  add('blocked', '3034', 3, 3, 2, 90);
+  add('neighbor', '3034', 3, 5, 2, 90);
+  for (const x of [3, 5, 7, 9]) add(`lid-${x}`, '3020', x, 3, 3);
+  return input;
+}
+
+test('cross-seam plates repair a blocked hanging strip without changing its volume or fixed enclosure', () => {
+  const input = enclosedPlateSeam(), before = structuredClone(input);
+  assert.match(validateDesign(input).errors.join(';'), /No assembly path.*Blocked pieces: blocked/);
+  const fixedIds = new Set(input.bricks.filter(brick => !['blocked', 'neighbor'].includes(brick.id)).map(brick => brick.id));
+  const options = { fixedIds, assemblyBlockedIds: new Set(['blocked']), deadline: Date.now() + 6000 };
+  const repaired = repairPacking(input, options)!;
+  assert.notEqual(repaired, input);
+  assert.equal(validateDesign(repaired).valid, true);
+  assert.equal(repaired.bricks.length, input.bricks.length + 2);
+  assert.deepEqual(occupied(repaired), occupied(input));
+  assert.deepEqual(repaired.bricks.filter(brick => fixedIds.has(brick.id)), input.bricks.filter(brick => fixedIds.has(brick.id)));
+  assert.equal(buildSteps(repaired).flatMap(step => step.bricks).length, repaired.bricks.length);
+  assert.ok(buildSteps(repaired).flatMap(step => step.placements).every(placement => placement.approach === 'above'));
+  const inventory = billOfMaterials(repaired).map(row => ({ ...row, source: 'Exact confirmed parts' }));
+  const owned = repairPacking(input, { ...options, inventory, ownedOnly: true, maxBricks: repaired.bricks.length })!;
+  assert.equal(validateDesign(owned).valid, true);
+  assert.equal(allocateInventory(owned, inventory).totalMissing, 0);
+  for (const constrained of [
+    { ...options, maxBricks: repaired.bricks.length - 1 },
+    { ...options, fixedIds: new Set([...fixedIds, 'neighbor']) },
+    { ...options, allowedPartIds: new Set(['3034']) },
+    { ...options, ownedOnly: true, inventory: inventory.map(row => row.partId === '3020' ? { ...row, quantity: row.quantity - 1 } : row) },
+  ]) assert.equal(repairPacking(input, constrained), input, 'An unavailable legal retile must not bypass a constraint');
+  assert.equal(repairPacking(input, { ...options, globalDeadline: Date.now() - 1 }), null, 'Local search allowance cannot extend the generation deadline');
+  assert.deepEqual(input, before);
+});
 
 test('backtracking repairs a curved boundary disconnected by both greedy scan orders without changing a cell', () => {
   for (const bricks of ELLIPSE_GREEDY_BRICKS) {

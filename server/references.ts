@@ -260,7 +260,7 @@ function viewHints(item: ReferenceCandidate): ReferenceViewHint[] {
   const patterns: [ReferenceViewHint, RegExp][] = [
     ['front', /\bfront(?:al)?\b/], ['rear', /\brear\b|\bback (?:side|view)\b/], ['side', /\bside (?:view|profile)\b|\blateral\b|\bin profile\b/],
     ...(['north', 'south', 'east', 'west'] as const).map(direction => [direction, new RegExp(`\\b${direction}(?:ern)?[ -](?:side|face|facade|elevation|view)\\b|\\b(?:from|facing|toward|towards) (?:the )?${direction}\\b`)] as [ReferenceViewHint, RegExp]),
-    ['above', /\baerial\b|\bfrom above\b|\btop view\b/], ['interior', /\binterior\b|\binside\b/], ['detail', /\bdetail\b|\bclose[ -]?up\b/],
+    ['above', /\baerial\b|\bfrom above\b|\btop view\b|\boverhead\b/], ['interior', /\binterior\b|\binside\b/], ['detail', /\bdetail\b|\bclose[ -]?up\b|\bup close\b/],
   ];
   return patterns.filter(([, pattern]) => pattern.test(text)).map(([hint]) => hint);
 }
@@ -278,6 +278,15 @@ function photoFamily(item: ReferenceCandidate): Set<string> {
 
 function sameFamily(a: Set<string>, b: Set<string>) { return [...a].some(key => b.has(key)); }
 
+const primaryViews: ReferenceViewHint[] = ['front', 'side', 'above'];
+function wholeViewHints(item: ReferenceCandidate): ReferenceViewHint[] {
+  return item.viewHints?.some(hint => hint === 'detail' || hint === 'interior') ? [] : item.viewHints || [];
+}
+function viewPriority(item: ReferenceCandidate, covered: Set<ReferenceViewHint>): number {
+  if (item.viewHints?.some(hint => hint === 'detail' || hint === 'interior')) return -1;
+  return wholeViewHints(item).filter(hint => !covered.has(hint)).reduce((score, hint) => score + (primaryViews.includes(hint) ? 10 : 1), 0);
+}
+
 // Preserve the best identity evidence, then offer other photo families before edits.
 function diverseOrder(items: ReferenceCandidate[]): ReferenceCandidate[] {
   const primary: ReferenceCandidate[] = [], edits: ReferenceCandidate[] = [], families: Set<string>[] = [];
@@ -287,15 +296,15 @@ function diverseOrder(items: ReferenceCandidate[]): ReferenceCandidate[] {
     else { primary.push(item); families.push(family); }
   }
   if (!primary.some(item => item.viewHints?.length)) return [...primary, ...edits];
-  const ordered = [primary.shift()!], covered = new Set(ordered[0].viewHints || []);
+  const ordered = [primary.shift()!], covered = new Set(wholeViewHints(ordered[0]));
   while (primary.length) {
     let best = 0, bestScore = -Infinity;
     primary.forEach((item, index) => {
-      const score = (item.viewHints || []).filter(hint => hint !== 'detail' && hint !== 'interior' && !covered.has(hint)).length * 4 - index / Math.max(1, primary.length);
+      const score = viewPriority(item, covered) - index / Math.max(1, primary.length);
       if (score > bestScore) { best = index; bestScore = score; }
     });
     const [next] = primary.splice(best, 1);
-    ordered.push(next); for (const hint of next.viewHints || []) covered.add(hint);
+    ordered.push(next); for (const hint of wholeViewHints(next)) covered.add(hint);
   }
   return [...ordered, ...edits];
 }
@@ -335,11 +344,11 @@ export async function discoverReferences(subject: ReferenceSubject, options: Opt
   const alternateSearch = names.length > 1 ? names.map(value => `(${wordsQuery(value)})`).join(' OR ') : wordsQuery(name);
   const searches = [...new Set([search, alternateSearch])];
   const enriched = options.complexity === 'complex' || options.complexity === 'intricate';
-  // Broad search already supplies hero/front views. Spend the two supplemental
-  // queries on other sides, without treating a query match as a verified angle.
+  // Explicitly seek all three required views. Top-view and aerial captions
+  // cover different sources; query matches never establish camera orientation.
   // Keep these searches simple: live CirrusSearch grouped OR queries returned
   // no raster hits, while the same canonical subject plus one view term did.
-  const angleSearches = [`${wordsQuery(name)} rear filetype:bitmap`, `${wordsQuery(name)} "side view" filetype:bitmap`];
+  const angleSearches = ['front', '"side view"', '"top view"', 'aerial'].map(view => `${wordsQuery(name)} ${view} filetype:bitmap`);
   searches.push(...angleSearches);
   const warnings: string[] = [];
   const results = await Promise.allSettled([
@@ -405,11 +414,14 @@ export async function discoverReferences(subject: ReferenceSubject, options: Opt
 /** Metadata suggests coverage; it cannot establish the camera poses in pixels. */
 export function referenceViewWarnings(images: readonly ReferenceImage[]): string[] {
   const photos = images.filter(image => image.metadata.mediaType !== 'model-render');
-  if (!photos.length) return [];
-  if (photos.length === 1) return ['Only one usable reference photograph was confirmed. Other sides and depth remain unverified.'];
-  const hints = new Set(photos.flatMap(image => image.metadata.viewHints || []).filter(hint => hint !== 'detail' && hint !== 'interior'));
-  if (hints.size < 2) return ['Multiple photographs were retrieved, but distinct camera angles could not be established from their metadata. Hidden sides and depth remain unverified.'];
-  return [`Reference metadata suggests ${[...hints].join(', ')} views. Verify these angles in the actual photos; labels do not prove independent viewpoints, and unseen sides remain uncertain.`];
+  const hints = new Set(photos.flatMap(image => wholeViewHints(image.metadata)));
+  const missing = primaryViews.filter(view => !hints.has(view)).map(view => view === 'above' ? 'top/above' : view);
+  const coverage = missing.length ? `Required reference views not established from photo metadata: ${missing.join(', ')}. Verify available pixels and disclose these views if still missing; do not invent unseen evidence.`
+    : 'Front, side and top/above are suggested by photo metadata only. Verify each requested view in the pixels before claiming coverage.';
+  if (!photos.length) return ['No reference photographs are available. Front, side and top/above reference views remain unverified.'];
+  if (photos.length === 1) return ['Only one usable reference photograph was confirmed. Other sides and depth remain unverified.', coverage];
+  if (hints.size < 2) return ['Multiple photographs were retrieved, but distinct camera angles could not be established from their metadata. Hidden sides and depth remain unverified.', coverage];
+  return [`Reference metadata suggests ${[...hints].join(', ')} views. Verify these angles in the actual photos; labels do not prove independent viewpoints, and unseen sides remain uncertain.`, coverage];
 }
 
 /** Pixels are transient: persist metadata only; send inlineData directly to the multimodal planner. */
@@ -425,10 +437,10 @@ export async function loadReferenceImages(candidates: ReferenceCandidate[], opti
   while (remaining.length) {
     // A failed download or duplicate photo does not cover an angle. Re-rank
     // against accepted pixels so another candidate can still supply that view.
-    const covered = new Set(images.flatMap(image => image.metadata.viewHints || []));
+    const covered = new Set(images.flatMap(image => wholeViewHints(image.metadata)));
     let next = 0, bestScore = -Infinity;
     if (images.length) remaining.forEach((item, index) => {
-      const score = (item.viewHints || []).filter(hint => hint !== 'detail' && hint !== 'interior' && !covered.has(hint)).length * 4 - index / remaining.length;
+      const score = viewPriority(item, covered) - index / remaining.length;
       if (score > bestScore) { next = index; bestScore = score; }
     });
     const [item] = remaining.splice(next, 1);

@@ -38,7 +38,11 @@ Later: ElevenLabs incoming/outgoing voice notes, physical stability solver and r
 
 ## Checkpoints
 
+- iMessage demo approval loop (2026-10-11): revisions retain the selected mode; the user approves an exact checked revision before automatic USDZ/PDF/parts delivery. Post-build Gemini review is preserved behind `PHOTON_VISUAL_REVIEW_ENABLED`, disabled for the demo. Website workflow remains the supporting viewer; the shared review metadata distinguishes skipped review from a match or mismatch.
+
 - Piece economy and automatic finish (2026-10-11): planning justifies added pieces by subject features or construction needs. Exact-volume packing compares checked alternatives by piece count, preserving color, fixed parts, stock and budgets. Website and iMessage jobs stop on a complete match, stalled reviews/construction, a shared time limit or a bounded attempt count; the best checked draft remains available. See `VERIFICATION.md` for tests and limits.
+
+- Reference coverage (2026-10-11): Quick and Detailed explicitly seek front, side and top/above source photographs, prioritize distinct whole-object views, and carry unavailable-angle warnings into planning and review. Public lookup and pixel-forwarding checks are recorded in `VERIFICATION.md`; retrieval alone does not establish generated likeness.
 
 - Catalog expansion (2026-10-11): full-index paginated discovery and resumable import, 80 bundled/96 locally usable part types, real four- and five-petal flowers, explicit simple-piece preference, exact set/loose-inventory support and compact pinned manifests. The unrestricted assembly objective remains incomplete; connector and geometry exclusions stay explicit. See `DYNAMIC-CATALOG.md` and `VERIFICATION.md`.
 
@@ -67,3 +71,9 @@ Later: ElevenLabs incoming/outgoing voice notes, physical stability solver and r
 - Implemented mode choice, command guide, truthful progress and bounded Quick delivery.
 - Repeated component failures switch to a whole-model plan; references prefer different views and can use an optional supported STL.
 - 468 regression tests and build pass. A live Quick rose finished in about 34 seconds with its bloom, stem and leaves. A separate phone Quick build finished in 67.3 seconds; the user confirmed that the USDZ opens and rotates. See `VERIFICATION.md` for evidence and remaining likeness/physical limitations.
+
+## Current demo: direct requests and user approval
+
+- Quick mode is archived behind `QUICK_MODE_ENABLED=false`, with code and tests retained. New requests start directly; requested detail does not select a separate speed mode.
+- Demo jobs skip the separate concept study and Gemini visual critic, preserve reference analysis and structural checks, and return the first complete checked draft. User feedback drives revisions; explicit approval sends matching USDZ, manual and parts files.
+- Delivery, timeout recovery and large-manual verification are tracked in `VERIFICATION.md`.

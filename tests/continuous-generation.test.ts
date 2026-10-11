@@ -28,6 +28,7 @@ async function setup(t: TestContext, reply: (record: Record, n: number) => unkno
   t.mock.method(globalThis, 'fetch', async (url: string, init: RequestInit = {}) => {
     assert.equal(new URL(String(url)).hostname, 'generativelanguage.googleapis.com', 'The retained uploaded reference must not trigger online research');
     const body = JSON.parse(String(init.body)), fields = body.generationConfig.responseJsonSchema.properties;
+    if (body.systemInstruction?.parts.some((part: { text?: string }) => part.text?.includes('Identify the visual subject'))) return response({ kind: 'original', name: '', location: '', aliases: [] });
     if (fields.usedImages) return response(observations);
     const kind: Record['kind'] = fields.concepts ? 'outline' : fields.selectedIndex ? 'choice' : fields.matches ? 'critic' : fields.edits ? 'patch' : 'plan';
     const record = { kind, body, init }; records.push(record);

@@ -25,6 +25,12 @@ For implementation, `BrickScene` can accept the active instance ID, committed vi
 
 ## Subassemblies and multiplayer
 
+### Repeat instructions inspected on 2026-10-11
+
+The official [Bouquet of Roses 10328, booklet 1](https://www.lego.com/cdn/product-assets/product.bi.core.pdf/6536293.pdf), printed page 17, shows one two-piece stem unit in an inset marked `7x`, total quantities of seven of each part, and arrows to the completed stack. I inspected the rendered PDF page. This is a published instruction example, not a physical build test.
+
+Apply that presentation principle to exact repeated placements: show the pattern once, make the repeat count and total required parts clear, and show every final location. Preserve the checked assembly order. Stacked layers must be described as repeated placements on the existing model, not independent subassemblies. Similar-looking steps with different parts, colors, orientation or insertion paths keep separate instructions.
+
 First add real assembly hierarchy and validated join operations as described in [complex-builds.md](complex-builds.md). A module view needs a local camera, its own gather tray, a clear `build 2` instruction when repeated, and a parent joining view that shows matching faces and insertion direction. Global piece counts include every copy even if instructions are reused.
 
 A future collaborative session should assign independent modules, reserve their exact pieces, show who owns each task, and explicitly request the transfer when another builder needs it. A receiving builder confirms the handoff. Allow a participant to recover, pause or reassign unfinished work without losing everyone's progress. Synchronizing one global step counter across devices is not equivalent to splitting a build. These changes require real session state; a room code alone should not be presented as working multiplayer.

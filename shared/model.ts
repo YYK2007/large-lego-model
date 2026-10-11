@@ -384,10 +384,11 @@ export function exportCsv(design: Design, inventory: InventoryItem[] = []): stri
     const safe = /^[=+@\-\t\r]/.test(text) ? `'${text}` : text;
     return `"${safe.replace(/"/g, '""')}"`;
   };
-  const rows: (string | number)[][] = [['Part ID', 'Part', 'Color ID', 'Color', 'Required', 'Owned', 'Missing', 'Sources']];
+  const rows: (string | number)[][] = [['Part ID', 'Part', 'Color ID', 'Color', 'Required', 'Owned', 'Missing', 'Sources', 'Part catalog link']];
   for (const item of allocateInventory(design, inventory).items) {
     rows.push([item.partId, catalog.parts[item.partId].name, item.colorId, catalog.colors[item.colorId].name, item.quantity, item.owned, item.missing,
-      item.sources.map((source) => `${source.source}: ${source.quantity}`).join('; ')]);
+      item.sources.map((source) => `${source.source}: ${source.quantity}`).join('; '),
+      `https://rebrickable.com/parts/${encodeURIComponent(item.partId)}/?color=${item.colorId}`]);
   }
   return rows.map((row) => row.map(cell).join(',')).join('\r\n') + '\r\n';
 }

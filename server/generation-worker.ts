@@ -29,8 +29,9 @@ const concept = async (value: unknown) => {
 const attempt = async (value: GenerationAttempt) => {
   if (controller.signal.aborted) return;
   if (value.status === 'valid' && (!value.design || value.partial || !validateDesign(value.design).valid)) throw new Error('The generation worker produced an invalid approved attempt.');
-  // SVG geometry work stays in this worker so Stop remains responsive.
-  const previewSvg = await renderGenerationAttempt(value);
+  // Review-disabled valid builds get a separate checked preview after delivery;
+  // persist their exact attempt immediately. Invalid attempts still need diagrams.
+  const previewSvg = workerData.visualReview === false && value.status === 'valid' ? undefined : await renderGenerationAttempt(value);
   if (controller.signal.aborted) return;
   const id = ++sequence;
   const saved = new Promise<void>(resolve => acknowledgements.set(id, resolve));
@@ -39,7 +40,7 @@ const attempt = async (value: GenerationAttempt) => {
 };
 try {
   const design = await generateDesign(workerData.input as GenerationInput,
-    progress => port.postMessage({ type: 'progress', progress }), { signal: controller.signal, continuous: workerData.continuous ?? true, stopWhenMatched: workerData.stopWhenMatched ?? true, onAttempt: attempt, onDraft: draft, onConcept: concept,
+    progress => port.postMessage({ type: 'progress', progress }), { signal: controller.signal, continuous: workerData.continuous ?? true, stopWhenMatched: workerData.stopWhenMatched ?? true, visualReview: workerData.visualReview ?? true, onAttempt: attempt, onDraft: draft, onConcept: concept,
       onUsage: usage => port.postMessage({ type: 'usage', usage }) });
   if (!controller.signal.aborted) {
     if (!validateDesign(design).valid) throw new Error('The generation worker produced an invalid result.');

@@ -50,6 +50,7 @@ export class GenerationJobs {
       if (record.version !== 1 || record.job?.id !== file.slice(0, -5)) throw new Error('A saved generation job has an unsupported format.');
       record.job.continuous ??= false;
       record.job.stopWhenMatched ??= false;
+      record.job.visualReview ??= true;
       record.job.attempts ??= [];
       if (isActiveJob(record.job)) {
         record.job.status = 'interrupted'; record.job.finishedAt = record.job.updatedAt = timestamp();
@@ -83,9 +84,11 @@ export class GenerationJobs {
     if (!Number.isSafeInteger(attempt) || attempt < 1 || !job.attempts?.some(item => item.attempt === attempt && item.previewAvailable)) throw new GenerationError('This attempt does not have a brick preview.', 404);
     return readFile(join(this.directory, id, `${attempt}.svg`), 'utf8');
   }
-  async submit(id: string, input: GenerationInput, resume?: { id: string; mode: 'draft' | 'original' }, execution: { continuous?: boolean; stopWhenMatched?: boolean } = {}): Promise<GenerationJob> {
+  async submit(id: string, input: GenerationInput, resume?: { id: string; mode: 'draft' | 'original' }, execution: { continuous?: boolean; stopWhenMatched?: boolean; visualReview?: boolean } = {}): Promise<GenerationJob> {
     await this.ready;
     if (!validId(id)) throw new GenerationError('A new build request needs a UUID requestId.', 400);
+    if (execution.visualReview !== undefined && typeof execution.visualReview !== 'boolean') throw new GenerationError('visualReview must be a boolean.', 400);
+    const visualReview = execution.visualReview ?? true;
     const snapshot = structuredClone(input);
     try { await verifyCatalogManifest(snapshot?.previous?.catalog); await verifyCatalogManifest(snapshot?.inventoryCatalog); }
     catch (error) { throw new GenerationError(error instanceof Error ? error.message : 'The part catalog could not be verified.', 400); }
@@ -97,13 +100,13 @@ export class GenerationJobs {
       if (this.closed) throw new GenerationError('The build server is shutting down.', 503);
       const existing = this.records.get(id);
       if (existing) {
-        if (existing.inputHash !== hash || existing.job.resumedFrom !== resume?.id || existing.job.continuous !== continuous || existing.job.stopWhenMatched !== stopWhenMatched) throw new GenerationError('That request ID already belongs to a different build.', 409);
+        if (existing.inputHash !== hash || existing.job.resumedFrom !== resume?.id || existing.job.continuous !== continuous || existing.job.stopWhenMatched !== stopWhenMatched || existing.job.visualReview !== visualReview) throw new GenerationError('That request ID already belongs to a different build.', 409);
         return structuredClone(existing.job);
       }
       if (this.activeCount >= (this.options.maxWorkers ?? 2) + (this.options.maxQueued ?? 8)) throw new GenerationError('The build queue is full. Please try again after a build finishes.', 429);
       const now = timestamp();
       const record: Record = { version: 1, input: snapshot, inputHash: hash,
-        job: { id, status: 'queued', quality: snapshot.quality ?? 'detailed', continuous, stopWhenMatched, attempts: [], createdAt: now, updatedAt: now, milestones: [],
+        job: { id, status: 'queued', quality: snapshot.quality ?? 'detailed', continuous, stopWhenMatched, visualReview, attempts: [], createdAt: now, updatedAt: now, milestones: [],
           ...(resume ? { resumedFrom: resume.id, resumeMode: resume.mode } : {}) } };
       await this.persist(record);
       this.records.set(id, record);
@@ -118,7 +121,7 @@ export class GenerationJobs {
     const input = structuredClone(record.input);
     const draft = record.job.bestDraftId ? await (this.options.load ?? loadDesign)(record.job.bestDraftId) : null;
     if (draft) input.previous = draft;
-    return this.submit(requestId, input, { id, mode: draft ? 'draft' : 'original' }, { continuous: record.job.continuous, stopWhenMatched: record.job.stopWhenMatched });
+    return this.submit(requestId, input, { id, mode: draft ? 'draft' : 'original' }, { continuous: record.job.continuous, stopWhenMatched: record.job.stopWhenMatched, visualReview: record.job.visualReview });
   }
   async cancel(id: string): Promise<GenerationJob> {
     await this.ready;
@@ -147,7 +150,7 @@ export class GenerationJobs {
       await this.persist(record);
       const id = record.job.id;
       try {
-        const worker = new Worker(this.options.workerUrl ?? new URL('./generation-worker.ts', import.meta.url), { workerData: { input: record.input, continuous: record.job.continuous, stopWhenMatched: record.job.stopWhenMatched } });
+        const worker = new Worker(this.options.workerUrl ?? new URL('./generation-worker.ts', import.meta.url), { workerData: { input: record.input, continuous: record.job.continuous, stopWhenMatched: record.job.stopWhenMatched, visualReview: record.job.visualReview } });
         // Every job has one wall-clock deadline, including slow CPU
         // work or visual review. It starts here, never while waiting in the queue.
         const quick = record.job.quality === 'quick' && record.job.stopWhenMatched;
@@ -175,13 +178,15 @@ export class GenerationJobs {
     return this.serial(async () => {
       const record = this.records.get(id);
       if (!record || !isActiveJob(record.job)) return;
-      if (record.job.quality === 'quick' && record.job.stopWhenMatched) {
+      if (record.job.visualReview === false || record.job.quality === 'quick' && record.job.stopWhenMatched) {
         if (record.job.bestDraftId) {
           // This is the exact immutable checked checkpoint. A successful job
           // does not imply its visual review passed; that lives on the design.
           record.job.resultId = record.job.bestDraftId;
           await this.finish(record, 'succeeded');
-        } else await this.finish(record, 'failed', { message: 'Quick mode reached its time limit without a connected draft. Try Detailed mode or a simpler interpretation.', checks: [] });
+        } else await this.finish(record, 'failed', { message: record.job.visualReview === false
+          ? 'The build reached its time limit without a connected draft. Your previous build is safe. Try a simpler interpretation or another attempt.'
+          : 'Quick mode reached its time limit without a connected draft. Try Detailed mode or a simpler interpretation.', checks: [] });
       } else await this.finish(record, 'failed', { message: 'The build reached its time limit. Any saved draft is retained.', checks: [] });
     });
   }
@@ -192,9 +197,9 @@ export class GenerationJobs {
     await this.persist(record); await this.stopWorker(record.job.id); await this.pump();
   }
   private async message(record: Record, message: { type: string; progress?: JobProgress; usage?: GenerationJob['usage']; design?: Design; concept?: unknown; attempt?: GenerationAttempt; previewSvg?: string; sequence?: number; error?: GenerationJob['error'] }) {
-    // An attempt received before Stop is still retained, even if its disk write
-    // was queued. Other late callbacks must not change the stopped job.
-    if (record.job.status !== 'running' && message.type !== 'attempt') return;
+    // Attempts and drafts received before Stop are retained, even if their disk
+    // writes were queued. The worker message listener rejects arrivals after Stop.
+    if (record.job.status !== 'running' && message.type !== 'attempt' && !(message.type === 'draft' && record.job.status === 'cancelled')) return;
     if (message.type === 'attempt' && message.attempt) {
       const attempt = message.attempt;
       const history = record.job.attempts ??= [];
@@ -240,7 +245,13 @@ export class GenerationJobs {
       // Drafts get their own immutable saved revision.
       const design = message.type === 'draft' ? { ...message.design, id: randomUUID() } : message.design;
       await (this.options.save ?? saveDesign)({ ...design, inventory: record.input.inventory || [], inventoryCatalog: record.input.inventoryCatalog });
-      if (record.job.status !== 'running') return;
+      if (record.job.status !== 'running') {
+        if (message.type === 'draft' && record.job.status === 'cancelled') {
+          record.job.bestDraftId = design.id; record.job.updatedAt = timestamp();
+          await this.persist(record);
+        }
+        return;
+      }
       record.job.bestDraftId = design.id; record.job.updatedAt = timestamp();
       if (message.type === 'complete') { record.job.resultId = design.id; await this.finish(record, 'succeeded'); }
       else {

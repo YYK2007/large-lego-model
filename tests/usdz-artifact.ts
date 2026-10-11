@@ -30,21 +30,27 @@ export function inspectUsdz(files: Map<string, string>) {
   const rootTransform = new Matrix4().fromArray(numbers(root[1]));
   assert.deepEqual(rootTransform.elements, [.008, 0, 0, 0, 0, .008, 0, 0, 0, 0, .008, 0, 0, 0, 0, 1]);
   const materials = new Map(Array.from(model.matchAll(/def Material "([^"]+)"[\s\S]*?color3f inputs:diffuseColor = \(([^)]+)\)/g), match => [match[1], numbers(match[2])]));
-  const meshes = Array.from(model.matchAll(/def Xform "((?:Body|Stud|Color)_[^"]+)" \(\s*prepend references = @\.\/([^@]+)@[\s\S]*?matrix4d xformOp:transform = ([^\n]+)[\s\S]*?rel material:binding = <\/Materials\/([^>]+)>/g), match => {
-    const geometry = files.get(match[2]);
-    assert.ok(geometry, `Geometry ${match[2]} resolves`);
-    const positions = Float64Array.from(numbers(geometry.match(/point3f\[\] points = \[([^\]]+)\]/)![1]));
-    const normals = Float64Array.from(numbers(geometry.match(/normal3f\[\] normals = \[([^\]]+)\]/)![1]));
-    const indices = Uint32Array.from(numbers(geometry.match(/int\[\] faceVertexIndices = \[([^\]]+)\]/)![1]));
-    const faceCounts = numbers(geometry.match(/int\[\] faceVertexCounts = \[([^\]]+)\]/)![1]);
-    assert.equal(positions.length % 3, 0);
-    assert.equal(normals.length, positions.length);
-    assert.ok(faceCounts.every(count => count === 3), 'All exported faces are triangles');
-    assert.equal(indices.length, faceCounts.length * 3);
+  const geometries = new Map<string, { positions: Float64Array; normals: Float64Array; indices: Uint32Array }>();
+  const meshes = Array.from(model.matchAll(/def Xform "((?:Body|Stud|Color|Piece)_[^"]+)" \(\s*prepend references = @\.\/([^@]+)@[\s\S]*?matrix4d xformOp:transform = ([^\n]+)[\s\S]*?rel material:binding = <\/Materials\/([^>]+)>/g), match => {
+    let parsed = geometries.get(match[2]);
+    if (!parsed) {
+      const geometry = files.get(match[2]);
+      assert.ok(geometry, `Geometry ${match[2]} resolves`);
+      const positions = Float64Array.from(numbers(geometry.match(/point3f\[\] points = \[([^\]]+)\]/)![1]));
+      const normals = Float64Array.from(numbers(geometry.match(/normal3f\[\] normals = \[([^\]]+)\]/)![1]));
+      const indices = Uint32Array.from(numbers(geometry.match(/int\[\] faceVertexIndices = \[([^\]]+)\]/)![1]));
+      const faceCounts = numbers(geometry.match(/int\[\] faceVertexCounts = \[([^\]]+)\]/)![1]);
+      assert.equal(positions.length % 3, 0);
+      assert.equal(normals.length, positions.length);
+      assert.ok(faceCounts.every(count => count === 3), 'All exported faces are triangles');
+      assert.equal(indices.length, faceCounts.length * 3);
+      parsed = { positions, normals, indices };
+      geometries.set(match[2], parsed);
+    }
     const transform = rootTransform.clone().multiply(new Matrix4().fromArray(numbers(match[3])));
     const color = materials.get(match[4]);
     assert.ok(color, 'Each mesh has a material');
-    return { name: match[1], positions, normals, indices, transform, normalMatrix: new Matrix3().getNormalMatrix(transform), color };
+    return { name: match[1], geometryFile: match[2], ...parsed, transform, normalMatrix: new Matrix3().getNormalMatrix(transform), color };
   });
   assert.ok(meshes.length > 0);
   assert.equal(meshes.length, Array.from(model.matchAll(/prepend references = /g)).length, 'Every geometry reference is inspected');
@@ -54,10 +60,12 @@ export function inspectUsdz(files: Map<string, string>) {
 export type ExportedPart = { name: string; transform: Matrix4; bounds: Box3; vertices: Vector3[]; normals: Vector3[] };
 
 // Verify the actual exported triangle stream against canonical geometry. Splitting
-// it into parts here preserves the independent metric/shape tests after batching.
+// it into parts here preserves metric/shape tests after batching or shape reuse.
 export function verifyBatchedUsdz(files: Map<string, string>, design: Design, collectParts = true) {
   const { meshes } = inspectUsdz(files);
-  assert.ok(meshes.every(mesh => mesh.name.startsWith('Color_')), 'Native export batches by color');
+  const reused = meshes[0].name.startsWith('Piece_');
+  assert.ok(meshes.every(mesh => mesh.name.startsWith(reused ? 'Piece_' : 'Color_')), 'One consistent native encoding');
+  const placements = new Map(meshes.map(mesh => [mesh.name, mesh]));
   const source = createBrickModel(design);
   source.scale.setScalar(METERS_PER_STUD);
   source.updateMatrixWorld(true);
@@ -73,7 +81,8 @@ export function verifyBatchedUsdz(files: Map<string, string>, design: Design, co
       const material = object.material as MeshStandardMaterial;
       resources.add(object.geometry); resources.add(material);
       const color = material.color.toArray();
-      const matches = meshes.filter(mesh => mesh.color.every((value, axis) => Math.abs(value - color[axis]) < 1e-6));
+      const candidates = reused ? [placements.get(object.parent!.name.replace('Brick_', 'Piece_'))!] : meshes;
+      const matches = candidates.filter(mesh => mesh && mesh.color.every((value, axis) => Math.abs(value - color[axis]) < 1e-6));
       assert.ok(matches.length > 0, `Exported batches exist for ${object.name}'s color`);
       const batch = matches.find(mesh => offsets.get(mesh)! < mesh.indices.length);
       assert.ok(batch, `No missing geometry for ${object.name}`);

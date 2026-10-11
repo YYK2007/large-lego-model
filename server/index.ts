@@ -26,7 +26,7 @@ app.use(express.json({ limit: '8mb' }));
 app.use((_req, res, next) => { res.setHeader('X-Content-Type-Options', 'nosniff'); next(); });
 app.get('/api/status', (_req, res) => {
   const config = readConfig();
-  res.json({ gemini: Boolean(config.geminiKey), model: config.model, rebrickable: Boolean(config.rebrickableKey), photon: config.photonReady, photonLive: false, photonJobPolicy: 2 });
+  res.json({ gemini: Boolean(config.geminiKey), model: config.model, rebrickable: Boolean(config.rebrickableKey), photon: config.photonReady, photonLive: false, photonJobPolicy: 3 });
 });
 app.get('/api/catalog', async (_req, res) => {
   const catalog = await loadCachedCatalog();
@@ -47,7 +47,7 @@ app.get('/api/designs/:id', async (req, res) => {
   res.json(design);
 });
 app.post('/api/generation-jobs', async (req, res) => {
-  res.status(202).json(await jobs.submit(req.body.requestId, req.body.input, undefined, { continuous: true, stopWhenMatched: true }));
+  res.status(202).json(await jobs.submit(req.body.requestId, req.body.input, undefined, { continuous: true, stopWhenMatched: true, visualReview: req.body.visualReview }));
 });
 app.get('/api/generation-jobs/:id', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');

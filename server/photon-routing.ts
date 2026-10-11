@@ -12,6 +12,7 @@ export interface PhotonImage {
 }
 export type PhotonQuality = 'quick' | 'detailed';
 export type PendingPhotonRequest = { kind: 'new' | 'design'; prompt: string; image?: PhotonImage };
+export type ApprovedDelivery = Partial<Record<'model' | 'manual' | 'parts', true>>;
 
 export interface Conversation {
   designId?: string;
@@ -31,6 +32,9 @@ export interface Conversation {
   lastDeliveryAt?: number;
   lastProgressAt?: number;
   lastProgressKey?: string;
+  feedbackDesignId?: string;
+  approvedDesignId?: string;
+  approvedDeliveries?: Record<string, ApprovedDelivery>;
 }
 
 export class PhotonInputError extends Error {}
@@ -47,23 +51,38 @@ export function rememberMessageIds(handledIds: string[], ids: string[]): string[
   return [...new Set([...handledIds, ...ids])].slice(-MESSAGE_HISTORY_LIMIT);
 }
 
-type PhotonCommand = { kind: 'manual' | 'model' | 'stop' | 'status' | 'chat' | 'new' | 'design'; prompt: string } | { kind: 'open'; designId: string; prompt: '' } | { kind: 'use'; attempt: number; prompt: '' } | { kind: 'quality'; quality: PhotonQuality; prompt: string };
+type PhotonCommand = { kind: 'manual' | 'model' | 'parts' | 'approve' | 'retry' | 'clarify' | 'stop' | 'status' | 'chat' | 'new' | 'design'; prompt: string } | { kind: 'open'; designId: string; prompt: '' } | { kind: 'use'; attempt: number; prompt: '' } | { kind: 'quality'; quality: PhotonQuality; prompt: string };
 const validDesignId = (value: unknown): value is string => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(value);
+const commandHelp = 'I don’t recognize that command. Use /status for progress, /stop to stop generation, /approve to accept a checked preview, or /retry to resend missing files from your approved build. /model, /manual and /parts request a copy. Send /new followed by an idea to start another build.';
+
+/** Only clear edits reuse a build's mode; a new subject still gets a choice. */
+export function isRevisionPrompt(prompt: string): boolean {
+  return /^(?:make|turn|keep|paint)\s+(?:it|this|that|them|the (?:build|model))\b/i.test(prompt)
+    || /^(?:make|keep)\s+the\b.+\b(?:taller|shorter|bigger|larger|smaller|wider|narrower|thicker|thinner|simpler|more|less)\b/i.test(prompt)
+    || /^(?:add|remove|replace|adjust|change|move|enlarge|shrink|increase|decrease|reduce)\b/i.test(prompt)
+    || /^(?:looks good|this looks good|that looks good|i like it)[, ]+but\b/i.test(prompt)
+    || /^(?:can|could) you\s+(?:make it|add|remove|replace|adjust|change|move)\b/i.test(prompt);
+}
 
 export function routeText(text: string): PhotonCommand {
   const prompt = text.trim();
   const natural = prompt.toLowerCase().replace(/[’]/g, "'").replace(/[?!.]+$/, '').trim();
+  if (prompt.startsWith('/') && !['approve', 'retry', 'manual', 'instructions', 'stop', 'cancel', 'status', 'model', '3d', 'parts', 'use', 'open', 'new', 'quick', 'detailed'].includes(/^\/([a-z0-9]+)/i.exec(prompt)?.[1].toLowerCase() ?? '')) throw new PhotonInputError(commandHelp);
+  if (natural === '/retry') return { kind: 'retry', prompt: '' };
+  if (['/approve', 'approve', 'approved', 'i approve this build', 'looks good', 'this looks good', 'that looks good'].includes(natural)) return { kind: 'approve', prompt: '' };
+  if (/^(?:i (?:don't|do not) like (?:it|this)|(?:it|this|that) (?:looks (?:bad|wrong)|(?:isn't|is not) (?:right|good))|(?:it|this|that) (?:doesn't|does not) look right|not (?:right|good)|try again|no)$/.test(natural)) return { kind: 'clarify', prompt: '' };
   if (/\bwhat(?:'s| is|s) (?:going on|happening)\b/.test(natural)) return { kind: 'status', prompt: '' };
   if (['status', '/status', 'update', 'progress', 'any update', 'any updates', 'are you working', 'are you still working', 'still working', 'is it ready', 'is it done', 'are you done', 'how is it going', "how's it going", 'how long', 'how much longer', "what's happening"].includes(natural)) return { kind: 'status', prompt: '' };
   if (/^(?:ok(?:ay)?|thanks|thank you|cool|great|sounds good|yes|yep|sure)$/.test(natural)) return { kind: 'chat', prompt: '' };
   const quality = /^\/?(quick|detailed)(?=$|[\s:,.!-])(?:\s*[:,-]\s*|\s+)?(.*)$/i.exec(prompt);
   if (quality) return { kind: 'quality', quality: quality[1].toLowerCase() as PhotonQuality, prompt: /^(?:mode)?(?:[, ]*please)?[.!]*$/i.test(quality[2].trim()) ? '' : quality[2].trim() };
   const modeSuffix = /^(.*?)\s+(?:in|using)\s+(quick|detailed)\s+mode(?:,?\s+please)?[.!]?$/i.exec(prompt);
-  if (modeSuffix) return { kind: 'quality', quality: modeSuffix[2].toLowerCase() as PhotonQuality, prompt: modeSuffix[1].trim() };
+  if (modeSuffix && !prompt.startsWith('/')) return { kind: 'quality', quality: modeSuffix[2].toLowerCase() as PhotonQuality, prompt: modeSuffix[1].trim() };
   if (/^\/?(?:manual|instructions)$/i.test(prompt)) return { kind: 'manual', prompt: '' };
   if (/^\/?(?:stop|cancel)$/i.test(prompt)) return { kind: 'stop', prompt: '' };
   if (/^\/?status$/i.test(prompt)) return { kind: 'status', prompt: '' };
   if (/^\/?(?:model|3d)$/i.test(prompt)) return { kind: 'model', prompt: '' };
+  if (/^\/?(?:parts|parts list)$/i.test(prompt)) return { kind: 'parts', prompt: '' };
   const use = /^\/?use(?:\s+(\d+))?$/i.exec(prompt);
   if (use) {
     const attempt = Number(use[1]);
@@ -78,6 +97,7 @@ export function routeText(text: string): PhotonCommand {
   }
   const fresh = /^\/new(?:\s+([\s\S]*))?$/i.exec(prompt);
   if (fresh) return { kind: 'new', prompt: fresh[1]?.trim() ?? '' };
+  if (prompt.startsWith('/')) throw new PhotonInputError(commandHelp);
   return { kind: 'design', prompt };
 }
 
@@ -109,7 +129,16 @@ export function parseConversation(value: unknown): Conversation {
   const data = value as Record<string, unknown>;
   if (!Array.isArray(data.handledIds) || data.handledIds.some(id => typeof id !== 'string')) throw new Error('Invalid saved message history.');
   if (data.designId !== undefined && !validDesignId(data.designId)) throw new Error('Invalid saved design ID.');
-  for (const name of ['jobId', 'lastDraftId', 'finishedJobId']) if (data[name] !== undefined && !validDesignId(data[name])) throw new Error('Invalid saved job or draft ID.');
+  for (const name of ['jobId', 'lastDraftId', 'finishedJobId', 'feedbackDesignId', 'approvedDesignId']) if (data[name] !== undefined && !validDesignId(data[name])) throw new Error('Invalid saved job or draft ID.');
+  let approvedDeliveries: Record<string, ApprovedDelivery> | undefined;
+  if (data.approvedDeliveries !== undefined) {
+    if (!data.approvedDeliveries || typeof data.approvedDeliveries !== 'object' || Array.isArray(data.approvedDeliveries)) throw new Error('Invalid saved approval deliveries.');
+    approvedDeliveries = Object.fromEntries(Object.entries(data.approvedDeliveries).map(([id, value]) => {
+      if (!validDesignId(id) || !value || typeof value !== 'object' || Array.isArray(value)
+        || Object.entries(value).some(([key, sent]) => !['model', 'manual', 'parts'].includes(key) || sent !== true)) throw new Error('Invalid saved approval deliveries.');
+      return [id, { ...value } as ApprovedDelivery];
+    }));
+  }
   if (data.lastAttempt !== undefined && (!Number.isSafeInteger(data.lastAttempt) || (data.lastAttempt as number) < 0)) throw new Error('Invalid saved attempt number.');
   if (data.spaceId !== undefined && (typeof data.spaceId !== 'string' || !data.spaceId.length || data.spaceId.length > 1000)) throw new Error('Invalid saved conversation address.');
   if (data.requestPrompt !== undefined && (typeof data.requestPrompt !== 'string' || data.requestPrompt.length > 4000)) throw new Error('Invalid saved build prompt.');
@@ -134,6 +163,9 @@ export function parseConversation(value: unknown): Conversation {
     ...(data.spaceId ? { spaceId: data.spaceId as string } : {}),
     ...(data.jobId ? { jobId: data.jobId as string } : {}),
     ...(data.lastDraftId ? { lastDraftId: data.lastDraftId as string } : {}),
+    ...(data.feedbackDesignId ? { feedbackDesignId: data.feedbackDesignId as string } : {}),
+    ...(data.approvedDesignId ? { approvedDesignId: data.approvedDesignId as string } : {}),
+    ...(approvedDeliveries ? { approvedDeliveries } : {}),
     ...(data.finishedJobId ? { finishedJobId: data.finishedJobId as string } : {}),
     ...(data.lastAttempt !== undefined ? { lastAttempt: data.lastAttempt as number } : {}),
     ...(data.requestPrompt ? { requestPrompt: data.requestPrompt as string } : {}),
@@ -155,6 +187,9 @@ export function importSavedDesign(conversation: Conversation, value: unknown): C
     inventory: inventorySnapshot(saved.inventory, inventoryCatalog),
     ...(Object.keys(inventoryCatalog.parts).length || Object.keys(inventoryCatalog.colors).length ? { inventoryCatalog } : {}),
     handledIds: [...conversation.handledIds],
+    ...(conversation.quality ? { quality: conversation.quality } : {}),
+    ...(conversation.approvedDesignId ? { approvedDesignId: conversation.approvedDesignId } : {}),
+    ...(conversation.approvedDeliveries ? { approvedDeliveries: structuredClone(conversation.approvedDeliveries) } : {}),
     ...(conversation.spaceId ? { spaceId: conversation.spaceId } : {}),
   };
 }

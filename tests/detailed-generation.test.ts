@@ -28,7 +28,7 @@ const patch = (path: string, value: unknown) => ({ edits: [{ op: 'replace', path
 const reviewed = (value: unknown): unknown => value && typeof value === 'object' && 'matches' in value ? { identity: { status: 'recognizable', perceivedSubject: 'The requested specimen', evidence: 'The rendered contours and arrangement distinguish the requested subject.', correction: '' }, ...value } : value;
 const response = (value: unknown) => new Response(JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: JSON.stringify(reviewed(value)) }] }, finishReason: 'STOP' }],
   usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 20, thoughtsTokenCount: 5, cachedContentTokenCount: 2 } }), { headers: { 'content-type': 'application/json' } });
-type RequestBody = { contents: { parts: { text?: string; inlineData?: { mimeType: string; data: string } }[] }[];
+type RequestBody = { systemInstruction?: { parts: { text?: string }[] }; contents: { parts: { text?: string; inlineData?: { mimeType: string; data: string } }[] }[];
   generationConfig: { responseJsonSchema: { properties: Record<string, unknown> }; thinkingConfig?: { thinkingLevel: string }; maxOutputTokens: number } };
 type Recorded = { kind: 'outline' | 'choice' | 'plan' | 'patch' | 'critic'; body: RequestBody; init: RequestInit };
 
@@ -45,6 +45,7 @@ async function setup(t: TestContext, options: { plans?: unknown[]; critics?: unk
   t.mock.method(globalThis, 'fetch', async (input: string | URL, init: RequestInit = {}) => {
     assert.equal(new URL(String(input)).hostname, 'generativelanguage.googleapis.com', 'An uploaded image and disabled catalog key must avoid external research/catalog requests');
     const body = JSON.parse(String(init.body)) as RequestBody, fields = body.generationConfig.responseJsonSchema.properties;
+    if (body.systemInstruction?.parts.some((part: { text?: string }) => part.text?.includes('Identify the visual subject'))) return response({ kind: 'original', name: '', location: '', aliases: [] });
     if (fields.usedImages) return response(observations);
     const kind: Recorded['kind'] = fields.concepts ? 'outline' : fields.selectedIndex ? 'choice' : fields.matches ? 'critic' : fields.edits ? 'patch' : 'plan';
     const record = { kind, body, init }; records.push(record); options.onRequest?.(record);
@@ -89,7 +90,7 @@ test('default detailed flow selects actual concept PNGs, checkpoints decoded geo
   assert.equal(flow.records[2].body.generationConfig.maxOutputTokens, 24000);
   assert.equal(design.research?.uploadedImage, true);
   assert.deepEqual(design.research?.sources, []);
-  assert.deepEqual(usage.at(-1), { requests: 5, inputTokens: 50, outputTokens: 100, thinkingTokens: 25, cachedTokens: 10, elapsedMs: usage.at(-1)!.elapsedMs });
+  assert.deepEqual(usage.at(-1), { requests: 6, inputTokens: 60, outputTokens: 120, thinkingTokens: 30, cachedTokens: 12, elapsedMs: usage.at(-1)!.elapsedMs });
   const occupied = new Set<string>();
   for (const brick of design.bricks) {
     const dimensions = footprint(brick);
@@ -129,7 +130,9 @@ test('default detailed deadline is 300 seconds and quick deadline is 150 seconds
     let started!: () => void, aborted = false, calls = 0;
     const ready = new Promise<void>(resolve => { started = resolve; });
     t.mock.method(globalThis, 'fetch', (_input: unknown, init: RequestInit) => {
-      if (JSON.parse(String(init.body)).generationConfig.responseJsonSchema.properties.usedImages) return Promise.resolve(response(observations));
+      const body = JSON.parse(String(init.body));
+      if (body.systemInstruction?.parts.some((part: { text?: string }) => part.text?.includes('Identify the visual subject'))) return response({ kind: 'original', name: '', location: '', aliases: [] });
+      if (body.generationConfig.responseJsonSchema.properties.usedImages) return Promise.resolve(response(observations));
       calls++;
       return new Promise<Response>((_resolve, reject) => {
         init.signal!.addEventListener('abort', () => { aborted = true; reject(new Error('Provider request aborted')); }, { once: true }); started();
@@ -240,9 +243,9 @@ test('truncated higher-reasoning outline and construction responses retry once a
     assert.equal(validateDesign(design).valid, true);
     assert.equal(flow.records.length, 5);
     assert.equal(conceptsSaved, 1); assert.equal(drafts, 1);
-    assert.equal(usage.at(-1)?.requests, 6);
-    assert.equal(usage.at(-1)?.thinkingTokens, 13462);
-    assert.equal(usage.at(-1)?.outputTokens, 649);
+    assert.equal(usage.at(-1)?.requests, 7);
+    assert.equal(usage.at(-1)?.thinkingTokens, 13467);
+    assert.equal(usage.at(-1)?.outputTokens, 669);
     assert.match(design.research!.warnings.join(' '), /incomplete response was discarded/);
   });
 });
@@ -367,6 +370,8 @@ test('cancellation aborts an in-flight detailed outline request and produces no 
   let started!: () => void, calls = 0, aborted = false;
   const ready = new Promise<void>(resolve => { started = resolve; });
   t.mock.method(globalThis, 'fetch', (_input: unknown, init: RequestInit) => {
+    const body = JSON.parse(String(init.body));
+    if (body.systemInstruction?.parts.some((part: { text?: string }) => part.text?.includes('Identify the visual subject'))) return response({ kind: 'original', name: '', location: '', aliases: [] });
     calls++;
     return new Promise<Response>((_resolve, reject) => { init.signal!.addEventListener('abort', () => { aborted = true; reject(new Error('Aborted')); }, { once: true }); started(); });
   });

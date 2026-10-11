@@ -1,6 +1,6 @@
 import { catalogForDesign, type CatalogContext, footprint, partHeight, partTopStuds, partBottomSites, validateDesign, allocateInventory, type Brick, type Design, type InventoryItem } from '../shared/model.js';
 
-type Options = { fixedIds: ReadonlySet<string>; inventory?: InventoryItem[]; ownedOnly?: boolean; maxBricks?: number; allowedPartIds?: ReadonlySet<string>; deadline?: number };
+type Options = { fixedIds: ReadonlySet<string>; inventory?: InventoryItem[]; ownedOnly?: boolean; maxBricks?: number; allowedPartIds?: ReadonlySet<string>; deadline?: number; globalDeadline?: number; assemblyBlockedIds?: ReadonlySet<string> };
 const key = (x: number, y: number, z: number) => `${x},${y},${z}`;
 const rectangular = (brick: Brick, catalog: CatalogContext) => ['brick', 'plate'].includes(catalog.parts[brick.partId].kind);
 
@@ -26,6 +26,47 @@ function connections(bricks: Brick[], catalog: CatalogContext) {
   return { root, studs, undersides, grounded, unsupported, count: new Set(parents.map((_, index) => root(index))).size };
 }
 
+/** Cross one existing seam with smaller plates, without changing its rectangle. */
+function repairBlockedPlateSeam(design: Design, options: Options, blocked: ReadonlySet<string>, expired: () => boolean, check: typeof validateDesign): Design | null {
+  const catalog = catalogForDesign(design);
+  const movable = design.bricks.filter(brick => !options.fixedIds.has(brick.id) && catalog.parts[brick.partId].kind === 'plate' && partHeight(brick, catalog) === 1);
+  const sizes = Object.values(catalog.parts).filter(part => part.kind === 'plate' && part.heightPlates === 1 && (!options.allowedPartIds || options.allowedPartIds.has(part.id)))
+    .flatMap(part => ([0, 90] as const).filter(rotation => !rotation || part.width !== part.depth).map(rotation => ({ part, rotation, width: rotation ? part.depth : part.width, depth: rotation ? part.width : part.depth })))
+    .sort((a, b) => b.width * b.depth - a.width * a.depth);
+  const ids = new Set(design.bricks.map(brick => brick.id));
+  let checked = 0, serial = 0;
+  for (const target of movable.filter(brick => blocked.has(brick.id))) for (const neighbor of movable) {
+    if (expired() || checked >= 4) return null;
+    if (neighbor === target || neighbor.z !== target.z || neighbor.colorId !== target.colorId) continue;
+    const a = footprint(target, catalog), b = footprint(neighbor, catalog);
+    const alongX = target.y === neighbor.y && a.depth === b.depth && (target.x + a.width === neighbor.x || neighbor.x + b.width === target.x);
+    const alongY = target.x === neighbor.x && a.width === b.width && (target.y + a.depth === neighbor.y || neighbor.y + b.depth === target.y);
+    if (!alongX && !alongY) continue;
+    const x = Math.min(target.x, neighbor.x), y = Math.min(target.y, neighbor.y);
+    const width = alongX ? a.width + b.width : a.width, depth = alongY ? a.depth + b.depth : a.depth;
+    const seam = alongX ? Math.max(target.x, neighbor.x) - x : Math.max(target.y, neighbor.y) - y;
+    const outside = design.bricks.filter(brick => brick !== target && brick !== neighbor);
+    for (const size of sizes) {
+      if (expired() || checked >= 4) return null;
+      if (!size.part.allowedColors.includes(target.colorId) || width % size.width || depth % size.depth || seam % (alongX ? size.width : size.depth) === 0) continue;
+      const count = width * depth / (size.width * size.depth);
+      if (options.maxBricks !== undefined && outside.length + count > options.maxBricks) continue;
+      const replacements: Brick[] = [];
+      for (let yy = y; yy < y + depth; yy += size.depth) for (let xx = x; xx < x + width; xx += size.width) {
+        let id: string; do { id = `packing-strip-${serial++}`; } while (ids.has(id));
+        replacements.push({ id, partId: size.part.id, colorId: target.colorId, x: xx, y: yy, z: target.z, rotation: size.rotation });
+      }
+      const candidate = { ...design, bricks: [...outside, ...replacements] };
+      if (options.ownedOnly && allocateInventory(candidate, options.inventory || []).totalMissing) continue;
+      checked++;
+      const validation = check(candidate);
+      if (options.globalDeadline !== undefined && Date.now() >= options.globalDeadline) return null;
+      if (validation.valid) return candidate;
+    }
+  }
+  return null;
+}
+
 /** Bounded local exact-cover search. It changes seams across nearby courses, never their
  * colored cells or fixed parts. Retain strict structural improvements even when
  * another region still fails; callers must validate before admitting a design.
@@ -33,22 +74,39 @@ function connections(bricks: Brick[], catalog: CatalogContext) {
  * Search limits bound computation, not the allowed model size. */
 export function repairPacking(design: Design, options: Options): Design | null {
   const catalog = catalogForDesign(design), PARTS = catalog.parts;
-  const expired = () => options.deadline !== undefined && Date.now() >= options.deadline;
+  let validationMs = 0;
+  // The local allowance bounds retiling work; mandatory assembly checks can
+  // take longer. Their time never extends the original generation deadline.
+  const expired = () => (options.globalDeadline !== undefined && Date.now() >= options.globalDeadline) || (options.deadline !== undefined && Date.now() >= options.deadline + validationMs);
+  const check: typeof validateDesign = candidate => {
+    const started = Date.now();
+    try { return validateDesign(candidate); } finally { validationMs += Date.now() - started; }
+  };
   if (expired()) return null;
   let bricks = design.bricks;
   let graph = connections(bricks, catalog);
-  if (!graph.unsupported.length && graph.count === 1) return design;
+  if (!graph.unsupported.length && graph.count === 1) return options.assemblyBlockedIds?.size
+    ? repairBlockedPlateSeam(design, options, options.assemblyBlockedIds, expired, check) ?? design : design;
   const initialUnsupported = graph.unsupported.length, initialComponents = graph.count;
   const result = (): Design | null => {
     if (graph.unsupported.length > initialUnsupported || graph.count > initialComponents ||
       (graph.unsupported.length === initialUnsupported && graph.count === initialComponents)) return null;
-    const candidate = { ...design, bricks: [...bricks].sort((a, b) => a.z - b.z).map((brick, index) => ({ ...brick, id: `b${index + 1}` })) };
-    // Partial improvement may retain support/connectivity failures, never a new
-    // collision, invalid placement, stock shortage, or budget violation.
-    if (validateDesign(candidate).errors.some(error => !/no stud support|disconnected groups/.test(error))) return null;
+    const fixedIds = new Set<string>();
+    const candidate = { ...design, bricks: [...bricks].sort((a, b) => a.z - b.z).map((brick, index) => {
+      const id = `b${index + 1}`;
+      if (options.fixedIds.has(brick.id)) fixedIds.add(id);
+      return { ...brick, id };
+    }) };
+    // Partial improvement may expose a blocked assembly after joining groups.
+    // It is still not admissible; retain its concrete feedback without allowing
+    // a collision, invalid placement, stock shortage, or budget violation.
+    const validation = check(candidate);
+    if (options.globalDeadline !== undefined && Date.now() >= options.globalDeadline) return null;
+    if (validation.errors.some(error => !/no stud support|disconnected groups|No assembly path was found/.test(error))) return null;
     if (options.maxBricks !== undefined && candidate.bricks.length > options.maxBricks) return null;
     if (options.ownedOnly && allocateInventory(candidate, options.inventory || []).totalMissing) return null;
-    return candidate;
+    const blocked = new Set(validation.errors.flatMap(error => error.match(/Blocked pieces: ([^.]+)\./)?.[1].split(', ') || []));
+    return blocked.size ? repairBlockedPlateSeam(candidate, { ...options, fixedIds }, blocked, expired, check) ?? candidate : candidate;
   };
   const sizes = Object.values(PARTS).filter(part => ['brick', 'plate'].includes(part.kind) && (!options.allowedPartIds || options.allowedPartIds.has(part.id)))
     .flatMap(part => ([0, 90] as const).filter(rotation => !rotation || part.width !== part.depth).map(rotation => ({ part, rotation, width: rotation ? part.depth : part.width, depth: rotation ? part.width : part.depth })));
@@ -71,6 +129,11 @@ export function repairPacking(design: Design, options: Options): Design | null {
         }
         return false;
       });
+      // A large connected body can exhaust the bounded search on its side of
+      // a seam before the small stranded section is considered.
+      const componentSizes = new Map<number, number>();
+      bricks.forEach((_, index) => { const root = graph.root(index); componentSizes.set(root, (componentSizes.get(root) || 0) + 1); });
+      targets.sort((a, b) => componentSizes.get(graph.root(indices.get(a.id)!))! - componentSizes.get(graph.root(indices.get(b.id)!))!);
     }
     let improved = false;
     // Retiling lower one-plate courses cannot create new studs: each already
