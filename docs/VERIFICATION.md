@@ -2,6 +2,10 @@
 
 This document distinguishes tested local behavior from live integrations that need account/device access.
 
+## Temporary sharing approved; connection unavailable (2026-10-11)
+
+The user explicitly approved temporary Cloudflare signed sharing. Two attempts to run `cloudflared tunnel --url http://127.0.0.1:3002` exited before creating a URL: HTTPS connections to `api.trycloudflare.com:443` were refused. Direct IPv4/default and IPv6 checks also failed; ordinary HTTPS to `www.cloudflare.com` returned 200. This identifies the failing endpoint, not a proven cause or a general Cloudflare outage. No tunnel is running and `PUBLIC_BASE_URL` remains unset. The private API and Photon listener remain running. The earlier approval blocker is resolved; an accessible connection to the tunnel service is now needed before public-link, iMessage mini-app and AR testing can proceed. Evidence: `output/instruction-guide/tunnel.log`, `tunnel-retry.log`.
+
 ## Lighter interactive rendering and attachment recovery (2026-10-11)
 
 **672 regression tests and the production build pass.** The interactive guide now omits covered ordinary studs while retaining canonical bodies, exposed studs, imported parts, hollow studs and translucent geometry. Moving pieces expose the studs below them; replay and backwards navigation restore them without rebuilding the model. The full editor/export geometry remains unchanged. Surface tests compare retained positions, normals and colors against the canonical renderer; tests also cover rotations, partial coverage and transparent context. The omission removes the same tiny cosmetic seam bands as the phone viewing file.
