@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import dotenv from 'dotenv';
 import { importSet } from '../server/inventory.js';
+import { validateInventory } from '../server/generation.js';
 
 test('set import keeps canonical parts and colors while excluding spares, aliases and unavailable colors', async (context) => {
   context.mock.method(dotenv, 'config', () => ({}));
@@ -34,4 +35,23 @@ test('set import keeps canonical parts and colors while excluding spares, aliase
   assert.ok(result.items.every(item => item.source === result.source));
   assert.match(result.note, /verified colors/);
   assert.match(result.note, /Spare and unsupported parts are excluded/);
+});
+
+test('set import carries exact flower definitions and excludes unproduced colors and unsupported connectors', async context => {
+  context.mock.method(dotenv, 'config', () => ({}));
+  const previous = process.env.REBRICKABLE_API_KEY;
+  process.env.REBRICKABLE_API_KEY = 'offline-flower-test';
+  context.after(() => { if (previous === undefined) delete process.env.REBRICKABLE_API_KEY; else process.env.REBRICKABLE_API_KEY = previous; });
+  context.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ next: null, results: [
+    { part: { part_num: '24866' }, color: { id: 25 }, quantity: 3 },
+    { part: { part_num: '33291' }, color: { id: 4 }, quantity: 2 },
+    { part: { part_num: '33291' }, color: { id: 0 }, quantity: 1 },
+    { part: { part_num: '32606' }, color: { id: 4 }, quantity: 4 },
+  ] }), { headers: { 'content-type': 'application/json' } }));
+  const result = await importSet('12345-1');
+  assert.deepEqual(result.items.map(item => [item.partId, item.colorId, item.quantity]), [['24866', 25, 3], ['33291', 4, 2]]);
+  assert.equal(result.excluded, 5);
+  assert.deepEqual(Object.keys(result.catalog.parts).sort(), ['24866', '33291']);
+  assert.ok(result.catalog.parts['24866'].geometry!.body.faces.length > 100);
+  validateInventory(result.items, result.catalog);
 });

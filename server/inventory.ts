@@ -47,5 +47,5 @@ export async function importSet(setNumber: string): Promise<{ items: InventoryIt
     next = body.next || null;
   }
   if (next) throw new GenerationError('This inventory is too large for the current importer.', 422);
-  return { items: [...quantities.values()], catalog: subsetCatalog(manifest, [...quantities.values()].map(item => item.partId)), excluded, source, note: 'Supported catalog parts and verified colors only. Spare and unsupported parts are excluded. Check the returned inventory against your physical set; alternate set inventory versions are not resolved automatically.' };
+  return { items: [...quantities.values()], catalog: subsetCatalog(manifest, [...quantities.values()].map(item => item.partId), [...quantities.values()].map(item => item.colorId)), excluded, source, note: 'Supported catalog parts and verified colors only. Spare and unsupported parts are excluded. Check the returned inventory against your physical set; alternate set inventory versions are not resolved automatically.' };
 }

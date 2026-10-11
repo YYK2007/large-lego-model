@@ -246,7 +246,7 @@ export function compileGeneratedPlan(plan: ShapePlan, input: GenerationInput, de
     if (volume.length) throw new Error(volume.join('; '));
   }
   if (input.inventoryMode === 'owned' && allocateInventory(design, input.inventory || []).totalMissing > 0) throw new Error('The design exceeds the confirmed inventory.');
-  if (design.catalog) design.catalog = subsetCatalog(design.catalog, design.bricks.map(brick => brick.partId));
+  if (design.catalog) design.catalog = subsetCatalog(design.catalog, design.bricks.map(brick => brick.partId), design.bricks.map(brick => brick.colorId));
   return design;
 }
 

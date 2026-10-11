@@ -96,6 +96,7 @@ export function App() {
   const steps = useMemo(() => buildSteps(design), [design]);
   const { parts, colors } = useMemo(() => catalogForDesign(design), [design]);
   const collectionCatalog = useMemo(() => resolveCatalog(inventoryCatalog), [inventoryCatalog]);
+  const ownedCatalog = useMemo(() => inventoryCatalog ? subsetCatalog(inventoryCatalog, inventory.map(item => item.partId), inventory.map(item => item.colorId)) : undefined, [inventoryCatalog, inventory]);
   const bom = billOfMaterials(design);
   const allocation = allocateInventory(design, inventory);
   const ownedCount = inventory.reduce((sum, item) => sum + item.quantity, 0);
@@ -103,12 +104,15 @@ export function App() {
   const refreshStatus = () => api<Status>('/status').then(setStatus).catch(() => setStatus(null));
   useEffect(() => { refreshStatus(); const id = new URLSearchParams(location.search).get('design'); if (id) api<Design & { inventory?: InventoryItem[]; inventoryCatalog?: CatalogManifest }>(`/designs/${encodeURIComponent(id)}`).then(value => { if (!validateDesign(value).valid) throw new Error('This saved design is invalid.'); setDesign(normalizeDesign(value)); if (value.inventory) { setInventory(value.inventory); setInventoryCatalog(mergeCatalogManifests(value.inventoryCatalog, value.catalog)); } }).catch(e => setError(e)); }, []);
   useEffect(() => { localStorage.setItem('sprout-design', JSON.stringify(design)); }, [design]);
-  useEffect(() => { try { saveCollection(localStorage, { items: inventory, catalog: inventoryCatalog ? subsetCatalog(inventoryCatalog, inventory.map(item => item.partId)) : undefined }); } catch { setError('Your collection could not be saved in this browser. Keep this page open until you export it.'); } }, [inventory, inventoryCatalog]);
+  useEffect(() => { try { saveCollection(localStorage, { items: inventory, catalog: ownedCatalog }); } catch { setError('Your collection could not be saved in this browser. Keep this page open until you export it.'); } }, [inventory, ownedCatalog]);
   useEffect(() => {
     if (modal !== 'inventory') return;
     let active = true;
     api<{ catalog: CatalogManifest }>('/catalog').then(({ catalog }) => {
-      if (active) setInventoryCatalog(previous => mergeCatalogManifests(catalog, previous));
+      if (active) setInventoryCatalog(previous => {
+        try { return mergeCatalogManifests(catalog, previous); }
+        catch (error) { setError(error as Error); return previous; }
+      });
     }).catch(error => { if (active) setError(error as Error); });
     return () => { active = false; };
   }, [modal]);
@@ -239,7 +243,7 @@ export function App() {
     const id = crypto.randomUUID();
     submittedPhoto.current = inspiration; setJob(null); trackJob(id);
     try {
-      const accepted = await submitJob(id, { prompt, image: inspiration, previous: refining ? design : undefined, inventory, inventoryCatalog: inventory.length ? inventoryCatalog : undefined, inventoryMode, quality });
+      const accepted = await submitJob(id, { prompt, image: inspiration, previous: refining ? design : undefined, inventory, inventoryCatalog: inventory.length ? ownedCatalog : undefined, inventoryMode, quality });
       if (requestedJob.current === id) setJob(accepted);
     } catch (error) {
       if (error instanceof JobRequestError) { trackJob(null); setBusy(false); setError(error); }
@@ -255,8 +259,8 @@ export function App() {
     if (manual) { setManualBusy(true); setNotice('Preparing your instruction PDF. You can keep using the studio.'); }
     if (nativeModel) { modelExportInFlight.current = true; setModelBusy(true); setNotice(`Preparing the 3D model for “${requestedDesign.title}”.`); }
     try {
-      const nativeDownload = nativeModel ? await prepareUsdzDownload(requestedDesign, inventory, { inventoryCatalog }) : null;
-      const snapshot = nativeDownload ? null : await api<{ id: string }>('/designs', { design: requestedDesign, inventory, inventoryCatalog });
+      const nativeDownload = nativeModel ? await prepareUsdzDownload(requestedDesign, inventory, { inventoryCatalog: ownedCatalog }) : null;
+      const snapshot = nativeDownload ? null : await api<{ id: string }>('/designs', { design: requestedDesign, inventory, inventoryCatalog: ownedCatalog });
       const url = nativeDownload?.url ?? `/api/designs/${encodeURIComponent(snapshot!.id)}/${format}`;
       const anchor = document.createElement('a');
       if (manual || nativeModel) {
@@ -284,7 +288,7 @@ export function App() {
     finally { if (manual) setManualBusy(false); if (nativeModel) { modelExportInFlight.current = false; setModelBusy(false); } }
   }
   async function saveForPhone() {
-    try { const snapshot = await api<{ id: string }>('/designs', { design, inventory, inventoryCatalog: inventory.length ? inventoryCatalog : undefined }); await navigator.clipboard.writeText(`/open ${snapshot.id}`); setNotice('Copied the /open command. Send it to your connected Photon agent to continue this build.'); setModal(null); }
+    try { const snapshot = await api<{ id: string }>('/designs', { design, inventory, inventoryCatalog: inventory.length ? ownedCatalog : undefined }); await navigator.clipboard.writeText(`/open ${snapshot.id}`); setNotice('Copied the /open command. Send it to your connected Photon agent to continue this build.'); setModal(null); }
     catch (e) { setError(e as Error); }
   }
   async function lookupSet() {

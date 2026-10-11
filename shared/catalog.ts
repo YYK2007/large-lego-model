@@ -28,11 +28,11 @@ export type CatalogManifest = {
 export type CatalogContext = { parts: Record<string, CatalogPart>; colors: Record<number, CatalogColor> };
 
 /** A saved build or collection carries only the definitions it actually uses. */
-export function subsetCatalog(manifest: CatalogManifest, partIds: Iterable<string>): CatalogManifest {
+export function subsetCatalog(manifest: CatalogManifest, partIds: Iterable<string>, colorIds: Iterable<number> = []): CatalogManifest {
   const ids = new Set(partIds);
   const parts = Object.fromEntries(Object.entries(manifest.parts).filter(([id]) => ids.has(id)));
   const partColors = Object.fromEntries(Object.entries(manifest.partColors || {}).filter(([id]) => ids.has(id)));
-  const colors = new Set([...Object.values(parts), ...Object.values(partColors)].flatMap(part => [...part.allowedColors]));
+  const colors = new Set([...colorIds, ...[...Object.values(parts), ...Object.values(partColors)].flatMap(part => [...part.allowedColors])]);
   return { schemaVersion: 1, parts, partColors, colors: Object.fromEntries(Object.entries(manifest.colors).filter(([id]) => colors.has(Number(id)))) };
 }
 // Official tessellated arc primitives can overshoot nominal grid boundaries by

@@ -38,6 +38,8 @@ Later: ElevenLabs incoming/outgoing voice notes, physical stability solver and r
 
 ## Checkpoints
 
+- Catalog expansion (2026-10-11): full-index paginated discovery and resumable import, 80 bundled/96 locally usable part types, real four- and five-petal flowers, explicit simple-piece preference, exact set/loose-inventory support and compact pinned manifests. The unrestricted assembly objective remains incomplete; connector and geometry exclusions stay explicit. See `DYNAMIC-CATALOG.md` and `VERIFICATION.md`.
+
 - Current iMessage/feedback increment: simpler verified parts after repeated construction failures, exact-render Gemini review with automatic finish on a complete match, selectable checked drafts, and Photon conversation jobs with Stop, revisions and byte attachments. Mocked behavior and browser selection are verified; live authentication, message delivery and native phone rotation are separate acceptance gates recorded in `VERIFICATION.md`.
 
 - Checkpoint 08 (`checkpoint-08-feature-refinement`): asymmetric/concave polygon profiles, complete per-feature visual reviews, earlier-draft retention, and a bounded visual correction after structural repair. Rendering two comparison views of a frozen 9,004-piece model fell from 34.31 to 9.06 seconds. 314 tests and the production build pass. Fresh Matterhorn and windmill builds reached review but remain inaccurate; the rose still failed. No new part family was enabled, and broad likeness remains an open acceptance requirement.
