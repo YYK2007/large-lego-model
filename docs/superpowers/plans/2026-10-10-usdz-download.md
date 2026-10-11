@@ -128,3 +128,11 @@ export function prepareUsdzDownload(
 ## Completion report
 
 Provide the draft PR link, concise behavior changes, full-suite/build/browser results, and any remaining device checks. Include the branch name so other agents can merge or cherry-pick the focused commits. The user approved native implementation; publication follows final review.
+
+## Approved phone-performance follow-up
+
+The user reported infinite loading for the castle on an iPhone 14 in iMessage. Apple's binary repackaging of the unchanged 6,118-mesh scene also failed on that phone. Combining the exact geometry into six color meshes succeeded; the user separately confirmed that the portable Three.js-packaged six-mesh file opens and rotates. The user approved making this the normal export; AR is not required for this acceptance check.
+
+The bounded follow-up changes `server/native-model.ts` to batch canonical bodies and studs by their shared color material, bake their placements, preserve normals and triangle topology, and retain metric Y-up scale. It adds no converter, dependency, piece limit, geometry simplification, or frontend redesign. Source shapes are indexed once and cached; temporary transformed copies are released before serialization. Oversized colors split between whole components at one million triangle corners per batch, keeping each geometry layer below the runtime's string-size limit. This does not bound total export memory. Tests and the browser harness inspect the resulting actual triangle streams instead of requiring a separate USD mesh name for every component. Existing literal dimension, orientation, stud-spacing, winding, and color assertions remain.
+
+This approved scope adjustment supersedes the earlier instruction to avoid `server/native-model.ts`. Shared geometry, generation, inventory, PDF, CSV, LDraw, and PNG implementations remain outside the change. The existing draft PR receives a separate focused exporter commit; actual Photon delivery, AR, and larger-model phone performance remain separate checks. Baking repeated geometry increases archive size and export cost, which must be recorded with the final verification evidence.

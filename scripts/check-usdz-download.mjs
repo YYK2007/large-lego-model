@@ -2,9 +2,8 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { Color } from 'three';
 import { SAMPLE_DESIGNS } from '../shared/examples.ts';
-import { COLORS, footprint, partHeight, partTopStuds } from '../shared/model.ts';
+import { archiveFiles, verifyBatchedUsdz } from '../tests/usdz-artifact.ts';
 
 // Run with node --import tsx; Playwright is a development-only prerequisite.
 // NODE_PATH may point to a bundled runtime instead of adding a product dependency.
@@ -33,50 +32,9 @@ async function studio(width = 1440, shortDeadline = false) {
 const directButton = page => page.getByRole('button', { name: 'Download 3D (.usdz)', exact: true });
 
 function archiveReport(bytes, design) {
-  const files = new Map();
-  let offset = 0;
-  while (bytes.readUInt32LE(offset) === 0x04034b50) {
-    assert.equal(bytes.readUInt16LE(offset + 8), 0);
-    const size = bytes.readUInt32LE(offset + 18), nameLength = bytes.readUInt16LE(offset + 26);
-    const name = bytes.subarray(offset + 30, offset + 30 + nameLength).toString();
-    const start = offset + 30 + nameLength + bytes.readUInt16LE(offset + 28);
-    assert.equal(start % 64, 0, name + ' alignment');
-    files.set(name, bytes.subarray(start, start + size).toString());
-    offset = start + size;
-  }
-  assert.equal(bytes.readUInt32LE(offset), 0x02014b50);
-  assert.equal(files.keys().next().value, 'model.usda');
-  const model = files.get('model.usda');
-  assert.match(model, /metersPerUnit = 1\s+upAxis = "Y"/);
-  const numbers = text => [...text.matchAll(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi)].map(match => Number(match[0]));
-  const root = numbers(model.match(/def Xform "BrickModel"\s*\{\s*matrix4d xformOp:transform = ([^\n]+)/)[1]);
-  assert.deepEqual(root, [.008, 0, 0, 0, 0, .008, 0, 0, 0, 0, .008, 0, 0, 0, 0, 1]);
-  const meshes = new Map([...model.matchAll(/def Xform "((?:Body|Stud)_[^"]+)" \(\s*prepend references = @\.\/([^@]+)@[\s\S]*?matrix4d xformOp:transform = ([^\n]+)[\s\S]*?rel material:binding = <\/Materials\/([^>]+)>/g)].map(match => {
-    assert.ok(files.has(match[2]), 'All geometry references resolve');
-    return [match[1], { translation: numbers(match[3]).slice(12, 15), material: match[4] }];
-  }));
-  const materials = new Map([...model.matchAll(/def Material "([^"]+)"[\s\S]*?color3f inputs:diffuseColor = \(([^)]+)\)/g)].map(match => [match[1], numbers(match[2])]));
-  const bricks = design.bricks;
-  const centerX = (Math.min(...bricks.map(b => b.x)) + Math.max(...bricks.map(b => b.x + footprint(b).width))) / 2;
-  const centerY = (Math.min(...bricks.map(b => b.y)) + Math.max(...bricks.map(b => b.y + footprint(b).depth))) / 2;
-  const close = (a, b) => a.forEach((value, axis) => assert.ok(Math.abs(value - b[axis]) < 1e-5, `${value} != ${b[axis]}`));
-  let studs = 0;
-  bricks.forEach((brick, index) => {
-    const { width, depth } = footprint(brick);
-    const body = meshes.get(`Body_${index}`);
-    assert.ok(body, 'Every clicked brick body exists');
-    close(body.translation, [brick.x + width / 2 - centerX, (brick.z + partHeight(brick) / 2) * .4 - .01, brick.y + depth / 2 - centerY]);
-    const color = new Color(COLORS[brick.colorId].hex).toArray();
-    close(materials.get(body.material), color);
-    for (const point of partTopStuds(brick)) {
-      const stud = meshes.get(`Stud_${index}_${Math.floor(point.x - brick.x)}_${Math.floor(point.y - brick.y)}`);
-      assert.ok(stud, 'Every clicked stud exists');
-      close(stud.translation, [point.x - centerX, point.z * .4 + .08, point.y - centerY]);
-      close(materials.get(stud.material), color); studs++;
-    }
-  });
-  assert.equal(meshes.size, bricks.length + studs, 'No extra bodies or studs');
-  return { bytes: bytes.length, files: files.size, bodies: bricks.length, studs, units: 'meters, Y-up' };
+  const files = archiveFiles(bytes);
+  const { parts, ...geometry } = verifyBatchedUsdz(files, design, false);
+  return { bytes: bytes.length, files: files.size, ...geometry, units: 'meters, Y-up' };
 }
 
 try {
