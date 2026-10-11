@@ -5,6 +5,7 @@ import { renderDesignSvg } from '../shared/illustration';
 import { placementInstruction } from '../shared/assembly';
 import { BrickScene } from './BrickScene';
 import { moveBuildProgress, readBuildProgress, type BuildProgress } from './build-progress';
+import { prepareGuidePdf } from './manual-download';
 import './build-guide.css';
 
 type GuideDesign = Design & { inventory?: InventoryItem[]; allocation?: ReturnType<typeof allocateInventory> };
@@ -102,20 +103,18 @@ export function BuildGuide({ designId }: { designId: string }) {
     const timeout = setTimeout(() => controller.abort(new Error('PDF preparation took too long. Please try /manual in Messages.')), 600_000);
     setPdf({ busy: true });
     try {
-      const response = await fetch(endpoint('manual.pdf'), { method: 'HEAD', signal: controller.signal });
-      if (!response.ok || !response.headers.get('content-type')?.includes('application/pdf')) throw new Error('The PDF couldn’t be prepared. Try again, or send /manual in Messages.');
-      if (!controller.signal.aborted) setPdf({ url: endpoint('manual.pdf') });
+      const url = await prepareGuidePdf(endpoint('manual.pdf'), controller.signal);
+      if (!controller.signal.aborted) setPdf({ url });
     } catch (cause) { if (!controller.signal.aborted || controller.signal.reason instanceof Error && controller.signal.reason.name !== 'AbortError') setPdf({ error: cause instanceof Error ? cause.message : 'The PDF couldn’t be prepared.' }); }
     finally { clearTimeout(timeout); }
   };
 
   return <main className="build-guide">
-    <header className="guide-header"><div className="guide-mark" aria-hidden="true"><span /><span /><Box size={22} /></div><div><span>LARGE LEGO MODEL</span><h1>{design?.title || 'Your build guide'}</h1></div><button aria-label="Downloads" onClick={event => { drawerTrigger.current = event.currentTarget; setDrawer('files'); }}><Download size={20} /></button></header>
+    <header className="guide-header"><img className="guide-mark" src="/assets/aero-brick.png" alt="" width={44} height={44} /><div><span>LARGE LEGO MODEL</span><h1>{design?.title || 'Your build guide'}</h1></div><button aria-label="Downloads" onClick={event => { drawerTrigger.current = event.currentTarget; setDrawer('files'); }}><Download size={20} /></button></header>
     {error && <div className="guide-alert" role="alert">{error}<button aria-label="Dismiss message" onClick={() => setError('')}><X size={16} /></button></div>}
     <section className="guide-stage" aria-label="3D building workspace">
       {design ? <BrickScene opaqueContext omitCoveredStuds design={design} visibleIds={visibleIds} highlightIds={shown && active ? [active.id] : undefined} activeId={shown ? active?.id : undefined} placement={shown ? placement : undefined} replayKey={replay} focusIds={focusIds} /> : <div className="guide-loading"><LoaderCircle className="spin" size={30} /><p>Opening your saved build…</p></div>}
       {design && <div className="guide-stage-top"><span className="guide-pill">{shown ? `Piece ${progress.piece + 1} of ${current.bricks.length}` : `${design.bricks.length.toLocaleString()} pieces`}</span>{building && !progress.completed && <button className="guide-pill" onClick={() => setOverview(value => !value)}><Box size={15} />{overview ? 'Back to this piece' : 'See finished model'}</button>}</div>}
-      {!building && design && <div className="guide-welcome"><span className="guide-eyebrow">A LITTLE AT A TIME.</span><h2>Let’s put it together.</h2><p>Turn it around. Then we’ll find your first pieces.</p></div>}
       {progress.completed && building && <div className="guide-complete"><Check size={28} /><h2>All steps complete.</h2><p>Nice building. Take it for a spin.</p><button onClick={() => { setProgress({ step: 0, piece: 0, completed: false }); setBuilding(false); }}>Start again</button></div>}
     </section>
     <section className="guide-tray" aria-label={building ? 'Pieces for this step' : 'Build information'}>

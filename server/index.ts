@@ -6,7 +6,7 @@ import sharp from 'sharp';
 import { SAMPLE_DESIGNS } from '../shared/examples.js';
 import { resolveCatalog, mergeCatalogManifests, exportCsv, exportLDraw, validateDesign, normalizeDesign } from '../shared/model.js';
 import { renderDesignSvg } from '../shared/illustration.js';
-import { generateManualPdf } from './manual.js';
+import { generateManualPdf, prepareManualPdf } from './manual.js';
 import { generateMobileFile, generateNativeFile } from './native-export.js';
 import { suggestInventory, validateInventory, GenerationError } from './generation.js';
 import { GenerationJobs } from './generation-jobs.js';
@@ -125,7 +125,22 @@ app.get('/api/designs/:id/:format', async (req, res) => {
   if (!design) return res.status(404).json({ error: 'Design not found.' });
   const name = design.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 70) || 'build';
   switch (req.params.format) {
-    case 'manual.pdf': sendInstructionFile(req, res.type('pdf').attachment(`${name}-instructions.pdf`), await generateManualPdf(design, saved?.inventory)); break;
+    case 'manual.pdf': {
+      let bytes: Buffer;
+      // Cloudflare can fetch a cold HEAD from the origin as GET.
+      if (req.query.prepare === '1') {
+        res.setHeader('Cache-Control', 'private, no-store');
+        const controller = new AbortController(), disconnected = () => controller.abort();
+        res.once('close', disconnected);
+        try {
+          const prepared = await prepareManualPdf(design, saved?.inventory, controller.signal);
+          if (!prepared) { res.status(202).setHeader('Retry-After', '2').end(); break; }
+          res.type('pdf').status(200).end(); break;
+        } catch (error) { if (controller.signal.aborted) break; throw error; }
+        finally { res.off('close', disconnected); }
+      } else bytes = await generateManualPdf(design, saved?.inventory);
+      sendInstructionFile(req, res.type('pdf').attachment(`${name}-instructions.pdf`), bytes); break;
+    }
     case 'parts.csv': res.type('text/csv').attachment(`${name}-parts.csv`).send(exportCsv(design, saved?.inventory)); break;
     case 'model.ldr': res.type('text/plain').attachment(`${name}.ldr`).send(exportLDraw(design)); break;
     case 'model.usdz': sendInstructionFile(req, res.type('model/vnd.usdz+zip').attachment(`${name}.usdz`), await generateNativeFile(design)); break;

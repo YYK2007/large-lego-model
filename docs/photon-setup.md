@@ -29,6 +29,20 @@ For a temporary authorized demo, `cloudflared tunnel --url http://127.0.0.1:3002
 
 The checked preview includes a Spectrum app card and a plain HTTPS fallback link. The recipient installs the [Spectrum iMessage launcher](https://apps.apple.com/ca/app/spectrum-apps-in-messages/id6777616651) once to open app cards; the same guide works in a normal browser without that extension. The guide's ordinary 3D instruction mode is primary. Camera access is unnecessary; AR is optional on a supported phone. The implementation uses `app(url, { layout })`, not a custom native iMessage extension or an asserted live-bubble renderer. Test actual gestures inside Spectrum separately. [Photon app cards](https://photon.codes/docs/spectrum-ts/content/app)
 
+## Current Cloudflare demo domain
+
+The registered domain is **llegomodel.site**. The mini-app uses **https://guide.llegomodel.site** so it does not depend on cached Namecheap parking records for the root. Both hostnames route to the same signed gateway; an unsigned homepage returns 404 intentionally.
+
+On the configured Mac, keep the API and Photon listener running, build current assets with `npm run build`, and run:
+
+```sh
+cloudflared tunnel --config data/cloudflare/guide.yml run large-lego-model-guide
+```
+
+The locally generated, ignored config routes only to `http://127.0.0.1:3002`, with a final 404 rule. Tunnel credentials stay under `~/.cloudflared`; never commit them. `.env` contains `PUBLIC_BASE_URL=https://guide.llegomodel.site`. Restart only the Photon listener gracefully after changing that value; active API jobs can continue. The domain uses Cloudflare's Free plan and automatic Universal SSL. This named tunnel keeps its hostname across restarts, but the Mac, API and tunnel must remain running for links to work.
+
+Send `/instructions` in an existing iMessage conversation to receive the selected build's signed card and browser link. The bare hostname is not a build browser. Keep `data/instruction-share-key` and saved designs persistent so previously sent links continue to resolve. Verify real phone card/browser opening, placement navigation, resumed progress, downloads and optional AR separately from HTTP tests.
+
 ## Demo visual-review switch
 
 `PHOTON_VISUAL_REVIEW_ENABLED=false` is the demo default. It skips the separate concept study, post-build Gemini visual scoring and automatic visual refinement for newly submitted iMessage jobs. Reference photographs, independent subject requirements, planning, brick checks and structural repairs remain active. The first complete checked draft waits for user feedback or approval. Review metadata says **Not visually reviewed**, never a visual pass or failure.

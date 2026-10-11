@@ -22,7 +22,7 @@ button svg{flex-shrink:0}
 code{font-size:11px;background:#dceef6;padding:3px 5px;border-radius:4px;overflow-wrap:anywhere;color:#194e69}
 .site-header{height:76px;padding:0 4.2%;border-bottom:1px solid #ffffffed;background:#ffffffa3;display:flex;align-items:center;gap:64px;box-shadow:0 2px 18px #4275930a;backdrop-filter:blur(18px);color:#21455f}
 .brand{display:flex;gap:10px;align-items:center;font-family:'Manrope',sans-serif;font-size:28px;letter-spacing:-1.6px;font-weight:800;text-shadow:none}
-.brand-mark{width:35px;height:35px;background:radial-gradient(ellipse at 30% 10%,#f7ffe8,#c9ecae 39%,#72b65e 100%);border:1px solid #b3d9a1;box-shadow:inset 0 1px 3px #fff,0 3px 7px #477d4a24;display:grid;place-items:center;border-radius:12px;transform:rotate(-4deg);color:#33653c}
+.brand-logo{width:40px;height:40px;object-fit:contain;flex-shrink:0}
 .brand-period{color:#72b560}
 .site-header nav{display:flex;align-items:center;height:100%;gap:32px}
 .site-header nav button{height:100%;display:flex;align-items:center;gap:4px;background:none;font-size:13px;color:#648193;position:relative;text-shadow:none}
@@ -320,7 +320,7 @@ table{min-width:390px}
 
 @media(max-width:700px){.site-header{height:65px;gap:24px}
 .brand{font-size:27px}
-.brand-mark{width:31px;height:35px}
+.brand-logo{width:36px;height:36px}
 .site-header nav button{font-size:11px}
 .site-header nav button:nth-child(2){display:none}
 .site-header nav{gap:0}

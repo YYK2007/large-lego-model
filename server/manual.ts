@@ -6,6 +6,8 @@ import type { Design, InventoryItem } from '../shared/model.js';
 
 type ManualInput = { design: Design; inventory?: InventoryItem[] };
 const pending = new Map<string, Promise<Buffer>>();
+// Only failed preparations need a receipt between polls; successful PDFs live on disk.
+const preparationFailures = new Map<string, unknown>();
 let queue: Promise<void> = Promise.resolve();
 const CACHE_VERSION = 'manual-v6-pattern-cycles';
 const cacheDirectory = resolve('data/manual-cache');
@@ -60,4 +62,35 @@ export function generateManualPdf(design: Design, inventory?: InventoryItem[]): 
   const forget = () => { pending.delete(key); };
   result.then(forget, forget);
   return result;
+}
+
+/** A short public request may stop waiting without cancelling the shared render. */
+export async function prepareManualPdf(design: Design, inventory?: InventoryItem[], signal?: AbortSignal, waitMs = 10_000): Promise<Buffer | null> {
+  signal?.throwIfAborted();
+  const key = createHash('sha256').update(JSON.stringify({ design, inventory })).digest('hex');
+  if (preparationFailures.has(key)) {
+    const error = preparationFailures.get(key);
+    preparationFailures.delete(key); // A deliberate retry after this reported failure may render again.
+    throw error;
+  }
+  const result = generateManualPdf(design, inventory);
+  result.catch(error => {
+    preparationFailures.set(key, error);
+    if (preparationFailures.size > 32) preparationFailures.delete(preparationFailures.keys().next().value!);
+  });
+  try {
+    return await new Promise<Buffer | null>((resolve, reject) => {
+      const finish = (error?: unknown, bytes: Buffer | null = null) => {
+        clearTimeout(timer); signal?.removeEventListener('abort', abort);
+        if (error !== undefined) reject(error); else resolve(bytes);
+      };
+      const abort = () => finish(signal!.reason);
+      const timer = setTimeout(() => finish(), waitMs);
+      signal?.addEventListener('abort', abort, { once: true });
+      result.then(bytes => finish(undefined, bytes), error => finish(error));
+    });
+  } catch (error) {
+    if (!signal?.aborted) preparationFailures.delete(key);
+    throw error;
+  }
 }

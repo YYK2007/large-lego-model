@@ -17,10 +17,15 @@ const signed = (path: string, signature = token) => `${path}${path.includes('?')
 
 async function fixture(run: (request: (path: string, init?: RequestInit) => Promise<Response>, calls: string[], loads: string[]) => Promise<void>, failLoad = false) {
   const app = express(), calls: string[] = [], loads: string[] = [];
+  let preparationPolls = 0;
   app.use((req, _res, next) => { calls.push(`${req.method} ${req.path}${req.headers.range ? ` Range:${req.headers.range}` : ''}`); next(); });
   app.get('/', (_req, res) => res.type('html').send('<!doctype html><title>Build guide</title>'));
   app.get('/assets/:file', (req, res) => res.type(req.params.file.endsWith('.css') ? 'css' : 'js').send('public static asset'));
   app.get('/api/designs/:id/:format', (req, res) => {
+    if (req.params.format === 'manual.pdf' && req.query.prepare === '1') {
+      if (preparationPolls++ === 0) return res.status(202).setHeader('Retry-After', '2').end();
+      return res.type('pdf').status(200).end();
+    }
     const types: Record<string, string> = { 'model.usdz': 'model/vnd.usdz+zip', 'mobile.usdz': 'model/vnd.usdz+zip', 'manual.pdf': 'application/pdf', 'parts.csv': 'text/csv' };
     res.type(types[req.params.format] || 'text/plain');
     const bytes = Buffer.from(`${req.params.id}:${req.params.format}`);
@@ -53,6 +58,38 @@ test('instruction links bind the exact revision and key and never preserve base 
   assert.equal(url.pathname, '/'); assert.equal(url.hash, ''); assert.deepEqual([...url.searchParams], [['build', design.id], ['share', token]]);
   for (const id of ['', '../secret', 'a/b', 'a'.repeat(81), 'a\n']) assert.throws(() => instructionToken(id, secret), /Invalid design/);
   for (const base of ['http://guide.example', 'https://user:password@guide.example']) assert.throws(() => instructionUrl(base, design.id, secret), /public HTTPS/);
+});
+
+test('signed PDF preparation polls preserve their revision and query while unsigned requests stay blocked', async () => {
+  await fixture(async (request, calls, loads) => {
+    const path = `/api/designs/${design.id}/manual.pdf`;
+    assert.equal((await request(`${path}?prepare=1`, { method: 'HEAD' })).status, 404);
+    assert.deepEqual(calls, []); assert.deepEqual(loads, []);
+    const pending = await request(signed(`${path}?prepare=1`), { method: 'HEAD' });
+    assert.equal(pending.status, 202); assert.equal(pending.headers.get('retry-after'), '2');
+    assert.equal(pending.headers.get('cache-control'), 'private, no-store'); assert.equal(await pending.text(), '');
+    const ready = await request(signed(`${path}?prepare=1`), { method: 'HEAD' });
+    assert.equal(ready.status, 200); assert.match(ready.headers.get('content-type')!, /application\/pdf/);
+    assert.deepEqual(calls, [`HEAD ${path}`, `HEAD ${path}`]); assert.deepEqual(loads, [design.id, design.id]);
+    const final = await request(signed(path));
+    assert.equal(await final.text(), `${design.id}:manual.pdf`);
+  });
+});
+
+test('a CDN-converted preparation GET stays bounded and its ready response contains no PDF bytes', async () => {
+  await fixture(async (request, calls) => {
+    const path = `/api/designs/${design.id}/manual.pdf`;
+    assert.equal((await request(`${path}?prepare=1`)).status, 404);
+    const pending = await request(signed(`${path}?prepare=1`));
+    assert.equal(pending.status, 202); assert.equal(pending.headers.get('retry-after'), '2');
+    assert.equal(await pending.text(), '');
+    const ready = await request(signed(`${path}?prepare=1`));
+    assert.equal(ready.status, 200); assert.match(ready.headers.get('content-type')!, /application\/pdf/);
+    assert.equal(await ready.text(), '', 'Preparation GET must not transfer the full PDF');
+    assert.deepEqual(calls, [`GET ${path}`, `GET ${path}`]);
+    const download = await request(signed(path));
+    assert.equal(await download.text(), `${design.id}:manual.pdf`, 'Only the URL without prepare downloads bytes');
+  });
 });
 
 test('a signed guide exposes only exact geometry and public build fields, with GET and HEAD privacy headers', async () => {
