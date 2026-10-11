@@ -39,7 +39,7 @@ const attempt = async (value: GenerationAttempt) => {
 };
 try {
   const design = await generateDesign(workerData.input as GenerationInput,
-    progress => port.postMessage({ type: 'progress', progress }), { signal: controller.signal, continuous: workerData.continuous ?? true, stopWhenMatched: workerData.stopWhenMatched ?? false, onAttempt: attempt, onDraft: draft, onConcept: concept,
+    progress => port.postMessage({ type: 'progress', progress }), { signal: controller.signal, continuous: workerData.continuous ?? true, stopWhenMatched: workerData.stopWhenMatched ?? true, onAttempt: attempt, onDraft: draft, onConcept: concept,
       onUsage: usage => port.postMessage({ type: 'usage', usage }) });
   if (!controller.signal.aborted) {
     if (!validateDesign(design).valid) throw new Error('The generation worker produced an invalid result.');

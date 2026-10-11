@@ -345,8 +345,8 @@ test('bounded detailed generation stops after its allowed simpler-part repairs w
   const flow = await setup(t, { plans: [invalid, unchanged, emptyGlobal, ...Array.from({ length: 7 }, () => patch('/boxes', []))] });
   const events: GenerationProgress[] = []; let drafts = 0;
   await assert.rejects(generateDesign({ prompt: 'Build this pictured sculpture', image: flow.image }, event => events.push(event), { onDraft: () => { drafts++; } }),
-    error => error instanceof GenerationError && error.status === 422 && error.checks.length === 10 && error.checks.slice(0, 2).every(check => /cannot attach/.test(check)) && error.checks.slice(2).every(check => /at least one shape/.test(check)));
-  assert.deepEqual(flow.records.map(record => record.kind), ['outline', 'choice', 'plan', 'patch', 'plan', ...Array.from({ length: 7 }, () => 'patch')]);
+    error => error instanceof GenerationError && error.status === 422 && error.checks.length === 4 && error.checks.slice(0, 2).every(check => /cannot attach/.test(check)) && error.checks.slice(2).every(check => /at least one shape/.test(check)));
+  assert.deepEqual(flow.records.map(record => record.kind), ['outline', 'choice', 'plan', 'patch', 'plan', 'patch']);
   assert.ok(flow.records.slice(4).every(record => /SIMPLER BUILD constraints/.test(text(record))));
   assert.equal(Math.max(...events.map(event => event.candidate || 1)), 1);
   assert.equal(drafts, 0);

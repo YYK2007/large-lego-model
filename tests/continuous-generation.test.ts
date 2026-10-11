@@ -58,7 +58,7 @@ test('Stop during a valid draft save cannot lose or duplicate its completed atte
   assert.deepEqual(flow.records.map(record => record.kind), ['plan', 'critic']);
 });
 
-test('continuous retries pass the fourth attempt, retain the complete plan, and await each invalid output before continuing', async t => {
+test('repeated invalid plans stop after four attempts and await each saved output before continuing', async t => {
   const controller = new AbortController(), attempts: GenerationAttempt[] = []; let acknowledged = 0;
   const flow = await setup(t, (record, n) => {
     assert.notEqual(record.kind, 'critic');
@@ -67,31 +67,32 @@ test('continuous retries pass the fourth attempt, retain the complete plan, and 
   });
   const progress: GenerationProgress[] = [];
   await assert.rejects(generateDesign({ prompt: 'Build this sculpture', image: flow.image, quality: 'quick' }, event => progress.push(event), { continuous: true, signal: controller.signal,
-    onAttempt: async artifact => { await Promise.resolve(); attempts.push(artifact); acknowledged++; if (artifact.attempt === 6) controller.abort(); },
-  }), cancelled);
-  assert.deepEqual(attempts.map(a => a.attempt), [1, 2, 3, 4, 5, 6]);
+    onAttempt: async artifact => { await Promise.resolve(); attempts.push(artifact); acknowledged++; },
+  }), error => error instanceof GenerationError && error.status === 422 && /after four attempts/.test(error.message));
+  assert.deepEqual(attempts.map(a => a.attempt), [1, 2, 3, 4]);
   assert.ok(attempts.every(a => a.status === 'invalid' && a.checks.some(check => /disconnected/.test(check)) && a.plan && a.design));
   assert.ok(attempts.every(a => validateDesign(a.design!).valid === false));
-  assert.deepEqual(flow.records.map(r => r.kind), ['plan', 'patch', 'patch', 'patch', 'patch', 'patch']);
+  assert.deepEqual(flow.records.map(r => r.kind), ['plan', 'patch', 'patch', 'patch']);
   assert.ok(flow.records.slice(1).every(r => text(r).includes('/boxes/1')));
-  assert.ok(progress.some(event => event.attempt === 6));
+  assert.ok(progress.some(event => event.attempt === 3));
+  assert.ok(!progress.some(event => event.stage === 'planning' && event.attempt > 4));
 });
 
-test('continuous detailed retries retain the selected concept while rebuilding failed sections into a whole-model plan', async t => {
+test('Detailed retains its concept through simpler construction, then stops repeated failures', async t => {
   const controller = new AbortController(), attempts: GenerationAttempt[] = [];
   const full = { ...plan, boxes: undefined, components: [component('body', '', { boxes: invalid.boxes })] };
   const flow = await setup(t, (_record, n) => n === 1 ? full : n === 2 ? patch('/components/0/boxes/1/x', 12) : n === 3 ? invalid : patch('/boxes/1/x', 12));
   await assert.rejects(generateDesign({ prompt: 'Build this sculpture', image: flow.image }, undefined, { continuous: true, signal: controller.signal,
-    onAttempt: artifact => { attempts.push(artifact); if (artifact.attempt === 7) controller.abort(); },
-  }), cancelled);
-  assert.deepEqual(flow.records.map(r => r.kind), ['outline', 'choice', 'plan', 'patch', 'plan', 'patch', 'patch', 'patch', 'patch']);
+    onAttempt: artifact => { attempts.push(artifact); },
+  }), error => error instanceof GenerationError && error.status === 422 && /after four attempts/.test(error.message));
+  assert.deepEqual(flow.records.map(r => r.kind), ['outline', 'choice', 'plan', 'patch', 'plan', 'patch']);
   assert.ok(attempts.slice(0, 2).every(a => a.partial && a.design && a.plan?.components?.length === 1));
   assert.ok(attempts.slice(2).every(a => !a.partial && a.design && !a.plan?.components?.length));
   assert.ok(attempts.every(a => a.status === 'invalid'));
   assert.match(text(flow.records[3]), /Only a compiled section is shown; later sections may not appear/);
   assert.match(text(flow.records[4]), /SIMPLE GLOBAL REBUILD/);
   assert.match(text(flow.records[4]), /Previous complete component plan/);
-  assert.ok(flow.records.slice(5).every(r => text(r).includes('/boxes/1')));
+  assert.equal(attempts.length, 4);
 });
 
 test('a failed component preview retains prior sections and applies the requested target and yaw exactly', async t => {
@@ -115,7 +116,7 @@ test('a failed component preview retains prior sections and applies the requeste
   assert.deepEqual(actual, expected, 'The preview contains actual packed cells, never guessed filler or an untransformed local section');
 });
 
-test('a matched valid result is published on every attempt and continues until Stop', async t => {
+test('Stop during the last permitted stalled revision still reports cancellation', async t => {
   const controller = new AbortController(), attempts: GenerationAttempt[] = []; let drafts = 0;
   const flow = await setup(t, (record, n) => record.kind === 'critic' ? matched : n === 1 ? plan : patch('/boxes/0/height', 9));
   await assert.rejects(generateDesign({ prompt: 'Build this sculpture', image: flow.image, quality: 'quick' }, undefined, { continuous: true, signal: controller.signal,
@@ -128,7 +129,7 @@ test('a matched valid result is published on every attempt and continues until S
   assert.match(text(flow.records[2]), /passes geometry and the assessed major reference features/);
 });
 
-test('each continuous attempt renews its bounded deadline while keeping the previous plan after a timeout', async t => {
+test('retries share one deadline and retain the late response without paying for another attempt', async t => {
   t.mock.timers.enable({ apis: ['Date'], now: 1000 });
   const controller = new AbortController(), attempts: GenerationAttempt[] = [];
   const flow = await setup(t, (record, n) => {
@@ -138,12 +139,12 @@ test('each continuous attempt renews its bounded deadline while keeping the prev
   });
   await assert.rejects(generateDesign({ prompt: 'Build this sculpture', image: flow.image, quality: 'quick' }, undefined, { continuous: true, signal: controller.signal,
     onAttempt: artifact => { attempts.push(artifact); if (artifact.attempt === 3) controller.abort(); },
-  }), cancelled);
+  }), error => error instanceof GenerationError && error.status === 504);
   assert.equal(attempts[1].status, 'invalid'); assert.match(attempts[1].checks.join(' '), /time limit/);
   assert.deepEqual(JSON.parse(attempts[1].response!), patch('/boxes', [box]), 'A response arriving at the deadline remains available in the attempt output');
   assert.deepEqual(attempts[1].plan?.boxes, invalid.boxes);
-  assert.equal(attempts[2].status, 'valid');
-  assert.deepEqual(flow.records.map(r => r.kind), ['plan', 'patch', 'patch', 'critic']);
+  assert.equal(attempts.length, 2);
+  assert.deepEqual(flow.records.map(r => r.kind), ['plan', 'patch']);
 });
 
 test('valid geometry is emitted when its critic times out and the next attempt retains that plan', async t => {
@@ -238,4 +239,25 @@ test('Stop cancels an in-flight retry without starting another provider call', a
   }), cancelled);
   assert.deepEqual(flow.records.map(r => r.kind), ['plan', 'patch']);
   assert.equal(attempts.length, 2); assert.match(attempts[1].checks.join(' '), /cancelled/);
+});
+
+test('even steadily improving construction stops at the attempt safety limit', async t => {
+  const attempts: GenerationAttempt[] = [];
+  const disconnected = [box, ...Array.from({ length: 6 }, (_, i) => ({ ...box, x: 6 + i * 3, width: 1, depth: 1 }))];
+  const flow = await setup(t, (_record, n) => n === 1 ? { ...plan, boxes: disconnected } : patch('/boxes', disconnected.slice(0, 8 - n)));
+  await assert.rejects(generateDesign({ prompt: 'Build this sculpture', image: flow.image, quality: 'quick' }, undefined, {
+    continuous: true, stopWhenMatched: true, onAttempt: attempt => { attempts.push(attempt); },
+  }), error => error instanceof GenerationError && error.status === 422 && /six attempts/.test(error.message));
+  assert.equal(attempts.length, 6); assert.equal(flow.records.length, 6);
+  assert.deepEqual(attempts.map(attempt => validateDesign(attempt.design!).connectedComponents), [7, 6, 5, 4, 3, 2]);
+});
+
+test('four transient failures stop automatically instead of paying for indefinite retries', async t => {
+  const attempts: GenerationAttempt[] = [];
+  const flow = await setup(t, () => new Response(JSON.stringify({ error: { code: 503, message: 'Temporarily unavailable', status: 'UNAVAILABLE' } }), { status: 503 }));
+  await assert.rejects(generateDesign({ prompt: 'Build this sculpture', image: flow.image, quality: 'quick' }, undefined, {
+    continuous: true, stopWhenMatched: true, onAttempt: attempt => { attempts.push(attempt); },
+  }), error => error instanceof GenerationError && error.status === 422);
+  assert.equal(attempts.length, 4); assert.equal(flow.records.length, 4);
+  assert.ok(attempts.every(attempt => attempt.checks.some(check => /temporarily unavailable/.test(check))));
 });

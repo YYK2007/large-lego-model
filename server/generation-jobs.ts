@@ -92,7 +92,7 @@ export class GenerationJobs {
     validateInput(snapshot);
     const hash = hashInput(snapshot);
     const continuous = execution.continuous ?? true;
-    const stopWhenMatched = execution.stopWhenMatched ?? false;
+    const stopWhenMatched = execution.stopWhenMatched ?? true;
     return this.serial(async () => {
       if (this.closed) throw new GenerationError('The build server is shutting down.', 503);
       const existing = this.records.get(id);
@@ -148,10 +148,10 @@ export class GenerationJobs {
       const id = record.job.id;
       try {
         const worker = new Worker(this.options.workerUrl ?? new URL('./generation-worker.ts', import.meta.url), { workerData: { input: record.input, continuous: record.job.continuous, stopWhenMatched: record.job.stopWhenMatched } });
-        // Quick messaging jobs have one wall-clock deadline, including slow CPU
+        // Every job has one wall-clock deadline, including slow CPU
         // work or visual review. It starts here, never while waiting in the queue.
         const quick = record.job.quality === 'quick' && record.job.stopWhenMatched;
-        const timeout = this.options.workerTimeoutMs ?? (quick ? 150_000 : record.job.continuous ? undefined : record.job.quality === 'quick' ? 160_000 : 310_000);
+        const timeout = this.options.workerTimeoutMs ?? (quick ? 150_000 : record.job.quality === 'quick' ? 160_000 : 310_000);
         const timer = timeout === undefined ? undefined : setTimeout(() => { void this.timeLimit(id); }, timeout);
         this.workers.set(id, { worker, timer });
         worker.on('message', message => {

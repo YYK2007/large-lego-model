@@ -47,7 +47,7 @@ app.get('/api/designs/:id', async (req, res) => {
   res.json(design);
 });
 app.post('/api/generation-jobs', async (req, res) => {
-  res.status(202).json(await jobs.submit(req.body.requestId, req.body.input, undefined, { continuous: true, stopWhenMatched: req.body.stopWhenMatched === true }));
+  res.status(202).json(await jobs.submit(req.body.requestId, req.body.input, undefined, { continuous: true, stopWhenMatched: true }));
 });
 app.get('/api/generation-jobs/:id', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');

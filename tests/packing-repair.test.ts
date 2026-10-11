@@ -237,3 +237,28 @@ test('delayed repair cannot extend the compile deadline and an expired search le
   assert.deepEqual(quick, before);
   assert.equal(validateDesign(quick).valid, false);
 });
+
+test('generation chooses fewer pieces for identical profiles while respecting stock and explicit budgets', () => {
+  const plan = { schemaVersion: 2 as const, coordinateSystem: 'stud-xy-plate-z' as const, title: 'Economical profile', description: 'One exact rectangular volume.', boxes: [],
+    profiles: [{ shape: 'rectangle' as const, colorId: 15, sections: [{ z: 0, cx: 2, cy: 2, width: 4, depth: 4 }, { z: 9, cx: 2, cy: 2, width: 4, depth: 4 }] }] };
+  const plates = compilePlan(plan, { prompt: plan.title, packing: 'plates', repair: false });
+  const packed = compileGeneratedPlan(plan, { prompt: plan.title, maxBricks: 6 });
+  assert.equal(plates.bricks.length, 18); assert.equal(packed.bricks.length, 6);
+  assert.equal(validateDesign(packed).valid, true);
+  assert.deepEqual(occupied(packed), occupied(plates), 'Every colored cell survives the piece reduction');
+  const inventory: InventoryItem[] = plates.bricks.map(brick => ({ partId: brick.partId, colorId: brick.colorId, quantity: 1, source: 'Confirmed plates' }));
+  const owned = compileGeneratedPlan(plan, { prompt: plan.title, inventoryMode: 'owned', inventory });
+  assert.equal(validateDesign(owned).valid, true); assert.equal(allocateInventory(owned, inventory).totalMissing, 0);
+  assert.deepEqual(occupied(owned), occupied(plates));
+  assert.throws(() => compileGeneratedPlan(plan, { prompt: plan.title, maxBricks: 1 }), /budget/);
+});
+
+test('large plates remain preferable when they use fewer pieces than full bricks', () => {
+  const plan = { schemaVersion: 2 as const, coordinateSystem: 'stud-xy-plate-z' as const, title: 'Broad volume', description: 'Large plates are economical here.', boxes: [],
+    profiles: [{ shape: 'rectangle' as const, colorId: 15, sections: [{ z: 0, cx: 6, cy: 6, width: 12, depth: 12 }, { z: 12, cx: 6, cy: 6, width: 12, depth: 12 }] }] };
+  const bricks = compilePlan(plan, { prompt: plan.title, repair: false });
+  const packed = compileGeneratedPlan(plan, { prompt: plan.title });
+  assert.ok(packed.bricks.length < bricks.bricks.length);
+  assert.equal(packed.bricks.length, 24); assert.equal(validateDesign(packed).valid, true);
+  assert.deepEqual(occupied(packed), occupied(bricks));
+});

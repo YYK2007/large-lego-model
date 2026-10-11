@@ -177,13 +177,13 @@ test('a failed patch preserves the full base plan and patch schema for the next 
   assert.ok(result.bricks.some(brick => brick.z === 12), 'The final successful patch raises the original shaft');
 });
 
-test('four visual mismatches return a clearly marked valid draft without claiming resemblance passed', async t => {
+test('three visual mismatches stop with a clearly marked draft without claiming resemblance passed', async t => {
   const flow = await mockedFlow(t, { plans: [plan, repair('/boxes/0/height', 9), repair('/boxes/0/height', 9), repair('/boxes/0/height', 9)], critics: [mismatch, mismatch, mismatch, mismatch] });
   const result = await generateDesign({ prompt: 'The Example Tower' });
   assert.equal(validateDesign(result).valid, true);
   assert.equal(result.research?.comparison.status, 'needs-work');
-  assert.equal(flow.records.filter(record => record.kind === 'plan').length, 4);
-  assert.equal(flow.records.filter(record => record.kind === 'critic').length, 4);
+  assert.equal(flow.records.filter(record => record.kind === 'plan').length, 3);
+  assert.equal(flow.records.filter(record => record.kind === 'critic').length, 3);
 });
 
 test('worse visual revisions and an exact tie retain the earlier best plan and its actual repair views', async t => {
@@ -197,7 +197,7 @@ test('worse visual revisions and an exact tie retain the earlier best plan and i
     { index: 1, status: 'incorrect', evidence: 'The cap remains as wide as the body.', correction: 'Make the cap narrower.' },
   ] };
   const tiedReview = { ...firstReview, summary: 'This later draft ties the original unresolved-feature count.' };
-  const flow = await mockedFlow(t, { plans: [initial, ...[12, 15, 18].map(height => repair('/boxes/0/height', height))], critics: [firstReview, worseReview, worseReview, tiedReview] });
+  const flow = await mockedFlow(t, { plans: [initial, ...[12, 15, 18].map(height => repair('/boxes/0/height', height))], critics: [firstReview, worseReview, tiedReview] });
   const input = { prompt: 'An object with clear body proportions and a narrower cap', image: flow.uploadedImage };
   const result = await generateDesign(input);
   assert.equal(validateDesign(result).valid, true);
@@ -206,8 +206,8 @@ test('worse visual revisions and an exact tie retain the earlier best plan and i
   assert.deepEqual(result.research?.comparison.features, firstReview.features);
   assert.equal(Math.max(...result.bricks.map(brick => brick.z + partHeight(brick))), 9, 'A later valid model cannot replace a better or exactly tied earlier model');
   const requests = flow.records.filter(record => record.kind === 'plan');
-  assert.equal(requests.length, 4);
-  assert.equal(flow.records.filter(record => record.kind === 'critic').length, 4, 'Every revision was valid enough to receive its own visual review');
+  assert.equal(requests.length, 3);
+  assert.equal(flow.records.filter(record => record.kind === 'critic').length, 3, 'Every revision was valid enough to receive its own visual review');
   const hashes = (data: { mimeType: string; data: string }[]) => data.filter(image => image.mimeType === 'image/png').map(image => createHash('sha256').update(Buffer.from(image.data, 'base64')).digest('hex'));
   const originalViews = hashes((await renderLikenessViews(compileGeneratedPlan(initial, input))).map(view => view.inlineData));
   for (const request of requests.slice(2)) {

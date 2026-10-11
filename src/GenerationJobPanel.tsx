@@ -32,7 +32,7 @@ export function GenerationJobPanel({ job, elapsed, connection, onCancel, onResum
     : { succeeded: 'Build ready', failed: 'Build stopped before completion', interrupted: 'Build interrupted by server restart', cancelled: 'Generation stopped' }[job.status];
   return <section className="generation-job" aria-label="Build job">
     <div className="job-heading"><strong>{label}</strong><span>{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</span></div>
-    <p>{job.continuous ? active ? `${job.quality === 'quick' ? 'Quick' : 'Detailed'} · keeps improving until you press Stop.` : 'Stopped. Your attempt results are retained.' : job.quality === 'quick' ? 'Quick · aims for a draft in about 2.5 minutes, excluding queue wait.' : 'Detailed · up to 5 minutes of generation.'}</p>
+    <p>{active ? `${job.quality === 'quick' ? 'Quick · about 2.5 minutes' : 'Detailed · up to 5 minutes'}. Stops when the review passes or further attempts stop improving. You can stop sooner.` : 'Finished. Your attempt results are retained.'}</p>
     {active && <button className="job-stop" onClick={onCancel}>Stop generation</button>}
     {active && <p role="status">{connection || job.progress?.detail || 'You can reload this page. This build will keep running.'}</p>}
     {!active && connection && <p role="status">{connection}</p>}

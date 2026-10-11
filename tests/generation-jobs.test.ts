@@ -149,7 +149,7 @@ test('concept checkpoints are validated and persisted separately from public job
 test('continuous jobs retain every attempt beyond four, with failed previews separate from checked designs, across restart', async () => {
   const h = await harness();
   try {
-    const id = randomUUID(); await h.jobs.submit(id, { prompt: 'continuous' });
+    const id = randomUUID(); await h.jobs.submit(id, { prompt: 'continuous' }, undefined, { stopWhenMatched: false });
     const job = await until(h.jobs, id, value => value.attempts?.length === 7);
     assert.equal(job.continuous, true); assert.equal(job.stopWhenMatched, false); assert.equal(job.status, 'running'); assert.equal(job.resultId, undefined);
     assert.deepEqual(job.attempts?.map(item => item.attempt), [1, 2, 3, 4, 5, 6, 7]);
@@ -179,7 +179,7 @@ test('Stop retains an already received attempt while its save is in flight, with
   const saving = new Promise<void>(resolve => { entered = resolve; });
   const h = await harness({ beforeSave: async () => { if (++saves === 2) { entered(); await blocked; } } });
   try {
-    const id = randomUUID(); await h.jobs.submit(id, { prompt: 'continuous' });
+    const id = randomUUID(); await h.jobs.submit(id, { prompt: 'continuous' }, undefined, { stopWhenMatched: false });
     await saving;
     const stop = h.jobs.cancel(id);
     await new Promise(resolve => setTimeout(resolve, 20));
@@ -206,16 +206,16 @@ test('bounded legacy execution reaches the worker and cannot be changed by reusi
   } finally { await h.close(); }
 });
 
-test('stop-when-matched jobs retain attempts and complete, with an immutable persisted execution policy', async () => {
+test('new jobs default to stopping on a match and persist that execution policy', async () => {
   const h = await harness();
   try {
     const id = randomUUID(), input = { prompt: 'continuous' }, execution = { continuous: true, stopWhenMatched: true };
-    await h.jobs.submit(id, input, undefined, execution);
+    await h.jobs.submit(id, input);
     const job = await until(h.jobs, id, value => value.status === 'succeeded');
     assert.equal(job.continuous, true); assert.equal(job.stopWhenMatched, true);
     assert.equal(job.attempts?.length, 7); assert.equal(job.attempts?.[6].status, 'valid');
     assert.ok(job.resultId); assert.equal(validateDesign(h.designs.get(job.resultId!)!).valid, true);
-    await assert.rejects(h.jobs.submit(id, input), /different build/);
+    assert.equal((await h.jobs.submit(id, input)).resultId, job.resultId);
     await assert.rejects(h.jobs.submit(id, input, undefined, { ...execution, stopWhenMatched: false }), /different build/);
     await h.restart();
     assert.deepEqual(await h.jobs.get(id), JSON.parse(JSON.stringify(job)));
@@ -288,12 +288,13 @@ test('Quick time budget starts when its worker runs, excluding queue wait', asyn
   } finally { await h.close(); }
 });
 
-test('default worker deadlines reserve delivery time for Quick and leave Detailed and continuous policies intact', async t => {
+test('all workers have a total deadline, including legacy continuous jobs', async t => {
   for (const policy of [
     { quality: 'quick' as const, continuous: true, stopWhenMatched: true, timeout: 150_000 },
     { quality: 'quick' as const, continuous: false, stopWhenMatched: false, timeout: 160_000 },
     { quality: 'detailed' as const, continuous: false, stopWhenMatched: false, timeout: 310_000 },
-    { quality: 'quick' as const, continuous: true, stopWhenMatched: false, timeout: undefined },
+    { quality: 'quick' as const, continuous: true, stopWhenMatched: false, timeout: 160_000 },
+    { quality: 'detailed' as const, continuous: true, stopWhenMatched: true, timeout: 310_000 },
   ]) await t.test(JSON.stringify(policy), async t => {
     const nativeTimeout = setTimeout, deadlines: number[] = [];
     t.mock.method(globalThis, 'setTimeout', (...args: Parameters<typeof setTimeout>) => {

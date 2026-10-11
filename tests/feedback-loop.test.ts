@@ -293,3 +293,40 @@ test('quick delivery with no checked model fails at the shared deadline and neve
   }), error => error instanceof GenerationError && error.status === 504 && /135-second time limit/.test(error.message));
   assert.deepEqual(flow.records.map(record => record.kind), ['plan', 'patch']); assert.equal(drafts, 0);
 });
+
+test('two unhelpful visual revisions stop automatically and retain the earlier better draft', async t => {
+  const attempts: GenerationAttempt[] = [];
+  const flow = await setup(t, (record, n) => record.kind === 'critic' ? unresolved : n === 1 ? plan : patch('/boxes/0/height', 12 + n * 3));
+  const result = await generateDesign({ prompt: 'Build this sculpture', image: flow.image, quality: 'quick' }, undefined, {
+    continuous: true, stopWhenMatched: true, onAttempt: attempt => { attempts.push(attempt); },
+  });
+  assert.equal(attempts.length, 3); assert.equal(result.id, attempts[0].design!.id);
+  assert.equal(result.research!.comparison.status, 'needs-work');
+  assert.ok(attempts.slice(1).every(attempt => attempt.design!.bricks.length > result.bricks.length));
+  assert.match(result.research!.warnings.join(' '), /two revisions did not improve/);
+  assert.match(text(flow.records[2]), /Add pieces only when needed/);
+  assert.match(flow.records[0].body.systemInstruction.parts[0].text, /fewest pieces.*defining shape/);
+  assert.equal(flow.records.length, 6, 'No extra planning or review runs after stagnation');
+});
+
+test('an equally reviewed revision with fewer pieces becomes the retained draft', async t => {
+  const attempts: GenerationAttempt[] = [];
+  const flow = await setup(t, (record, n) => record.kind === 'critic' ? unresolved : n === 1 ? { ...plan, boxes: [{ ...box, height: 18 }] } : patch('/boxes/0/height', 12));
+  const result = await generateDesign({ prompt: 'Build this sculpture', image: flow.image, quality: 'quick' }, undefined, {
+    continuous: true, stopWhenMatched: true, onAttempt: attempt => { attempts.push(attempt); },
+  });
+  assert.equal(attempts.length, 4); assert.equal(result.id, attempts[1].design!.id);
+  assert.ok(result.bricks.length < attempts[0].design!.bricks.length);
+  assert.equal(result.research!.comparison.status, 'needs-work', 'Piece reduction cannot fabricate a passing review');
+});
+
+test('repeated failed repairs stop and retain the best reviewed draft', async t => {
+  const attempts: GenerationAttempt[] = [];
+  const flow = await setup(t, (record, n) => record.kind === 'critic' ? unresolved : n === 1 ? plan : patch('/boxes', [box, { ...box, x: 12 }]));
+  const result = await generateDesign({ prompt: 'Build this sculpture', image: flow.image, quality: 'quick' }, undefined, {
+    continuous: true, stopWhenMatched: true, onAttempt: attempt => { attempts.push(attempt); },
+  });
+  assert.equal(attempts.length, 5); assert.equal(result.id, attempts[0].design!.id);
+  assert.ok(attempts.slice(1).every(attempt => attempt.status === 'invalid'));
+  assert.match(result.research!.warnings.join(' '), /four attempts without measurable progress/);
+});

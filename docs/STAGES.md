@@ -38,6 +38,8 @@ Later: ElevenLabs incoming/outgoing voice notes, physical stability solver and r
 
 ## Checkpoints
 
+- Piece economy and automatic finish (2026-10-11): planning justifies added pieces by subject features or construction needs. Exact-volume packing compares checked alternatives by piece count, preserving color, fixed parts, stock and budgets. Website and iMessage jobs stop on a complete match, stalled reviews/construction, a shared time limit or a bounded attempt count; the best checked draft remains available. See `VERIFICATION.md` for tests and limits.
+
 - Catalog expansion (2026-10-11): full-index paginated discovery and resumable import, 80 bundled/96 locally usable part types, real four- and five-petal flowers, explicit simple-piece preference, exact set/loose-inventory support and compact pinned manifests. The unrestricted assembly objective remains incomplete; connector and geometry exclusions stay explicit. See `DYNAMIC-CATALOG.md` and `VERIFICATION.md`.
 
 - Current iMessage/feedback increment: simpler verified parts after repeated construction failures, exact-render Gemini review with automatic finish on a complete match, selectable checked drafts, and Photon conversation jobs with Stop, revisions and byte attachments. Mocked behavior and browser selection are verified; live authentication, message delivery and native phone rotation are separate acceptance gates recorded in `VERIFICATION.md`.
