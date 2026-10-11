@@ -9,7 +9,7 @@ const pending = new Map<string, Promise<Buffer>>();
 // Only failed preparations need a receipt between polls; successful PDFs live on disk.
 const preparationFailures = new Map<string, unknown>();
 let queue: Promise<void> = Promise.resolve();
-const CACHE_VERSION = 'manual-v6-pattern-cycles';
+const CACHE_VERSION = 'manual-v7-catalog-provenance';
 const cacheDirectory = resolve('data/manual-cache');
 
 async function cachedManual(input: ManualInput, key: string): Promise<Buffer> {

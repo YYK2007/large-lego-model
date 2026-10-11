@@ -75,7 +75,7 @@ export class PhotonConversation {
   }
   private link(key: 'job' | 'design', id: string) {
     // The public guide gateway accepts signed links, not the local job/editor URLs.
-    if (!this.publicBaseUrl || this.api.instructionsLink) return '';
+    if (!this.publicBaseUrl || this.api.instructionsLink || key === 'design' && !this.isApproved(id)) return '';
     const url = new URL('/', this.publicBaseUrl); url.searchParams.set(key, id); return `\n${url}`;
   }
   private async tell(value: string, jobId?: string) {
@@ -89,6 +89,17 @@ export class PhotonConversation {
   private async sendInstructions(design: SavedDesign, url: string) {
     if (this.reply.instructions) await this.reply.instructions(url, design.title);
     else await this.reply.text(`Build ${design.title}, one step at a time. Open your guide:\n${url}`);
+  }
+  private isApproved(id: string) {
+    return this.state.approvedDesignId === id || Object.hasOwn(this.state.approvedDeliveries ?? {}, id);
+  }
+  private approvedSelection() {
+    const id = this.state.feedbackDesignId || this.state.designId || this.state.approvedDesignId;
+    if (!id) throw new PhotonInputError('Let’s make a preview first. Send an idea, then tell me what to change.');
+    if (this.state.pendingRequest || this.state.jobId && this.state.finishedJobId !== this.state.jobId && !this.state.feedbackDesignId || !this.isApproved(id)) {
+      throw new PhotonInputError('Please review the latest preview first. Tell me what to change, or reply Approve when you’re happy with it. I’ll send the guide and final files after approval.');
+    }
+    return id;
   }
   private exportStage(progress: ExportProgress) {
     return `${progress.phase === 'preparing' ? 'Preparing' : 'Sending'} your ${exportLabels[progress.kind]}`;
@@ -133,11 +144,11 @@ export class PhotonConversation {
     const review = design.research?.comparison.status === 'matched' ? 'It also passed the AI visual review.'
       : design.research?.comparison.status === 'needs-work' ? 'The shape still needs refinement, so please check whether it looks right to you.'
         : 'AI visual review was skipped. Please check whether the preview looks like your request.';
-    return `${review} Reply with a change, or /approve when you’re ready to build. /instructions opens the building guide; /manual gets a PDF.`;
+    return `${review} What would you change? If you’re happy with it, reply Approve. I’ll send the guide and final files after you approve.`;
   }
   private completionMessage(job: GenerationJob, design?: SavedDesign) {
     const saved = design ? `Your checked draft is kept. ${this.feedbackPrompt(design)}${this.link('design', design.id)}`
-      : this.state.designId ? 'Your previous checked build is kept. Send /model or /manual to see it.' : 'No checked draft was produced.';
+      : this.state.designId ? 'Your previous checked build is kept. Tell me what to change, or approve its preview when you’re happy with it.' : 'No checked draft was produced.';
     if (job.status === 'cancelled' || job.status === 'interrupted') return `The build ${job.status === 'cancelled' ? 'was stopped' : 'was interrupted'}. ${saved} ${this.qualitySelectionEnabled ? 'Reply Quick or Detailed when you want to try again.' : 'Send your idea or a change when you want to try again.'}`;
     const matched = design?.research?.comparison.status === 'matched';
     const problem = job.error ? ` ${buildProblem([job.error.message, ...job.error.checks])}` : '';
@@ -197,10 +208,6 @@ export class PhotonConversation {
     await this.reply.designPreview(design);
     if (this.state.jobId === job.id && !this.changing && this.state.finishedJobId !== job.id) {
       this.state.designId = id; this.state.feedbackDesignId = id; this.state.lastDraftId = id; this.state.lastDeliveryAt = this.now(); await this.persist();
-      const url = await this.instructionUrl(id);
-      if (url && version === this.workVersion && this.state.finishedJobId !== job.id && this.state.feedbackDesignId === id && this.state.jobId === job.id && !this.changing) {
-        try { await this.sendInstructions(design, url); } catch { /* The checked preview remains selected; /instructions can retry the link. */ }
-      }
     }
     return design;
   }
@@ -230,13 +237,13 @@ export class PhotonConversation {
     const version = this.workVersion;
     if (!this.qualitySelectionEnabled) quality = 'detailed';
     const previousId = request.kind === 'new' ? undefined : this.state.feedbackDesignId || this.state.designId;
-    await this.reply.text((!this.qualitySelectionEnabled ? 'Starting your build. I’ll send a checked preview for your feedback. Send /stop any time.'
+    await this.reply.text((!this.qualitySelectionEnabled ? previousId ? 'Updating your draft with your feedback. I’ll keep the existing build as the starting point and send another preview. Send /stop any time.' : 'Starting your build. I’ll send a checked preview for your feedback. Send /stop any time.'
       : quality === 'quick' ? 'Starting Quick. I’ll aim for a usable checked draft in about 2.5 minutes and keep you updated. Send /stop any time.'
         : 'Starting Detailed. I’ll send checked drafts while I review and refine the build. Send /stop any time.')
       + '\n\n/status: progress · /stop: stop work and deliveries'
-      + '\n/model: rotatable file · /manual: PDF instructions, once a checked build is available'
-      + '\n/instructions or /build: interactive building guide'
-      + '\n/parts: parts list · /approve: accept this exact preview and get ready to build'
+      + '\n/approve: accept this exact preview and get the final files'
+      + '\nAfter approval: /model: rotatable file · /manual: optional PDF'
+      + '\n/instructions or /build: building guide · /parts: parts list'
       + '\n/retry: resend only missing files from your approved build'
       + '\n/use N: stop and choose checked attempt N'
       + '\n/open ID: open a saved build'
@@ -348,6 +355,12 @@ export class PhotonConversation {
       if (!input.prompt && !input.image) return;
       let command = !this.qualitySelectionEnabled && /^(?:start|continue|go ahead)[.!]?$/i.test(input.prompt.trim())
         ? { kind: 'quality' as const, quality: 'detailed' as const, prompt: '' } : routeText(input.prompt);
+      // "Make the roof red" is feedback, while "make the Taj Mahal" may be a
+      // new subject. Resolve that distinction against the selected draft.
+      if (command.kind === 'design' && command.prompt && this.api.chat && (this.state.feedbackDesignId || this.state.designId)
+        && !isRevisionPrompt(command.prompt) && !/^(?:(?:please|quickly)\s+)?(?:build|make|create|generate|design)\s+(?:a|an|another|new)\b/i.test(command.prompt)) {
+        command = { kind: 'conversation', prompt: command.prompt };
+      }
       const confirmsSuggestion = /^(?:yes|yep|yeah|sure|ok(?:ay)?|sounds good|go for it|let[’']s do (?:it|that))(?:[, ]+please)?[.!]*$/i.test(input.prompt.trim());
       if (command.kind === 'chat' && confirmsSuggestion && this.state.chatHistory?.length && !this.state.pendingRequest) command = { kind: 'conversation', prompt: input.prompt };
       let conversationalRevision = false, conversationalNew = false;
@@ -426,8 +439,7 @@ export class PhotonConversation {
         return;
       }
       if (command.kind === 'instructions') {
-        const id = this.state.feedbackDesignId || this.state.designId || this.state.approvedDesignId;
-        if (!id) throw new PhotonInputError('Let’s get a checked build first. Send an idea, or /use followed by a checked attempt number.');
+        const id = this.approvedSelection();
         const progress = this.beginExport('instructions'), signal = progress.controller.signal;
         try {
           const design = await this.api.design(id, signal), url = await this.instructionUrl(id, signal);
@@ -440,8 +452,7 @@ export class PhotonConversation {
         return;
       }
       if (command.kind === 'manual' || command.kind === 'model' || command.kind === 'parts') {
-        if (!this.state.designId) throw new PhotonInputError('There is no checked build selected yet. Send an idea first, or /use followed by a checked attempt number.');
-        const designId = this.state.designId;
+        const designId = this.approvedSelection();
         let design: SavedDesign | undefined;
         const progress = this.beginExport(command.kind), signal = progress.controller.signal;
         try {

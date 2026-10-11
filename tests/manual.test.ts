@@ -12,7 +12,7 @@ import { renderManualPdf } from '../server/manual-render';
 import { groupManualSteps } from '../shared/manual-repeats';
 import { renderDesignSvg } from '../shared/illustration';
 import { partSurfaces } from '../shared/part-surfaces';
-import { buildSteps, validateDesign, type BuildStep, type Design } from '../shared/model';
+import { allocateInventory, buildSteps, validateDesign, type BuildStep, type Design, type InventoryItem } from '../shared/model';
 import { hangingDesign } from './fixtures/hanging-design';
 
 const design: Design = {
@@ -65,7 +65,7 @@ function pdfText(pdf: Buffer): string {
   return extracted;
 }
 
-function exactPlacements(pdf: Buffer): { designId: string; coordinateSystem: string; steps: BuildStep[] } {
+function exactPlacements(pdf: Buffer): { designId: string; coordinateSystem: string; steps: BuildStep[]; allocation?: ReturnType<typeof allocateInventory> } {
   const raw = pdf.toString('latin1'), at = raw.indexOf('/Type /EmbeddedFile');
   assert.ok(at >= 0, 'The companion must retain exact placements as an embedded attachment');
   const stream = raw.indexOf('stream\n', at), dictionary = raw.slice(at, stream);
@@ -228,6 +228,45 @@ test('diagram-led PDF preserves exact placements, complete BOM, inventory shorta
   assert.ok(!content.includes('TOP-DOWN PLACEMENT MAP'), 'Engineering coordinates should not dominate the illustrated guide');
 });
 
+test('PDF links exact part colors and recognized sets while preserving full used-source labels only', async () => {
+  const source = 'Studio drawer of carefully sorted red bricks from the family collection, reserved for this build - lot 17B';
+  assert.ok(source.length > 65 && source.length <= 120);
+  const inventory: InventoryItem[] = [
+    { partId: '3004', colorId: 1, quantity: 1, source: 'Set 10696-1 · copy abc123' },
+    { partId: '3004', colorId: 4, quantity: 1, source },
+    { partId: '3003', colorId: 14, quantity: 1, source: 'Loose lot, formerly near Set 9999-1' },
+    { partId: '3005', colorId: 1, quantity: 500, source: 'Unused private stock' },
+  ];
+  const pdf = await generateManualPdf(design, inventory), raw = pdf.toString('latin1'), content = pdfText(pdf);
+  for (const [part, color] of [['3004', 1], ['3004', 4], ['3003', 14], ['3005', 15]]) {
+    assert.ok(raw.includes(`/URI (https://rebrickable.com/parts/${part}/?color=${color})`));
+  }
+  assert.ok(raw.includes('/URI (https://rebrickable.com/sets/10696-1/)'));
+  assert.ok(!raw.includes('https://rebrickable.com/sets/9999-1/'), 'A loose-lot description is not a recognized imported set label');
+  assert.ok(content.replace(/\s+/g, '').includes(source.replace(/\s+/g, '')), 'The printed source must include its full distinguishing suffix');
+  const exact = exactPlacements(pdf);
+  assert.deepEqual(exact.steps, buildSteps(design));
+  assert.deepEqual(exact.allocation, allocateInventory(design, inventory));
+  assert.ok(!Object.hasOwn(exact, 'inventory'));
+  assert.ok(!JSON.stringify(exact).includes('Unused private stock'));
+  assert.ok(!content.includes('Unused private stock'));
+  assert.match(content, /1 bricks missing/);
+});
+
+test('long source labels wrap across collection columns and pages without truncation or page-count drift', async () => {
+  const stack: Design = { ...design, id: randomUUID(), schemaVersion: 2, coordinateSystem: 'stud-xy-plate-z', catalogVersion: 'upright-architecture-2', bricks: Array.from({ length: 30 }, (_, z) => ({
+    id: `stack-${z}`, partId: '3005', colorId: 15, x: 0, y: 0, z: z * 3, rotation: 0 as const,
+  })) };
+  const inventory = stack.bricks.map((_, i) => ({ partId: '3005', colorId: 15, quantity: 1, source: `${'W'.repeat(100)} lot ${i}` }));
+  const pdf = await generateManualPdf(stack, inventory), content = pdfText(pdf);
+  for (const row of inventory) assert.ok(content.replace(/\s+/g, '').includes(row.source.replace(/\s+/g, '')), row.source);
+  assert.match(content, /Your pieces, continued/);
+  const expected = 5 + Math.ceil(groupManualSteps(buildSteps(stack)).length / 2); // cover, BOM, three allocation pages, instructions
+  assert.equal((pdf.toString('latin1').match(/\/Type \/Page\b/g) ?? []).length, expected);
+  assert.ok(content.includes(`${String(expected).padStart(2, '0')} / ${String(expected).padStart(2, '0')}`));
+  assert.deepEqual(exactPlacements(pdf).allocation, allocateInventory(stack, inventory));
+});
+
 test('mixed-height PDF preserves plate heights and all four slope rotations in its exact attachment', async () => {
   const pdf = await generateManualPdf(mixed), content = pdfText(pdf);
   for (const expected of ['10 PIECES', '3020', '3022', '3039', 'White', 'FRONT']) {
@@ -351,7 +390,7 @@ test('manual cache survives process restart and keys exact design and inventory 
   const inventory = [{ partId: '3004', colorId: 1, quantity: 1, source: 'Cached source lot' }];
   const changed = { ...original, title: 'Changed cached revision' };
   const inputs = [{ design: original, inventory }, { design: changed, inventory }, { design: original, inventory: [] }];
-  const filenames = inputs.map(input => `data/manual-cache/manual-v6-pattern-cycles-${createHash('sha256').update(JSON.stringify(input)).digest('hex')}.pdf`);
+  const filenames = inputs.map(input => `data/manual-cache/manual-v7-catalog-provenance-${createHash('sha256').update(JSON.stringify(input)).digest('hex')}.pdf`);
   t.after(() => Promise.all(filenames.map(filename => rm(filename, { force: true }))));
   const first = await generateManualPdf(original, inventory);
   assert.deepEqual(await readFile(filenames[0]), first);

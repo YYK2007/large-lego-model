@@ -13,6 +13,7 @@ type SceneOptions = Parameters<typeof renderDesignSvg>[1];
 function text(doc: PDFKit.PDFDocument, value: string, x: number, y: number, width: number, size = 10, bold = false, color = INK) {
   doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(size).fillColor(color).text(value, x, y, { width, lineGap: 1.5 });
 }
+const partUrl = (partId: string, colorId: number) => `https://rebrickable.com/parts/${encodeURIComponent(partId)}/?color=${colorId}`;
 function heading(doc: PDFKit.PDFDocument, label: string, title: string) {
   doc.addPage();
   text(doc, label.toUpperCase(), MARGIN, 55, WIDTH - MARGIN * 2, 9, true, BLUE);
@@ -133,6 +134,18 @@ export async function renderManualPdf(design: Design, inventory?: InventoryItem[
     info: { Title: `${design.title} - Building instructions`, Author: 'Sprout', Subject: `Design ${design.id}` } });
   const chunks: Buffer[] = [];
   const result = new Promise<Buffer>((resolve, reject) => { doc.on('data', chunk => chunks.push(chunk)); doc.on('end', () => resolve(Buffer.concat(chunks))); doc.on('error', reject); });
+  // Preserve complete source names, adding room only where a label wraps.
+  type AllocationRow = { item: typeof allocationRows[number]; x: number; y: number; height: number };
+  const allocationPages: AllocationRow[][] = [];
+  let allocationPage: AllocationRow[] = [], column = 0, allocationY = 143;
+  for (const item of allocationRows) {
+    const height = Math.max(30, 17 + doc.font('Helvetica').fontSize(8).heightOfString(item.source, { width: PANEL - 40, lineGap: 1.5 }));
+    if (allocationY + height > 535) { allocationY = 143; column++; }
+    if (column === 2) { allocationPages.push(allocationPage); allocationPage = []; column = 0; }
+    allocationPage.push({ item, x: MARGIN + column * (PANEL + 24), y: allocationY, height });
+    allocationY += height;
+  }
+  if (allocationPage.length) allocationPages.push(allocationPage);
   const credits = imported.map(part => {
     const authors = [...new Set(part.geometry!.assets.map(asset => asset.author).filter(Boolean))].join('; ');
     const title = `${part.id} / ${part.name}`;
@@ -142,7 +155,7 @@ export async function renderManualPdf(design: Design, inventory?: InventoryItem[
   });
   let creditPages = 0, creditY = 560;
   for (const row of credits) { if (creditY + row.height > 535) { creditPages++; creditY = 158; } creditY += row.height; }
-  const totalPages = 1 + Math.ceil(groups.length / 2) + Math.ceil(bom.length / 28) + Math.ceil(allocationRows.length / 26) + creditPages;
+  const totalPages = 1 + Math.ceil(groups.length / 2) + Math.ceil(bom.length / 28) + allocationPages.length + creditPages;
   let pageNumber = 0;
   doc.on('pageAdded', () => {
     pageNumber++;
@@ -151,8 +164,8 @@ export async function renderManualPdf(design: Design, inventory?: InventoryItem[
     doc.font('Helvetica').fontSize(8).fillColor(MUTED).text(design.title, MARGIN, HEIGHT - 22, { lineBreak: false });
     doc.font('Helvetica-Bold').fontSize(8).fillColor(BLUE).text(`${String(pageNumber).padStart(2, '0')} / ${String(totalPages).padStart(2, '0')}`, WIDTH - 98, HEIGHT - 22, { lineBreak: false });
   });
-  doc.file(Buffer.from(JSON.stringify({ designId: design.id, coordinateSystem: design.coordinateSystem, steps })), {
-    name: 'exact-placements.json', description: 'Exact ordered parts, positions, rotations and checked placement paths for this design.',
+  doc.file(Buffer.from(JSON.stringify({ designId: design.id, coordinateSystem: design.coordinateSystem, steps, ...(allocation ? { allocation } : {}) })), {
+    name: 'exact-placements.json', description: 'Exact ordered placements, checked paths and supplied inventory provenance for this design.',
   });
 
   doc.addPage();
@@ -180,24 +193,27 @@ export async function renderManualPdf(design: Design, inventory?: InventoryItem[
 
   for (let offset = 0; offset < bom.length; offset += 28) {
     heading(doc, 'Parts list', offset ? 'Everything you need, continued' : 'Everything you need');
-    text(doc, 'Match the part and its color. Quantities cover the complete model.', MARGIN, 108, 780, 10, false, MUTED);
+    text(doc, 'Match the part and its color. Tap a blue label for its catalog entry; links do not confirm stock or price.', MARGIN, 108, 780, 10, false, MUTED);
     bom.slice(offset, offset + 28).forEach((item, i) => {
       const x = MARGIN + Math.floor(i / 14) * (PANEL + 24), y = 140 + i % 14 * 28;
       if (i % 2 === 0) doc.roundedRect(x, y - 2, PANEL, 27, 4).fill('#f0f6f5');
       doc.image(pictures.get(`${item.partId}:${item.colorId}`)!, x + 2, y, { fit: [45, 23], align: 'center', valign: 'center' });
-      text(doc, `${item.partId} / ${catalog.parts[item.partId].name.replaceAll('×', 'x')}`, x + 54, y, PANEL - 93, 8, true);
+      text(doc, `${item.partId} / ${catalog.parts[item.partId].name.replaceAll('×', 'x')}`, x + 54, y, PANEL - 93, 8, true, BLUE);
+      doc.link(x + 2, y, PANEL - 42, 24, partUrl(item.partId, item.colorId));
       text(doc, catalog.colors[item.colorId].name, x + 54, y + 12, PANEL - 93, 8, false, MUTED);
       text(doc, `${item.quantity}x`, x + PANEL - 35, y + 5, 34, 11, true, BLUE);
     });
   }
-  for (let offset = 0; offset < allocationRows.length; offset += 26) {
-    heading(doc, 'Your collection', offset ? 'Your pieces, continued' : 'Where your pieces come from');
+  for (let page = 0; page < allocationPages.length; page++) {
+    heading(doc, 'Your collection', page ? 'Your pieces, continued' : 'Where your pieces come from');
     text(doc, allocation!.totalMissing ? `${allocation!.totalMissing} bricks missing. Obtain these before building.` : 'All required pieces are allocated from your saved collection.', MARGIN, 108, 780, 10, false, MUTED);
-    allocationRows.slice(offset, offset + 26).forEach((item, i) => {
-      const x = MARGIN + Math.floor(i / 13) * (PANEL + 24), y = 143 + i % 13 * 30;
-      if (i % 2 === 0) doc.roundedRect(x, y - 3, PANEL, 29, 4).fill('#f0f6f5');
-      text(doc, `${item.partId} / ${catalog.colors[item.colorId].name}`, x + 4, y, PANEL - 40, 9, true);
-      text(doc, item.source.slice(0, 65), x + 4, y + 13, PANEL - 40, 8, false, item.missing ? '#a14826' : MUTED);
+    allocationPages[page].forEach(({ item, x, y, height }, i) => {
+      if (i % 2 === 0) doc.roundedRect(x, y - 3, PANEL, height - 1, 4).fill('#f0f6f5');
+      text(doc, `${item.partId} / ${catalog.colors[item.colorId].name}`, x + 4, y, PANEL - 40, 9, true, BLUE);
+      doc.link(x + 4, y, PANEL - 40, 12, partUrl(item.partId, item.colorId));
+      const set = /^Set ([A-Za-z0-9]+-\d+)(?: · copy [a-f0-9]{6})?$/i.exec(item.source);
+      text(doc, item.source, x + 4, y + 13, PANEL - 40, 8, false, item.missing ? '#a14826' : set ? BLUE : MUTED);
+      if (set && !item.missing) doc.link(x + 4, y + 13, PANEL - 40, height - 13, `https://rebrickable.com/sets/${encodeURIComponent(set[1])}/`);
       text(doc, `${item.take}x`, x + PANEL - 34, y + 4, 34, 10, true, BLUE);
     });
   }

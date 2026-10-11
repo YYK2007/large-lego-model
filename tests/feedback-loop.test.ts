@@ -62,14 +62,14 @@ async function setup(t: TestContext, reply: (record: Recorded, construction: num
 
 test('continuous feedback stops only at a complete matched review and carries exact renders, reference pixels and the original request into repair', async t => {
   const attempts: GenerationAttempt[] = [], drafts: Design[] = [], order: string[] = [];
-  const flow = await setup(t, (record, n) => record.kind === 'critic' ? n === 1 ? unresolved : matched : n === 1 ? plan : patch('/boxes/0/height', 15));
+  const flow = await setup(t, (record, n) => record.kind === 'critic' ? n === 1 ? unresolved : matched : n === 1 ? { edits: [{ op: 'add', path: '/boxes/-', valueJson: JSON.stringify({ ...box, z: 12, height: 3 }) }] } : patch('/boxes/0/height', 6));
   const previous = compileGeneratedPlan(plan, { prompt: 'Build an original tall red sculpture with a square body' });
   const result = await generateDesign({ prompt: 'Make the body taller', previous, image: flow.image, quality: 'quick' }, undefined, {
     continuous: true, stopWhenMatched: true, signal: flow.controller.signal,
     onAttempt: async artifact => { await Promise.resolve(); attempts.push(artifact); order.push('attempt' + artifact.attempt); },
     onDraft: draft => { drafts.push(draft); order.push('draft'); },
   });
-  assert.deepEqual(flow.records.map(record => record.kind), ['plan', 'critic', 'patch', 'critic']);
+  assert.deepEqual(flow.records.map(record => record.kind), ['patch', 'critic', 'patch', 'critic']);
   assert.deepEqual(order, ['draft', 'attempt1', 'draft', 'attempt2', 'draft']);
   assert.equal(attempts[0].design!.research!.comparison.status, 'needs-work');
   assert.equal(attempts[1].design!.research!.comparison.status, 'matched');
@@ -122,7 +122,7 @@ test('an independent target needs concrete features before any construction can 
 
 test('a malformed independent brief is corrected from the source before planning and cannot be diluted by the plan', async t => {
   const required = { ...observations, features: ['Overlapping curved surfaces separated by visible dark channels'] };
-  const flow = await setup(t, record => record.kind === 'critic' ? matched : { ...plan, observations: { ...observations, features: ['A generic red mass'] } }, false,
+  const flow = await setup(t, record => record.kind === 'critic' ? matched : { ...patch('/parts/0/colorId', 4), observations: { ...observations, features: ['A generic red mass'] } }, false,
     [{ ...required, features: [] }, required]);
   const previous = compileGeneratedPlan(plan, { prompt: 'An open layered sculpture', quality: 'quick' });
   const result = await generateDesign({ prompt: 'Preserve the folded surfaces and gaps instead of a solid lump', previous, image: flow.image, quality: 'quick' }, undefined, {

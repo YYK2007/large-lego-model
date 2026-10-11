@@ -2,6 +2,16 @@
 
 This document distinguishes tested local behavior from live integrations that need account/device access.
 
+## Approval before final delivery and targeted revisions (2026-10-11)
+
+The checked-preview path previously sent the complete instruction guide automatically. It now sends only the preview and feedback request. Guide, model, PDF and parts commands (including natural-language equivalents) require approval of the exact selected revision. A new revision cannot inherit its parent's approval. Explicit retry remains pinned to the earlier approved revision and only its missing acknowledged files. The guide/model/parts approval bundle is unchanged; PDF remains optional when a guide is available.
+
+Feedback retains the original request, image and owned stock. Construction now starts revisions from every exact saved placement and requests targeted geometry patches, instead of asking for a fresh whole-model plan. Concept selection and whole-model fallback cannot silently replace a revision; failed edits keep the prior checked build. Ambiguous commands such as “make the roof red” are interpreted against the selected draft. This verifies edit mechanics, not guaranteed semantic perfection in every Gemini patch.
+
+The three end-to-end conversation regressions for approval gating, A-to-B feedback context and restart/partial delivery pass. The nine generation suites pass 169 tests, including exact untouched geometry and failed-edit preservation; production build passes. The API and Photon listener were refreshed after confirming no active builds or connected API exports. **743/743 regression tests pass** with four concurrent test files (51.23 seconds), and the final production build passes. The updated request → feedback → approval behavior still needs its final phone confirmation. No paid generation was started for these fixes.
+
+The PDF parts and allocation rows now link to exact part/color catalog pages and recognized owned sets. Full source labels wrap rather than truncate; the embedded exact data contains allocated provenance without unrelated inventory. All 32 manual/repeat checks pass, and the five-page fixture's source page was rendered and inspected. Cache version `manual-v7-catalog-provenance` preserves older files while new requests receive the corrected PDF. Evidence: `output/pdf/catalog-provenance-review.pdf`, `catalog-provenance-collection.png`, and `output/instruction-guide/approval-gate-*`, `targeted-revision-regression.log`.
+
 ## Stop cancels deliveries; unfinished attempts stay private (2026-10-11)
 
 The previous listener explicitly kept requested files preparing/sending after Stop, and its priority path only recognized plain-text control messages. Stop now recognizes direct natural requests and reply/group wrappers, bypasses slow commands, aborts export HTTP/validation waits, discards requests queued before it, and suppresses late automatic/fallback guide links and generation actions. Saved checked builds and acknowledged approved files remain intact; explicit `/retry` resumes only missing files from the same approved revision. A file already handed to Photon cannot be recalled and may still arrive. Cancellation failures remain visible instead of claiming a successful stop. Shared export caches and validation workers can finish for other callers, without delivering cancelled output to this conversation.
