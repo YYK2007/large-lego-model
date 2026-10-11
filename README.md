@@ -1,93 +1,102 @@
-# Large Lego Model
+# Large LEGO Model
 
-Turn an idea and existing LEGO bricks into a detailed three-dimensional build, exact parts list, and illustrated instructions. **Large Lego Model** is the architecture name. **Sprout** is a provisional product name.
+An iMessage building assistant that turns a description or reference photo into a LEGO draft, lets you revise it, and delivers interactive instructions after you approve it.
 
-HackNC 2026 · React / TypeScript / Three.js / Node · Gemini · Photon Spectrum
+Built for HackNC 2026 with Gemini, Photon Spectrum, React, Three.js and TypeScript. Independent project; not affiliated with or endorsed by the LEGO Group.
 
-## Run the review checkpoint
+## How it works
 
-Requires Node.js 22 or newer and npm. Clone this repository, then:
+**Request → checked preview → feedback → revised preview → Approve → building guide and files.**
+
+- Describe a subject or send a photo. The generator looks for reference views, plans real parts, and checks connections and placement order.
+- Give feedback on the preview. Revisions edit the saved placements; a failed edit keeps the earlier checked build.
+- Approve the exact preview you want. The agent sends its interactive guide, a compact phone-viewing USDZ and an exact parts CSV. PDF instructions are optional through `/manual`; without a public guide URL, approval uses the PDF bundle fallback.
+- The guide supports normal 3D rotation and zoom, part callouts, placement replay, step navigation and saved progress. AR is an optional action on supported devices.
+
+The website supports the same models, inventory and downloads. Checked connections do not establish physical strength or visual accuracy. This is a working hackathon prototype; difficult subjects can still fail or need user refinement.
+
+## Run locally
+
+Use **Node.js 24 LTS** and npm. Node 22.12 or newer also meets the declared minimum.
 
 ```sh
+git clone https://github.com/YYK2007/large-lego-model.git
+cd large-lego-model
 npm ci
 cp -n .env.example .env
 npm run dev
 ```
 
-Open [http://127.0.0.1:5173](http://127.0.0.1:5173). The API runs on port 3001. The website updates during frontend edits, and the API restarts automatically after server/shared-code changes. Credentials are re-read from `.env` when used.
+Open [localhost:5173](http://127.0.0.1:5173). The private API runs on port 3001. Curated samples work without API keys; they are labeled and never substituted for generated results. Start with the [courtyard castle](http://127.0.0.1:5173/?design=sample-castle) to try the viewer, build steps, parts list and exports.
 
-The six curated sample builds work without API keys. Start with the [1,345-piece courtyard castle](http://127.0.0.1:5173/?design=sample-castle): hollow towers, a central keep, furnished rooms, window openings, and five sloped roofs. Samples are labeled and are never substituted for an AI response. Rotate the model, open **Build steps** and **Pieces**, add owned bricks, use **Download 3D (.usdz)** directly below the model, or open **Let's build** for the matching PDF, CSV, LDraw model, USDZ, and preview. Assembly steps contain at most 12 new pieces with per-piece navigation, exact part/color quantities, a top-down placement map, replay, and saved viewing progress.
-
-There is no application piece-count ceiling or default small-piece budget. Explicit API budgets and owned-only stock still apply. Review this checkpoint with `npm test` and the castle's 127-step guide; additional pieces alone do not establish good design. Manual exports show progress and render in a worker so the API stays responsive. With the local server running, `npm run check:large-export` checks that behavior without making an AI call.
-
-## Connect the real services
-
-| Service | Local environment variables | Setup |
-| --- | --- | --- |
-| Gemini | `GEMINI_API_KEY`, optional `GEMINI_MODEL` | [Google AI Studio](https://aistudio.google.com/apikey) |
-| Rebrickable | `REBRICKABLE_API_KEY` | [API key instructions](https://rebrickable.com/api/) |
-| Photon Spectrum | `SPECTRUM_PROJECT_ID`, `SPECTRUM_PROJECT_SECRET` | [Photon dashboard](https://app.photon.codes/dashboard), HackNC promo `HACKWITHPHOTON` |
-| Phone viewer links | `PUBLIC_BASE_URL` | Your deployed HTTPS origin; localhost does not work on someone else's phone |
-
-Keys belong only in `.env`, which Git ignores. Never use a `VITE_` prefix for these secrets. The app's Connections panel reports configured fields, not a successful live service test.
-
-After configuring Photon and Gemini, run `npm run photon` in a separate terminal. This starts a real agent that replies to incoming messages. See [Photon setup and track requirements](docs/photon-setup.md). The app's **Copy command to continue in iMessage** action freezes the current design and inventory and gives you an `/open` command for that worker.
-
-Large iMessage models use lossless binary USDZ packaging when OpenUSD's `usdcat` and `usdzip` are available on `PATH`. Without them, the original export remains available; files exceeding Photon's 100 MiB request limit must be downloaded from the web app. This transport limit does not limit the number of pieces in a build.
-
-## Architecture
-
-```mermaid
-flowchart LR
-  A[Text or inspiration image] --> B[Gemini: colored shape plan]
-  C[Confirmed inventory] --> D[Catalog brick compiler]
-  B --> D
-  D --> E[Geometry and inventory checks]
-  E -->|rejected: bounded repair| B
-  E -->|accepted| F[Immutable design revision]
-  F --> G[Three.js preview]
-  F --> H[Parts and source allocation]
-  F --> I[PDF and LDraw]
-  F --> J[Photon feedback loop]
-```
-
-Gemini describes occupied colored space, curved cross-section profiles, local cutouts for interiors and openings, directional slope runs, exact spanning parts, and repeated feature groups. Its planning instructions prioritize actual openings, interiors, floors, roofs, and connected sections. The compiler chooses real catalog pieces, interlocks neighboring layers where possible, and enforces exact stock in owned-only mode. The compiler can use flat plate courses and bounded local repacking to resolve unsupported seams without changing occupied colored cells. Only a fully valid arrangement is accepted. No overlap, unsupported elevated piece, or disconnected final assembly passes the geometry gate. Concrete real-world subjects, including animals and plants, are looked up on Wikimedia using canonical article titles to avoid namesakes; actual reference images enter planning. When visual review is enabled, geometry-valid models are rendered from two angles and compared to the photographs. Quick mode is archived behind `QUICK_MODE_ENABLED=false` in `shared/generation-job.ts`; its generator and tests remain available. New requests start directly with full construction capabilities. The iMessage demo uses `PHOTON_VISUAL_REVIEW_ENABLED=false` to skip the separate concept study and visual critic, deliver the first complete checked draft, and wait for user feedback. Explicit approval sends that exact revision’s USDZ, PDF manual and parts CSV. Planning calls leave time for repairs and simpler construction; jobs share a bounded deadline and Stop remains available. A usable or visually matched result is not guaranteed. The UI shows progress, source credits and concrete likeness issues. A reviewed draft can be returned as “Needs refinement”; this is not a passed likeness check. Failures preserve the current design.
-
-All outputs derive from the same placements. Exported/shared snapshots receive new IDs and cannot overwrite earlier revisions. Source allocations retain exact part/color and the set instance or loose-brick lot. An inventory photo produces suggestions that the user must confirm.
-
-## Current boundaries
-
-- 36 real part IDs: bricks, plates, tiles, two upright slopes, round 1×1 pieces and a small cone; 13 colors with verified part/color combinations and four yaw orientations. Coordinates use studs horizontally and plate heights vertically. The physical workspace is 96 × 96 studs × 384 plate heights; there is no piece-count ceiling. Request size, provider output, and execution-time limits still apply. The heuristic compiler may reject feasible geometry or inventory instead of finding an optimal packing.
-- Geometric support and connectivity are checked. Clutch strength, torque, tipping, material wear, and intermediate physical stability are **not simulated**. A real hand-build remains part of demo validation.
-- More curves, wedges, and verified moving/connector families remain required catalog expansions. Current parts stay upright on the stud grid; nonrectangular collision envelopes are conservative. Rebrickable catalog records verify allowed part/color combinations, not current stock or price. Minifigures, arbitrary mesh conversion, and collaborative assembly remain unimplemented.
-- Rebrickable imports the endpoint's available set inventory. It excludes spares/unsupported parts and does not automatically resolve alternate historical inventory versions. Verify counts against the physical set.
-- Live Gemini generation produced a 520-piece observatory in 36 seconds after one repair, with 52 steps and a matching 55-page PDF. Two preceding detailed requests failed brick checks; this is not a reliability benchmark. After narrow-plate and packing fixes, fresh Bell Tower requests passed in 24.02 seconds (436 pieces) and 21.65 seconds through the website (346 pieces). Their likeness to the actual tower is still inadequate. Reference-photo planning and comparison now produced a fresh 5,910-piece Taj Mahal and two rose drafts that pass geometry but remain marked as needing refinement. Other complex attempts still fail; the new open curved petal grammar has not yet produced an accepted live rose. See the checkpoint 06 record for the actual results. Inspection found real rooms, windows, supports and slopes, but missed plate eaves and incomplete terrace access. The 1,345-piece castle remains a curated sample. Rebrickable authentication, part colors and a real set lookup passed. Reliable photo-backed generation, Photon delivery and target-iPhone behavior still need successful live checks.
-- The API binds to localhost by default. Before public hosting, add user authentication, quotas, durable shared storage, and deployment-specific origin controls. This checkpoint is a local/team prototype.
-
-## Team workflow
-
-- `main`: clean research baseline.
-- `feat/brick-studio`: current review implementation. Make your own branch from it for contributions; do not force-push a teammate's work.
-- [Stage checklists](docs/STAGES.md) define what is ready to review and what remains.
-- [Accepted objective](docs/OBJECTIVE.md) preserves scope, including native 3D feedback in iMessage and later ElevenLabs voice.
-- [Verification record](docs/VERIFICATION.md) records checks and service boundaries.
+To run the built app:
 
 ```sh
-npm test
 npm run build
 npm start
 ```
 
-`npm start` serves the built frontend and API at [http://127.0.0.1:3001](http://127.0.0.1:3001). Local runtime state is stored under ignored `data/`. Generated review artifacts are under ignored `output/`.
+The built website and private API are available at [localhost:3001](http://127.0.0.1:3001). Keep private services on loopback. Runtime jobs, conversations, credentials and user designs stay in ignored `.env` and `data/`; generated diagnostics stay in ignored `output/`.
 
-## Research and attribution
+## Connect services
 
-- [Generation options and the BrickGPT decision](docs/generation-research.md)
-- [Observed LEGO Builder screens and assembly UX](docs/lego-builder-ux.md)
-- [Complex models and catalog expansion](docs/complex-builds.md)
-- [First plate and slope increment](docs/part-catalog-increment.md)
-- [Parts, geometry, inventory provenance, and instructions](docs/parts-research.md)
-- [Native 3D viewing and messages](docs/imessage-3d-preview.md)
-- [HackNC / Photon setup and sources](docs/photon-setup.md)
+Put keys in `.env`, never browser code or a `VITE_` variable.
 
-The code implements a new restricted compiler; it does not include or run BrickGPT model weights. Rendered brick exteriors are procedural geometry with catalog dimensions, rather than redistributed LDraw library assets. LDraw exports reference official part filenames. Rebrickable catalogs and images are not bundled. LEGO is a trademark of the LEGO Group; this is an independent hackathon project.
+| Service | Environment variables | Setup |
+| --- | --- | --- |
+| Gemini generation and chat | `GEMINI_API_KEY`, optionally `GEMINI_MODEL` | [Google AI Studio](https://aistudio.google.com/apikey) |
+| Rebrickable catalog and owned sets | `REBRICKABLE_API_KEY` | [API setup](https://rebrickable.com/api/) |
+| Photon iMessage | `SPECTRUM_PROJECT_ID`, `SPECTRUM_PROJECT_SECRET` | [Photon dashboard](https://app.photon.codes/dashboard) |
+| Shareable instruction guide | `PUBLIC_BASE_URL` | Your HTTPS origin forwarding **only to `127.0.0.1:3002`** |
+
+After configuring Gemini and Photon, keep the API running and start the listener in another terminal:
+
+```sh
+npm run photon
+```
+
+This enables real replies to messages sent to your configured Photon line. Follow [Photon setup](docs/photon-setup.md) to configure test users and verify delivery on a phone. `/status`, `/stop`, `/approve`, `/instructions`, `/model`, `/manual`, `/parts`, `/retry` and `/new` are available; ordinary language works too.
+
+**Public sharing uses only the signed read-only gateway on port 3002. Do not expose port 3001 or the Vite server.** A signed link grants access to one revision and its downloads; recipients can forward it. Keep `data/instruction-share-key` private and persistent. Local hosting requires the computer, API and tunnel to stay running. See [sharing boundaries](docs/imessage-3d-preview.md) and [security policy](SECURITY.md).
+
+`PHOTON_VISUAL_REVIEW_ENABLED=false` is the demo default: reference analysis and construction checks remain active, but post-build Gemini visual scoring is skipped. User approval is always required. The older Quick choice is archived in code; new requests start directly without a mode question.
+
+## Models and instructions
+
+All previews, guides, parts lists and exports derive from the same checked placements. Owned inventory records exact part, color, quantity and source set or loose-brick lot. Photo inventory estimates require confirmation.
+
+The bundled seed supplies **80 usable part types**: 36 built-in definitions and 44 imported definitions, plus 176 mapped opaque colors. Each part has its own supported color and connection combinations. Catalog discovery can resolve additional supported parts; a catalog listing alone does not make a connector usable or establish current marketplace stock.
+
+Compact PDF instructions use landscape placement diagrams, pictured parts and repeated assemblies. Phone models merge geometry for rendering while exact part accounting remains in the canonical build. Optional OpenUSD tools (`usdcat` and `usdzip` on `PATH`) provide additional lossless binary packaging. Exports still work without them, but may be larger. Photon has an attachment transport limit; this is separate from the model's piece count.
+
+Current limits:
+
+- No application-imposed piece-count ceiling. Explicit user budgets and owned stock still apply; provider and execution limits remain.
+- Upright stud connections and bounded insertion paths are supported. Arbitrary rotations, general subassembly search, hinges and bar/clip attachment are not generally supported.
+- The workspace is 96 × 96 studs × 384 plate heights. The heuristic planner and packer can reject feasible designs.
+- Clutch strength, tipping, torque and load-bearing stability are not physically simulated. A real hand-build remains necessary for physical validation.
+- Resemblance is not guaranteed. Review-disabled drafts are labeled as not visually reviewed. Never treat a passed geometry check as a promise that the model matches its subject.
+
+## Development
+
+`main` contains the current implementation. Create a feature branch from it and submit a pull request. See [contributing](CONTRIBUTING.md).
+
+```sh
+npm test
+npm run build
+```
+
+Tests use mocked providers and need no API keys. Test files run with four-way concurrency to keep CPU-heavy geometry checks predictable. Optional OpenUSD checks skip when the tools are unavailable. GitHub Actions runs a clean install, tests and build without service credentials.
+
+- [Current instruction-delivery checkpoint](docs/INSTRUCTION-DELIVERY-CHECKPOINT.md)
+- [Detailed verification and historical checkpoints](docs/VERIFICATION.md)
+- [Project objective](docs/OBJECTIVE.md) and [stages](docs/STAGES.md)
+- [Reference and generation research](docs/generation-research.md)
+- [Observed LEGO Builder assembly UX](docs/lego-builder-ux.md)
+- [Catalog discovery and limits](docs/DYNAMIC-CATALOG.md)
+
+## License and attribution
+
+Project code is available under the [MIT License](LICENSE). Third-party assets and data retain their own licenses; see [third-party notices](THIRD_PARTY_NOTICES.md) and [bundled catalog attribution](docs/catalog-licenses/README.md).
+
+The repository includes transformed LDraw part geometry and LDCad connector metadata with source hashes, authors and licenses. Rebrickable catalog facts are attributed; account inventories, credentials and product photographs are not bundled. The [Aero brick symbol](assets/brand/README.md) was generated for this project. This implementation does not bundle BrickGPT model weights.

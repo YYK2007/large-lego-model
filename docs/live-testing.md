@@ -1,4 +1,4 @@
-# Large Lego Model: live integration test guide
+# Large LEGO Model: live integration test guide
 
 Use this guide to reproduce live checks. Gemini text generation and one exact recolor revision have passed. Rebrickable and Photon have not been live-tested. A configured key, a sample, or a geometry badge is not evidence of a successful integration. See `docs/VERIFICATION.md` for actual results and failures.
 

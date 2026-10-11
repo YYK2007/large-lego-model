@@ -1,4 +1,4 @@
-# Large Lego Model: accepted objective
+# Large LEGO Model: accepted objective
 
 Build a hackathon product that turns text, inspiration images, or the user's existing LEGO collection into a design the user can review, an exact list of pieces (including which owned set supplies them), and illustrated assembly instructions.
 
@@ -56,7 +56,7 @@ Native/interactive iMessage model viewing, augmented reality, a richer step-by-s
 
 ## Names
 
-**Large Lego Model** is the user-chosen architecture name and must be used in technical documentation. **Sprout** was an assistant-chosen temporary product/repository name; product branding remains provisional.
+**Large LEGO Model** is the user-chosen project, product, and architecture name. Use this exact capitalization in the app, exported instructions, and documentation.
 
 - Establish visual acceptance features from the original request and reference pixels before construction. Preserve them through every repair and simplification. Judge identity, silhouette, proportions and defining surface structure on actual model renders: a similarly colored mass cannot substitute for visible folds, overlapping layers or openings. Uncertain identity remains an explicitly labeled draft.
 

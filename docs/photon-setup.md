@@ -1,4 +1,4 @@
-# Large Lego Model: Photon / HackNC setup
+# Large LEGO Model: Photon / HackNC setup
 
 Prize research was verified October 10, 2026 against the live HackNC guide, Devpost, Photon guidelines, and Photon documentation. Transport and instruction-guide behavior was updated October 11.
 

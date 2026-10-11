@@ -3,6 +3,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, posix } from 'node:path';
 import { promisify } from 'node:util';
+import { zipSync, type Zippable } from 'three/examples/jsm/libs/fflate.module.js';
+import { catalogForDesign, type Design } from '../shared/model.js';
 
 const run = promisify(execFile);
 
@@ -39,6 +41,40 @@ function validateBinaryPackage(bytes: Buffer): void {
   }
 }
 
+/** Credits are USD metadata, not an unsupported extra file in the USDZ package. */
+export function addUsdzAttribution(bytes: Buffer, design: Design, viewingOnly = false): Buffer {
+  const catalog = catalogForDesign(design);
+  const parts = [...new Set(design.bricks.map(brick => brick.partId))].flatMap(id => {
+    const part = catalog.parts[id];
+    return part.geometry ? [{ partId: id, ldrawId: part.ldrawId, sources: part.geometry.assets }] : [];
+  });
+  if (!parts.length) return bytes;
+  const layers = storedLayers(bytes), root = layers.get('model.usda')?.toString();
+  const marker = '\tcustomLayerData = {\n';
+  if (!root?.includes(marker)) throw new Error('Native USD root metadata is missing.');
+  const attribution = {
+    schemaVersion: 1,
+    modifications: 'LDraw geometry was flattened, deduplicated, triangulated and transformed to placed metric meshes. Connector metadata was transformed from the LDCad Shadow Library.',
+    ...(viewingOnly ? { viewingOnly: 'Covered ordinary studs are omitted in this viewing copy; imported geometry is retained.' } : {}),
+    licenseUrls: ['https://creativecommons.org/licenses/by/4.0/', 'https://creativecommons.org/licenses/by-sa/4.0/'],
+    parts,
+  };
+  // JSON escaping also produces a valid quoted USDA string, keeping source
+  // quotes/newlines as data rather than allowing them to create USD fields.
+  layers.set('model.usda', Buffer.from(root.replace(marker, `${marker}\t\tstring largeLegoModelAttribution = ${JSON.stringify(JSON.stringify(attribution))}\n`)));
+  const files: Zippable = {};
+  let offset = 0;
+  for (const [name, contents] of layers) {
+    const header = offset + 30 + Buffer.byteLength(name);
+    const padding = new Uint8Array((64 - (header + 4) % 64) % 64);
+    files[name] = [contents, { extra: { 12345: padding } }];
+    offset = header + 4 + padding.length + contents.length;
+  }
+  const result = Buffer.from(zipSync(files, { level: 0 }));
+  storedLayers(result); // Preserve the native package's stored/aligned contract.
+  return result;
+}
+
 /** Lossless layer encoding only: no mesh, material, transform or precision edits.
  * OpenUSD CLI tools are optional; platforms without them keep the native export.
  */
@@ -72,7 +108,8 @@ export async function compactUsdz(bytes: Buffer): Promise<Buffer> {
       if (!text.startsWith('#usda 1.0')) throw new Error('Expected a native text USD layer.');
       // Only rewrite resolved, package-internal asset paths. No external files
       // or parent traversal are passed to the USD asset resolver.
-      const rewritten = text.replace(/@([^@]+)@/g, (_, reference: string) => {
+      const rewritten = text.replace(/"(?:\\.|[^"\\])*"|@([^@]+)@/g, (token, reference: string | undefined) => {
+        if (reference === undefined) return token;
         const target = posix.normalize(posix.join(posix.dirname(name), reference));
         if (!layers.has(target)) throw new Error('USD geometry reference is outside the package.');
         return `@${posix.relative(posix.dirname(name), target).replace(/\.usda$/, '.usdc')}@`;

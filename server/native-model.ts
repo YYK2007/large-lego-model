@@ -3,6 +3,7 @@ import { USDZExporter } from 'three/examples/jsm/exporters/USDZExporter.js';
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { createBrickModel, METERS_PER_STUD } from '../shared/brick-geometry.js';
 import { validateDesign, type Design } from '../shared/model.js';
+import { addUsdzAttribution } from './usdz-package.js';
 
 // The exporter builds each geometry layer as a JS string. Split large colors
 // well below V8's string limit; this bounds a batch, never the design's pieces.
@@ -63,7 +64,7 @@ export async function generateUsdz(design: Design): Promise<Buffer> {
         model.add(mesh);
       });
       model.updateMatrixWorld(true);
-      return Buffer.from(await new USDZExporter().parseAsync(model, { quickLookCompatible: true }));
+      return addUsdzAttribution(Buffer.from(await new USDZExporter().parseAsync(model, { quickLookCompatible: true })), design);
     }
     // Quick Look pays for every mesh, even when pieces share their geometry.
     // Bake placements into a few indexed meshes per color. Index each distinct
@@ -120,7 +121,7 @@ export async function generateUsdz(design: Design): Promise<Buffer> {
       });
     }
     model.updateMatrixWorld(true);
-    return Buffer.from(await new USDZExporter().parseAsync(model, { quickLookCompatible: true }));
+    return addUsdzAttribution(Buffer.from(await new USDZExporter().parseAsync(model, { quickLookCompatible: true })), design);
   } finally {
     resources.forEach(resource => resource.dispose());
   }

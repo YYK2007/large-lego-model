@@ -587,7 +587,7 @@ test('approval continues other files after failure and retries only the unacknow
 });
 
 test('/retry restores missing approved delivery after selection was cleared without regenerating or resending acknowledged files', async () => {
-  const approved = { ...build, id: '24a4987f-6588-4f09-8646-aaa27c80e762' };
+  const approved = { ...build, id: 'approved-delivery-fixture' };
   const h = harness({ handledIds: [], approvedDesignId: approved.id, approvedDeliveries: { [approved.id]: { manual: true, parts: true } }, requestPrompt: '/retry' }, false);
   h.designs.set(approved.id, approved);
   const files: string[] = [];

@@ -21,7 +21,7 @@ export async function generateMobileFile(design: Design): Promise<Buffer> {
 
 async function cachedFile(design: Design, mobile: boolean): Promise<Buffer> {
   const snapshot = structuredClone(design);
-  const key = createHash('sha256').update(mobile ? 'mobile-v1:' : 'exact-v1:').update(JSON.stringify(snapshot)).digest('hex');
+  const key = createHash('sha256').update(mobile ? 'mobile-v2-attribution:' : 'exact-v2-attribution:').update(JSON.stringify(snapshot)).digest('hex');
   const cached = cache.get(key);
   if (cached) {
     cache.delete(key); cache.set(key, cached);

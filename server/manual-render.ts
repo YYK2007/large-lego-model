@@ -131,7 +131,7 @@ export async function renderManualPdf(design: Design, inventory?: InventoryItem[
   ]) ?? [];
   const imported = [...new Set(design.bricks.map(brick => brick.partId))].map(id => catalog.parts[id]).filter(part => part.geometry);
   const doc = new PDFDocument({ autoFirstPage: false, size: 'A4', layout: 'landscape', margin: MARGIN, bufferPages: false,
-    info: { Title: `${design.title} - Building instructions`, Author: 'Sprout', Subject: `Design ${design.id}` } });
+    info: { Title: `${design.title} - Building instructions`, Author: 'Large LEGO Model', Subject: `Design ${design.id}` } });
   const chunks: Buffer[] = [];
   const result = new Promise<Buffer>((resolve, reject) => { doc.on('data', chunk => chunks.push(chunk)); doc.on('end', () => resolve(Buffer.concat(chunks))); doc.on('error', reject); });
   // Preserve complete source names, adding room only where a label wraps.

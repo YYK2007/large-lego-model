@@ -159,5 +159,5 @@ app.use((error: Error & { status?: number; type?: string }, _req: express.Reques
 });
 const port = Number(process.env.PORT) || 3001;
 const host = process.env.HOST || '127.0.0.1';
-app.listen(port, host, () => console.log(`Large Lego Model API: http://${host}:${port}`));
+app.listen(port, host, () => console.log(`Large LEGO Model API: http://${host}:${port}`));
 instructionGateway(app, instructionSecret, loadDesign).listen(3002, '127.0.0.1', () => console.log('Read-only instruction sharing: http://127.0.0.1:3002'));

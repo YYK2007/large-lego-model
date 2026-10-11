@@ -1,10 +1,10 @@
-# Large Lego Model: reviewable build stages
+# Large LEGO Model: reviewable build stages
 
-Architecture: **Large Lego Model**. Provisional product name: Sprout. Turn an idea and existing bricks into a detailed three-dimensional build, a parts list, and illustrated assembly steps.
+Project, product, and architecture: **Large LEGO Model**. Turn an idea and existing bricks into a detailed three-dimensional build, a parts list, and illustrated assembly steps.
 
 ## Branch and review process
 
-`main` holds the starting research. Implementation lives on `feat/brick-studio`. Each completed stage receives a commit and a checkpoint entry here. The private collaboration repository is on GitHub; the app currently runs locally.
+`main` contains the current implementation. Create feature branches from `main` and retain reviewable commits and checkpoint evidence. The GitHub repository is prepared for public release; visibility is a separate owner decision. The app and its signed sharing gateway run locally unless separately deployed.
 
 ## 1. Website and canonical brick model
 
@@ -16,7 +16,7 @@ Design acceptance: use a calm, playful Frutiger Aero / Y2K workshop with sky/gra
 
 ## Required catalog expansion
 
-The finished objective includes more than rectangular bricks. After validating the first volumetric generator, add plates, tiles, and upright slopes; then curved pieces and wedges; then verified wheels, hinges, brackets, and connector families. For each increment, review a model that actually uses those parts and verify the same geometry and connections in generation, inventory, viewer, exports, and instructions. Preserve exact part/color IDs and counts. See `docs/complex-builds.md` for the coordinate, connection, and assembly requirements. The current implementation has 36 real part types and 13 colors with verified part/color combinations; it is an increment toward this goal, not the entire required catalog.
+The finished objective includes more than rectangular bricks. After validating the first volumetric generator, add plates, tiles, and upright slopes; then curved pieces and wedges; then verified wheels, hinges, brackets, and connector families. For each increment, review a model that actually uses those parts and verify the same geometry and connections in generation, inventory, viewer, exports, and instructions. Preserve exact part/color IDs and counts. See `docs/complex-builds.md` for the coordinate, connection, and assembly requirements. The bundled seed has 80 usable part types (36 built-in and 44 imported definitions), with 176 mapped opaque colors and per-part produced-color constraints. This is an increment toward the full catalog, not support for every connection family.
 
 ## 2. AI, image inspiration, and owned inventory
 

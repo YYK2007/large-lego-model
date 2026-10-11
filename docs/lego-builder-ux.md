@@ -1,4 +1,4 @@
-# LEGO Builder visual review and Sprout changes
+# LEGO Builder visual review and Large LEGO Model changes
 
 Reviewed 2026-10-10. I opened the official App Store carousel and played, paused, and advanced the 37-second explainer on LEGO's site in Chrome, inspecting screenshots of the rendered pages. LEGO Builder was absent from the available native-app inventory. **This was inspection of official published screens and video, not operation of the native Builder app or a completed physical build.** The proposals below are our design decisions, not claims about undocumented Builder behavior.
 

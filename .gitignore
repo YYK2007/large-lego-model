@@ -11,3 +11,10 @@ output/
 .playwright-mcp/
 *.tsbuildinfo
 
+
+# Local credentials and private signing material
+*.pem
+*.key
+*.p12
+*.pfx
+.codex/

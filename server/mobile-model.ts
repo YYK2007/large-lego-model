@@ -4,7 +4,7 @@ import { USDZExporter } from 'three/examples/jsm/exporters/USDZExporter.js';
 import { createBrickModel, METERS_PER_STUD } from '../shared/brick-geometry.js';
 import { catalogForDesign, normalizeDesign, validateDesign, type Design } from '../shared/model.js';
 import { ordinaryStudCovers } from '../shared/covered-studs.js';
-import { compactUsdz } from './usdz-package.js';
+import { addUsdzAttribution, compactUsdz } from './usdz-package.js';
 
 export type MobileModelReport = {
   viewingOnly: true; approximation: string;
@@ -82,7 +82,7 @@ export function createMobileModel(input: Design): { model: Group; report: Mobile
 export async function generateMobileUsdz(design: Design): Promise<{ bytes: Buffer; report: MobileModelReport }> {
   const prepared = createMobileModel(design);
   try {
-    let bytes: Buffer = Buffer.from(await new USDZExporter().parseAsync(prepared.model, { quickLookCompatible: true }));
+    let bytes: Buffer = addUsdzAttribution(Buffer.from(await new USDZExporter().parseAsync(prepared.model, { quickLookCompatible: true })), design, true);
     try { bytes = await compactUsdz(bytes); }
     catch { console.error('Binary USDZ preparation failed; keeping the portable lightweight viewing model.'); }
     return { bytes, report: prepared.report };

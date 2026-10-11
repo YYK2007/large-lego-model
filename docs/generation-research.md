@@ -1,6 +1,6 @@
-# Large Lego Model: generation research and implementation boundary
+# Large LEGO Model: generation research and implementation boundary
 
-Research checked October 10, 2026. “Large Lego Model” names our application architecture; the MVP does not train a new foundation model.
+Research checked October 10, 2026. “Large LEGO Model” names our application architecture; the MVP does not train a new foundation model.
 
 ## Decision
 

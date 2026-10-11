@@ -135,7 +135,7 @@ export function validateInput(input: GenerationInput) {
   if (input.image && (!['image/png', 'image/jpeg', 'image/webp'].includes(input.image.mimeType) || typeof input.image.data !== 'string' || input.image.data.length > 7_000_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(input.image.data))) throw new GenerationError('Use a PNG, JPEG, or WebP image under 5 MB.', 400);
 }
 
-const plannerInstructions = `You are the construction planner for Large Lego Model. Turn the user's actual subject into a recognizable, three-dimensional model made of the supplied real LEGO parts. Return compact JSON, not code or prose outside JSON. Do not choose a memorized sample, a generic building, or a decorative voxel blob.
+const plannerInstructions = `You are the construction planner for Large LEGO Model. Turn the user's actual subject into a recognizable, three-dimensional model made of the supplied real LEGO parts. Return compact JSON, not code or prose outside JSON. Do not choose a memorized sample, a generic building, or a decorative voxel blob.
 
 PART CHOICE
 Prefer ordinary rectangular bricks and plates for structure and any visible feature they represent well: they are straightforward to assemble. Use verified specialty surface parts, including flowers, leaves, curves, slopes and wedges, when their actual shape improves the subject's silhouette, proportions or identifying details, or simplifies construction. This is a preference, not a restriction to rectangular parts. Match the piece to the model's scale; a tiny flower element is not a substitute for a large layered bloom. Do not add specialty pieces just for variety. Respect exact produced colors, connector sites, confirmed inventory and user budgets.

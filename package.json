@@ -1,5 +1,5 @@
 {
-  "name": "sprout-brick-studio",
+  "name": "large-lego-model",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     "dev": "concurrently -k -n api,web \"node --watch --import tsx server/index.ts\" \"vite --host 127.0.0.1\"",
     "build": "tsc --noEmit && vite build",
     "start": "node --import tsx server/index.ts",
-    "test": "node --import tsx --test tests/*.test.ts",
+    "test": "node --import tsx --test --test-concurrency=4 tests/*.test.ts",
     "catalog:sync": "node --import tsx scripts/check-catalog.ts --all",
     "check:large-export": "node scripts/check-large-export.mjs",
     "photon": "node --import tsx server/photon.ts"
@@ -41,5 +41,9 @@
   },
   "overrides": {
     "@opentelemetry/core": "2.12.0"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12.0"
   }
 }
