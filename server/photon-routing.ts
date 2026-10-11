@@ -81,7 +81,10 @@ export function routeText(text: string): PhotonCommand {
   if (modeSuffix && !prompt.startsWith('/')) return { kind: 'quality', quality: modeSuffix[2].toLowerCase() as PhotonQuality, prompt: modeSuffix[1].trim() };
   if (/^\/?manual$/i.test(prompt)) return { kind: 'manual', prompt: '' };
   if (/^\/?instructions$/i.test(prompt) || /^\/build$/i.test(prompt)) return { kind: 'instructions', prompt: '' };
-  if (/^\/?(?:stop|cancel)$/i.test(prompt)) return { kind: 'stop', prompt: '' };
+  // Match whole explicit requests, never a stop-related subject or a negated sentence.
+  const stopRequest = natural.replace(/,/g, ' ').replace(/\s+/g, ' ').trim();
+  if (/^\/(?:stop|cancel)$/.test(natural)
+    || /^(?:(?:can|could|would) you )?(?:please )?(?:stop(?: (?:it|generating|sending|(?:this|the) (?:build|generation|job)))?|cancel(?: (?:it|(?:this|the) (?:build|generation|job)))?)(?: please)?$/.test(stopRequest)) return { kind: 'stop', prompt: '' };
   if (/^\/?status$/i.test(prompt)) return { kind: 'status', prompt: '' };
   if (/^\/?(?:model|3d)$/i.test(prompt)) return { kind: 'model', prompt: '' };
   if (/^\/?(?:parts|parts list)$/i.test(prompt)) return { kind: 'parts', prompt: '' };

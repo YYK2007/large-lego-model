@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Message } from 'spectrum-ts';
+import type { Content, Message } from 'spectrum-ts';
 import { isActiveJob, jobStageLabels, type GenerationJob, type JobAttempt } from '../shared/generation-job.js';
 import type { SavedDesign } from './store.js';
 import { PhotonApiError, type PhotonJobsApi } from './photon-api.js';
@@ -18,12 +18,21 @@ export interface PhotonReply {
 type ExportKind = 'model' | 'manual' | 'parts' | 'instructions';
 const exportLabels: Record<ExportKind, string> = { model: 'rotatable 3D file', manual: 'PDF instructions', parts: 'parts list', instructions: 'interactive building guide' };
 interface ExportProgress {
+  controller: AbortController;
   kind: ExportKind;
   phase: 'preparing' | 'sending';
   lastDeliveryAt: number;
   lastAttemptAt: number;
   lastKey: string;
   pending?: Promise<void>;
+}
+
+// Read control text without downloading attachments or waiting behind exports.
+function controlText(content: Content): string {
+  if (content.type === 'text') return content.text;
+  if (content.type === 'reply') return controlText(content.content);
+  if (content.type === 'group') return content.items.filter(item => item.direction !== 'outbound').map(item => controlText(item.content)).join('\n').trim();
+  return '';
 }
 
 // Checker/provider diagnostics belong in the saved job, not in a text message.
@@ -51,6 +60,7 @@ export class PhotonConversation {
   private changing = false;
   private interpreting = false;
   private chatVersion = 0;
+  private workVersion = 0;
   private activeExport?: ExportProgress;
   private get exporting() { return Boolean(this.activeExport); }
   constructor(value: Conversation, private api: PhotonJobsApi, private reply: PhotonReply,
@@ -72,8 +82,8 @@ export class PhotonConversation {
     await this.reply.text(value);
     if (jobId && this.state.jobId === jobId) { this.state.lastDeliveryAt = this.now(); await this.persist(); }
   }
-  private async instructionUrl(id: string) {
-    try { return await this.api.instructionsLink?.(id) || undefined; }
+  private async instructionUrl(id: string, signal?: AbortSignal) {
+    try { return await this.api.instructionsLink?.(id, signal) || undefined; }
     catch { return undefined; }
   }
   private async sendInstructions(design: SavedDesign, url: string) {
@@ -83,8 +93,8 @@ export class PhotonConversation {
   private exportStage(progress: ExportProgress) {
     return `${progress.phase === 'preparing' ? 'Preparing' : 'Sending'} your ${exportLabels[progress.kind]}`;
   }
-  private beginExport(kind: ExportKind) {
-    this.activeExport = { kind, phase: 'preparing', lastDeliveryAt: this.now() - 30_000, lastAttemptAt: this.now(), lastKey: '' };
+  private beginExport(kind: ExportKind): ExportProgress {
+    return this.activeExport = { controller: new AbortController(), kind, phase: 'preparing', lastDeliveryAt: this.now() - 30_000, lastAttemptAt: this.now(), lastKey: '' };
   }
   private async exportMessage(text: string): Promise<void> {
     const progress = this.activeExport;
@@ -111,11 +121,10 @@ export class PhotonConversation {
     const stage = this.exportStage(progress);
     await this.exportMessage(`${changed ? stage : `Still working: ${stage[0].toLowerCase()}${stage.slice(1)}`}. Your checked build is saved.`);
   }
-  private async finishExport() {
-    const progress = this.activeExport;
-    delete this.activeExport;
+  private async finishExport(progress = this.activeExport) {
+    if (this.activeExport === progress) delete this.activeExport;
     // Finish an already-started check-in before the final acknowledgement.
-    await progress?.pending;
+    if (!progress?.controller.signal.aborted) await progress?.pending;
   }
   private async askQuality() {
     await this.tell('Quick: aim for a usable draft in about 2.5 minutes. Detailed: more references and refinement, usually several minutes. Which would you like?', this.state.jobId);
@@ -156,22 +165,29 @@ export class PhotonConversation {
     if (this.state.jobId === job.id) { this.state.lastProgressAt = this.now(); this.state.lastProgressKey = key; await this.persist(); }
   }
   handle(message: Pick<Message, 'direction' | 'id' | 'content'>) {
-    // Long exports stay serialized, but must not delay status or Stop.
-    if ((this.exporting || this.interpreting) && message.direction === 'inbound' && message.content.type === 'text') {
+    // Control messages bypass every slow command, including export validation.
+    if (message.direction === 'inbound') {
       try {
-        const { kind } = routeText(message.content.text);
-        if (kind === 'stop' || kind === 'status') return this.receive(message);
+        const text = controlText(message.content), { kind } = routeText(text);
+        if (kind === 'stop' || kind === 'status') return this.receive(message, text);
       } catch { /* Invalid commands still use the ordinary error handler. */ }
     }
-    const task = this.commands.then(() => this.receive(message));
+    const version = this.workVersion;
+    const task = this.commands.then(async () => {
+      if (version === this.workVersion) return this.receive(message);
+      // Stop also discards requests queued before it, including duplicate approvals.
+      this.state.handledIds = rememberMessageIds(this.state.handledIds, contentMessageIds(message.id, message.content));
+      await this.persist();
+    });
     this.commands = task.catch(() => {});
     return task;
   }
   private async checkedDraft(job: GenerationJob, announce: boolean) {
+    const version = this.workVersion;
     const id = job.resultId || job.bestDraftId;
     if (!id) return;
     const design = await this.api.design(id);
-    if (this.state.jobId !== job.id || announce && this.changing) return;
+    if (version !== this.workVersion || this.state.jobId !== job.id || announce && (this.changing || this.state.finishedJobId === job.id)) return;
     if (!announce || this.state.lastDraftId === id) {
       this.state.designId = this.state.feedbackDesignId || design.id;
       await this.persist(); return design;
@@ -182,13 +198,13 @@ export class PhotonConversation {
     if (this.state.jobId === job.id && !this.changing && this.state.finishedJobId !== job.id) {
       this.state.designId = id; this.state.feedbackDesignId = id; this.state.lastDraftId = id; this.state.lastDeliveryAt = this.now(); await this.persist();
       const url = await this.instructionUrl(id);
-      if (url && this.state.feedbackDesignId === id && this.state.jobId === job.id && !this.changing) {
+      if (url && version === this.workVersion && this.state.finishedJobId !== job.id && this.state.feedbackDesignId === id && this.state.jobId === job.id && !this.changing) {
         try { await this.sendInstructions(design, url); } catch { /* The checked preview remains selected; /instructions can retry the link. */ }
       }
     }
     return design;
   }
-  private async stopCurrent() {
+  private async stopCurrent(checkNewDraft = true) {
     if (!this.state.jobId) return;
     const id = this.state.jobId;
     let job: GenerationJob;
@@ -199,8 +215,8 @@ export class PhotonConversation {
     }
     if (this.state.finishedJobId === id) return job;
     if (isActiveJob(job)) throw new PhotonInputError('Stopping could not be confirmed. Send /stop again.');
-    if (!this.state.feedbackDesignId) await this.checkedDraft(job, false);
-    else this.state.designId = this.state.feedbackDesignId;
+    if (!this.state.feedbackDesignId && checkNewDraft) await this.checkedDraft(job, false);
+    else if (this.state.feedbackDesignId) this.state.designId = this.state.feedbackDesignId;
     this.state.finishedJobId = job.id;
     await this.persist();
     return job;
@@ -211,12 +227,13 @@ export class PhotonConversation {
     await this.persist();
   }
   private async beginRequest(request: PendingPhotonRequest, quality: PhotonQuality) {
+    const version = this.workVersion;
     if (!this.qualitySelectionEnabled) quality = 'detailed';
     const previousId = request.kind === 'new' ? undefined : this.state.feedbackDesignId || this.state.designId;
     await this.reply.text((!this.qualitySelectionEnabled ? 'Starting your build. I’ll send a checked preview for your feedback. Send /stop any time.'
       : quality === 'quick' ? 'Starting Quick. I’ll aim for a usable checked draft in about 2.5 minutes and keep you updated. Send /stop any time.'
         : 'Starting Detailed. I’ll send checked drafts while I review and refine the build. Send /stop any time.')
-      + '\n\n/status: progress · /stop: stop generation'
+      + '\n\n/status: progress · /stop: stop work and deliveries'
       + '\n/model: rotatable file · /manual: PDF instructions, once a checked build is available'
       + '\n/instructions or /build: interactive building guide'
       + '\n/parts: parts list · /approve: accept this exact preview and get ready to build'
@@ -225,10 +242,13 @@ export class PhotonConversation {
       + '\n/open ID: open a saved build'
       + (this.qualitySelectionEnabled ? '\n/new idea: new subject, then choose a mode\n/quick idea · /detailed idea: start with that mode\nReply with a change to keep this mode, or name Quick or Detailed to switch.'
         : '\n/new idea: start a new subject\nReply with a change to revise this build.'));
+    if (version !== this.workVersion) return;
     const acknowledgedAt = this.now();
     await this.stopCurrent();
+    if (version !== this.workVersion) return;
     const selectedId = previousId || (request.kind !== 'new' ? this.state.designId : undefined);
     const previous = selectedId ? await this.api.design(selectedId) : undefined;
+    if (version !== this.workVersion) return;
     const image = request.image ?? (request.kind === 'new' ? undefined : this.state.pendingImage);
     const prompt = request.kind !== 'new' && this.state.requestPrompt && request.prompt !== this.state.requestPrompt
       ? `${this.state.requestPrompt}\nRequested change: ${request.prompt}` : request.prompt;
@@ -242,9 +262,15 @@ export class PhotonConversation {
     if (image) this.state.pendingImage = image; else delete this.state.pendingImage;
     if (request.kind === 'new') delete this.state.designId;
     await this.persist();
+    if (version !== this.workVersion) return;
     // The persisted ID binds an interrupted HTTP response to this one request.
-    try { await this.api.submit(requestId, { prompt, image, previous, ...inventoryContext(this.state), quality }); }
+    try {
+      await this.api.submit(requestId, { prompt, image, previous, ...inventoryContext(this.state), quality });
+      // A Stop may race a request already in flight to the build API.
+      if (version !== this.workVersion) await this.api.stop(requestId);
+    }
     catch (error) {
+      if (version !== this.workVersion) return;
       if (error instanceof PhotonApiError && error.status >= 400 && error.status < 500) {
         await this.forgetMissingJob(requestId); this.state.pendingRequest = request; await this.persist();
       }
@@ -256,12 +282,16 @@ export class PhotonConversation {
     if (retry && !id) throw new PhotonInputError('There is no approved build to resend yet. Choose a checked preview and send /approve first. No new build was started.');
     if (!id || !retry && this.state.pendingRequest) throw new PhotonInputError('Choose a checked preview before approving. Send /use N to select a checked attempt, or finish your pending request first.');
     // Status and Stop must also work while validating the revision or finding its guide.
-    this.beginExport(this.api.instructionsLink ? 'instructions' : 'model');
+    const progress = this.beginExport(this.api.instructionsLink ? 'instructions' : 'model');
+    const signal = progress.controller.signal;
     try {
-      const design = await this.api.design(id);
-      const guideUrl = await this.instructionUrl(id);
+      const design = await this.api.design(id, signal);
+      signal.throwIfAborted();
+      const guideUrl = await this.instructionUrl(id, signal);
+      signal.throwIfAborted();
       if (!retry) {
         await this.stopCurrent();
+        signal.throwIfAborted();
         // Stopping may expose a newer worker draft. Approval stays on the preview
         // the user saw, never the latest result returned by the worker.
         this.state.designId = id; this.state.lastDraftId = id; this.state.approvedDesignId = id;
@@ -269,45 +299,52 @@ export class PhotonConversation {
       this.state.approvedDeliveries ??= {};
       if (!Object.hasOwn(this.state.approvedDeliveries, id)) this.state.approvedDeliveries = { ...this.state.approvedDeliveries, [id]: guideUrl ? { mode: 'guide' } : {} };
       await this.persist();
+      signal.throwIfAborted();
       const delivery = this.state.approvedDeliveries[id];
       const files = delivery.mode === 'guide'
         ? [['instructions', null, 'building guide'], ['model', 'mobile.usdz', '3D file'], ['parts', 'parts.csv', 'parts list']] as const
         : [['model', 'mobile.usdz', '3D file'], ['manual', 'manual.pdf', 'PDF instructions'], ['parts', 'parts.csv', 'parts list']] as const;
-      if (files.every(([kind]) => delivery[kind])) { await this.finishExport(); await this.tell(delivery.mode === 'guide'
+      if (files.every(([kind]) => delivery[kind])) { await this.finishExport(progress); await this.tell(delivery.mode === 'guide'
         ? 'Ready to build. Your guide, 3D file and parts list were sent. /instructions reopens the guide; /manual gets an optional PDF.'
         : 'This build is approved and all three files were sent. Send /model, /manual, or /parts if you want a copy.'); return; }
       const failed: string[] = [];
-      this.activeExport!.kind = files.find(([kind]) => !delivery[kind])![0];
-      await this.exportMessage(`${retry ? 'Resending missing files for your approved build:' : 'Approved'} ${design.title}. I’ll send the remaining files for this exact build. ${this.exportStage(this.activeExport!)}. Brick connections are checked; physical stability is not tested.`);
+      progress.kind = files.find(([kind]) => !delivery[kind])![0];
+      await this.exportMessage(`${retry ? 'Resending missing files for your approved build:' : 'Approved'} ${design.title}. I’ll send the remaining files for this exact build. ${this.exportStage(progress)}. Brick connections are checked; physical stability is not tested.`);
       for (const [kind, format, label] of files) {
+        signal.throwIfAborted();
         if (delivery[kind]) continue;
         try {
-          this.activeExport!.kind = kind; this.activeExport!.phase = 'preparing';
+          progress.kind = kind; progress.phase = 'preparing';
           if (kind === 'instructions') {
             if (!guideUrl) throw new PhotonInputError('The building guide link is temporarily unavailable.');
-            this.activeExport!.phase = 'sending';
+            progress.phase = 'sending';
             await this.sendInstructions(design, guideUrl);
           } else {
-            const bytes = await this.api.file(id, format);
-            this.activeExport!.phase = 'sending';
+            const bytes = await this.api.file(id, format, signal);
+            signal.throwIfAborted();
+            progress.phase = 'sending';
             await this.reply[kind](bytes);
           }
           delivery[kind] = true;
           await this.persist();
-        } catch { failed.push(label); }
+        } catch { signal.throwIfAborted(); failed.push(label); }
       }
-      await this.finishExport();
+      signal.throwIfAborted();
+      await this.finishExport(progress);
       await this.tell(failed.length ? `Your approved build is saved. I couldn’t send: ${failed.join(', ')}. Send /retry to resend just those files.${this.link('design', id)}`
         : delivery.mode === 'guide' ? 'Ready, set, build. Your guide, 3D file and parts list have been sent. The guide walks through each step; /manual gets an optional PDF. You can still reply with a change.'
           : 'Your 3D file, PDF instructions, and parts list have been sent. You can still reply with a change.').catch(() => {});
-    } finally { await this.finishExport(); }
+    } catch (error) { if (!signal.aborted) throw error; }
+    finally { await this.finishExport(progress); }
   }
-  private async receive(message: Pick<Message, 'direction' | 'id' | 'content'>) {
+  private async receive(message: Pick<Message, 'direction' | 'id' | 'content'>, control?: string) {
     if (!shouldHandleMessage(message.direction, message.id, this.state.handledIds)) return;
+    let version = this.workVersion;
     this.state.handledIds = rememberMessageIds(this.state.handledIds, contentMessageIds(message.id, message.content));
     await this.persist();
     try {
-      const input = await extractMessageInput(message.content);
+      const input = control === undefined ? await extractMessageInput(message.content) : { prompt: control, image: undefined };
+      if (version !== this.workVersion) return;
       if (!input.prompt && !input.image) return;
       let command = !this.qualitySelectionEnabled && /^(?:start|continue|go ahead)[.!]?$/i.test(input.prompt.trim())
         ? { kind: 'quality' as const, quality: 'detailed' as const, prompt: '' } : routeText(input.prompt);
@@ -330,6 +367,7 @@ export class PhotonConversation {
             hasActiveJob: Boolean(this.state.jobId && this.state.finishedJobId !== this.state.jobId),
           });
         } catch {
+          if (version !== this.chatVersion) return;
           await this.reply.text('I couldn’t understand that just now. Your build is unchanged. Try rephrasing, or use /status, /model, /manual or /new followed by an idea.'); return;
         } finally { this.interpreting = false; }
         // A Stop received during interpretation wins over a late AI action.
@@ -355,7 +393,7 @@ export class PhotonConversation {
       }
       if (command.kind === 'status') {
         if (this.exporting) {
-          await this.exportMessage(`${this.exportStage(this.activeExport!)}. Your checked build is saved. /stop stops generation; requested files will keep preparing and sending.`); return;
+          await this.exportMessage(`${this.exportStage(this.activeExport!)}. Your checked build is saved. /stop cancels this delivery and any active build.`); return;
         }
         if (this.state.approvedDesignId && this.state.feedbackDesignId === this.state.approvedDesignId && this.state.designId === this.state.approvedDesignId && !this.state.pendingRequest) {
           const sent = this.state.approvedDeliveries?.[this.state.approvedDesignId];
@@ -390,63 +428,76 @@ export class PhotonConversation {
       if (command.kind === 'instructions') {
         const id = this.state.feedbackDesignId || this.state.designId || this.state.approvedDesignId;
         if (!id) throw new PhotonInputError('Let’s get a checked build first. Send an idea, or /use followed by a checked attempt number.');
-        this.beginExport('instructions');
+        const progress = this.beginExport('instructions'), signal = progress.controller.signal;
         try {
-          const design = await this.api.design(id), url = await this.instructionUrl(id);
+          const design = await this.api.design(id, signal), url = await this.instructionUrl(id, signal);
+          signal.throwIfAborted();
           if (!url) throw new PhotonInputError('The phone building guide isn’t available yet. Your checked build is saved. /model gets the rotatable 3D file, /manual gets a PDF, and /parts gets the parts list.');
-          this.activeExport!.phase = 'sending';
+          progress.phase = 'sending';
           await this.sendInstructions(design, url);
-        } finally { await this.finishExport(); }
+        } catch (error) { if (!signal.aborted) throw error; }
+        finally { await this.finishExport(progress); }
         return;
       }
       if (command.kind === 'manual' || command.kind === 'model' || command.kind === 'parts') {
         if (!this.state.designId) throw new PhotonInputError('There is no checked build selected yet. Send an idea first, or /use followed by a checked attempt number.');
         const designId = this.state.designId;
         let design: SavedDesign | undefined;
-        this.beginExport(command.kind);
+        const progress = this.beginExport(command.kind), signal = progress.controller.signal;
         try {
-          await this.exportMessage(`${this.exportStage(this.activeExport!)}. Your checked build is saved.`);
-          design = await this.api.design(designId);
-          const bytes = await this.api.file(designId, command.kind === 'manual' ? 'manual.pdf' : command.kind === 'model' ? 'mobile.usdz' : 'parts.csv');
-          this.activeExport!.phase = 'sending';
+          await this.exportMessage(`${this.exportStage(progress)}. Your checked build is saved.`);
+          design = await this.api.design(designId, signal);
+          signal.throwIfAborted();
+          const bytes = await this.api.file(designId, command.kind === 'manual' ? 'manual.pdf' : command.kind === 'model' ? 'mobile.usdz' : 'parts.csv', signal);
+          signal.throwIfAborted();
+          progress.phase = 'sending';
           await this.reply[command.kind](bytes);
-          await this.finishExport();
+          await this.finishExport(progress);
+          signal.throwIfAborted();
           await this.tell(`Sent your ${exportLabels[command.kind]}.`).catch(() => {});
         } catch (error) {
+          if (signal.aborted) return;
           if (error instanceof PhotonInputError && !(error instanceof PhotonApiError)) {
-            const url = design ? await this.instructionUrl(designId) : undefined;
+            const url = design ? await this.instructionUrl(designId, signal) : undefined;
+            signal.throwIfAborted();
             if (url && design) {
               await this.tell(`${error.message}\nYou can download this exact build from its guide.`);
-              this.activeExport!.kind = 'instructions'; this.activeExport!.phase = 'sending';
+              signal.throwIfAborted();
+              progress.kind = 'instructions'; progress.phase = 'sending';
               try { await this.sendInstructions(design, url); }
-              catch { await this.tell(`Open this build’s guide to download the file:\n${url}`); }
+              catch { signal.throwIfAborted(); await this.tell(`Open this build’s guide to download the file:\n${url}`); }
             } else {
               const fallback = this.link('design', designId) || `\nThe viewer is local to the computer running this app. On that computer, open the website with ?design=${encodeURIComponent(designId)} at the end of its address, then choose ${command.kind === 'model' ? 'Download 3D (.usdz)' : command.kind === 'manual' ? 'the PDF download' : 'the parts CSV download'}.`;
               await this.tell(`${error.message}${fallback}`);
             }
           } else throw error;
-        } finally { await this.finishExport(); }
+        } finally { await this.finishExport(progress); }
         return;
       }
       this.changing = true;
       if (command.kind === 'approve') { await this.approve(); return; }
       if (command.kind === 'retry') { await this.approve(true); return; }
       if (command.kind === 'stop') {
-        this.chatVersion++;
+        this.chatVersion++; this.workVersion++; version = this.workVersion;
+        const exporting = this.activeExport;
+        exporting?.controller.abort();
+        if (exporting) delete this.activeExport;
         const hadPending = Boolean(this.state.pendingRequest || this.state.pendingQuality);
         delete this.state.pendingRequest; delete this.state.pendingQuality; await this.persist();
-        const job = await this.stopCurrent();
+        const job = await this.stopCurrent(false);
         await this.reply.text((job ? `Generation stopped.${hadPending ? ' Your pending request was cancelled too.' : ''} ${this.state.designId ? 'Your checked draft is kept. Send /model or /manual, or describe a change.' : 'No checked draft is available yet; saved attempt output remains in the viewer.'}${this.link('job', job.id)}` : hadPending ? 'Your pending request is cancelled. No generation was started.' : 'There is no active generation to stop.')
-          + (this.exporting ? '\nYour requested files are still being prepared or sent.' : ''));
+          + (exporting ? '\nFile delivery stopped. Your saved build is kept; /retry can send missing approved files later.' + (exporting.phase === 'sending' ? ' A file already handed to iMessage may still arrive.' : '') : ''));
         return;
       }
       if (command.kind === 'use') {
         if (!this.state.jobId) throw new PhotonInputError('Start a build before selecting an attempt.');
         const job = await this.api.get(this.state.jobId);
+        if (version !== this.workVersion) return;
         const attempt = job.attempts?.find(item => item.attempt === command.attempt);
         if (!attempt?.designId || attempt.status !== 'valid' || attempt.partial) throw new PhotonInputError('That attempt is unfinished. Choose one marked as passing brick checks.');
         await this.stopCurrent();
         const design = await this.api.design(attempt.designId);
+        if (version !== this.workVersion) return;
         delete this.state.pendingRequest; delete this.state.pendingQuality;
         this.state.designId = design.id; this.state.lastDraftId = design.id; this.state.feedbackDesignId = design.id; await this.persist();
         await this.reply.text(`Using attempt ${attempt.attempt}: ${design.title}. Generation is stopped. ${this.feedbackPrompt(design)}${this.link('design', design.id)}`);
@@ -454,7 +505,9 @@ export class PhotonConversation {
       }
       if (command.kind === 'open') {
         const design = await this.api.design(command.designId);
+        if (version !== this.workVersion) return;
         await this.stopCurrent();
+        if (version !== this.workVersion) return;
         this.state = importSavedDesign(this.state, design); this.state.feedbackDesignId = design.id; await this.persist();
         await this.reply.text(`Opened ${design.title}.${this.state.inventory?.length ? ' Its saved collection will limit future builds to your owned pieces.' : ''}\n${this.feedbackPrompt(design)}${this.link('design', design.id)}`);
         await this.reply.designPreview(design);
@@ -473,6 +526,7 @@ export class PhotonConversation {
         if (!request?.prompt) {
           if (this.state.jobId) {
             const job = await this.api.get(this.state.jobId);
+            if (version !== this.workVersion) return;
             if (isActiveJob(job)) {
               await this.tell(`Your ${this.qualitySelectionEnabled ? `${job.quality === 'quick' ? 'Quick' : 'Detailed'} build` : 'build'} is already running. No second build was started. Describe a change first, or send /stop.`, job.id); return;
             }
@@ -502,6 +556,7 @@ export class PhotonConversation {
       else if (revision && this.state.quality) await this.beginRequest(request, this.state.quality);
       else await this.askQuality();
     } catch (error) {
+      if (version !== this.workVersion) return;
       await this.reply.text(error instanceof PhotonApiError
         ? error.status === 404 ? 'I couldn’t find that saved build. Check the ID after /open, or send a new idea.'
           : error.status === 429 ? 'The build service is busy. Please try again shortly. Your saved builds are unchanged.'
@@ -511,17 +566,18 @@ export class PhotonConversation {
   }
   private async deliverAttempt(job: GenerationJob, attempt: JobAttempt) {
     if (this.changing || this.state.jobId !== job.id || this.state.finishedJobId === job.id) return;
-    await this.tell(attempt.status === 'valid'
-      ? `Attempt ${attempt.attempt} passes brick checks. Please inspect its appearance. Reply with a change or /approve for its files, or send /use ${attempt.attempt} to stop and choose it.${attempt.designId ? this.link('design', attempt.designId) : ''}`
-      : `Attempt ${attempt.attempt} is unfinished. ${buildProblem(attempt.checks)}${attempt.partial ? ' This preview only shows part of the build; missing sections are not shown.' : ''} Please don’t build from it yet.${isActiveJob(job) ? ' I’m still working on it. Send /stop any time.' : ' This run has ended.'}${this.link('job', job.id)}`, job.id);
+    if (attempt.status !== 'valid' || attempt.partial || !attempt.designId) {
+      this.state.lastAttempt = Math.max(this.state.lastAttempt ?? 0, attempt.attempt);
+      await this.persist(); return;
+    }
+    await this.tell(`Attempt ${attempt.attempt} passes brick checks. Please inspect its appearance. Reply with a change or /approve for its files, or send /use ${attempt.attempt} to stop and choose it.${this.link('design', attempt.designId)}`, job.id);
     if (!this.changing && this.state.jobId === job.id && attempt.previewAvailable) {
       const preview = await this.api.preview(job.id, attempt.attempt);
-      const checked = attempt.status === 'valid' && !attempt.partial && attempt.designId ? await this.api.design(attempt.designId) : undefined;
+      const checked = await this.api.design(attempt.designId);
       if (!this.changing && this.state.jobId === job.id && this.state.finishedJobId !== job.id) {
         await this.reply.preview(preview);
         if (!this.changing && this.state.jobId === job.id && this.state.finishedJobId !== job.id) {
-          if (checked) { this.state.feedbackDesignId = checked.id; this.state.designId = checked.id; }
-          else delete this.state.feedbackDesignId;
+          this.state.feedbackDesignId = checked.id; this.state.designId = checked.id;
         }
       }
     }
@@ -530,11 +586,12 @@ export class PhotonConversation {
   async poll() {
     if (this.polling) return;
     this.polling = true;
+    const version = this.workVersion;
     try {
       if (this.exporting) { await this.exportProgress(); return; }
       if (this.changing || !this.state.jobId || this.state.finishedJobId === this.state.jobId) return;
       const job = await this.api.get(this.state.jobId);
-      if (this.changing || this.state.jobId !== job.id) return;
+      if (version !== this.workVersion || this.changing || this.state.jobId !== job.id || this.state.finishedJobId === job.id) return;
       // A useful checked model is delivered promptly, including on provider failure.
       if (job.bestDraftId && this.state.lastDraftId !== job.bestDraftId) await this.checkedDraft(job, true);
       if (this.changing || this.state.jobId !== job.id || this.state.finishedJobId === job.id) return;
@@ -542,7 +599,7 @@ export class PhotonConversation {
       const previousCursor = this.state.lastAttempt ?? 0;
       for (const attempt of job.attempts ?? []) {
         if (attempt.attempt <= previousCursor) continue;
-        const suppressed = attempt.status !== 'valid' && (attempt.attempt < 4 || job.quality === 'quick')
+        const suppressed = attempt.status !== 'valid' || attempt.partial || !attempt.designId
           || job.quality === 'quick' && Boolean(this.state.lastDraftId);
         if (!suppressed) { next = attempt; break; }
         this.state.lastAttempt = attempt.attempt;
@@ -552,6 +609,7 @@ export class PhotonConversation {
       await this.progress(job);
       if (!isActiveJob(job) && !this.changing && this.state.jobId === job.id) {
         const design = await this.checkedDraft(job, true);
+        if (this.changing || this.state.jobId !== job.id || this.state.finishedJobId === job.id) return;
         await this.tell(this.completionMessage(job, design), job.id);
         if (this.state.jobId === job.id) { this.state.finishedJobId = job.id; await this.persist(); }
       }

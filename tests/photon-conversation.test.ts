@@ -81,14 +81,14 @@ test('a photo followed by its caption reaches the same request without treating 
   assert.equal(h.submitted[0].input.inventoryMode, 'unlimited');
 });
 
-test('failed attempt summaries begin at four; best checked draft survives failure and reconnect does not replay output', async () => {
+test('unfinished attempts stay silent; best checked draft survives failure and reconnect does not replay output', async () => {
   const h = harness(), conversation = h.create();
   await start(conversation, 'Build a rocket'); const id = h.submitted[0].id;
   const job = h.jobs.get(id)!; job.bestDraftId = build.id; job.status = 'failed'; job.error = { message: 'Provider quota reached.', checks: [] };
   job.attempts = [1, 2, 3, 4].map(attempt => ({ attempt, status: 'invalid', checks: ['Disconnected pieces'], previewAvailable: attempt === 4, at: build.createdAt }));
   for (let index = 0; index < 5; index++) await conversation.poll();
-  assert.ok(h.media.includes(`design:${build.id}`)); assert.equal(h.media.filter(item => item === 'attempt').length, 1);
-  assert.ok(h.texts.some(text => /Attempt 4 is unfinished/.test(text))); assert.ok(!h.texts.some(text => /Attempt [123] is unfinished/.test(text)));
+  assert.deepEqual(h.media, [`design:${build.id}`]);
+  assert.ok(!h.texts.some(text => /Attempt [1234] is unfinished/.test(text))); assert.equal(h.state().lastAttempt, 4);
   assert.match(h.texts.at(-1)!, /usage limit.*checked draft is kept/);
   assert.equal(h.state().designId, build.id);
   const count = h.texts.length; await h.create().poll(); assert.equal(h.texts.length, count); assert.equal(h.submitted.length, 1);
@@ -170,10 +170,10 @@ test('failed media delivery remains pending across restart and terminal notice w
   assert.ok(h.media.includes(`design:${build.id}`));
 });
 
-test('unfinished attempt preview failure is retried rather than advancing its delivery cursor', async () => {
+test('complete checked attempt preview failure is retried rather than advancing its delivery cursor', async () => {
   const h = harness(), conversation = h.create();
   await start(conversation, 'Build a rocket'); const id = h.submitted[0].id;
-  h.jobs.get(id)!.attempts = [{ attempt: 4, status: 'invalid', checks: ['Disconnected'], previewAvailable: true, at: build.createdAt }];
+  h.jobs.get(id)!.attempts = [{ attempt: 4, status: 'valid', designId: build.id, checks: [], previewAvailable: true, at: build.createdAt }];
   const send = h.reply.preview; h.reply.preview = async () => { throw new Error('Attachment unavailable'); };
   await assert.rejects(conversation.poll(), /Attachment unavailable/); assert.equal(h.state().lastAttempt, 0);
   h.reply.preview = send; await h.create().poll(); assert.equal(h.state().lastAttempt, 4); assert.ok(h.media.includes('attempt'));
@@ -188,7 +188,7 @@ test('Stop bypasses a stalled export, which retains the captured revision', asyn
   const exporting = conversation.handle(message('/model')); await started;
   await conversation.handle(message('/stop'));
   assert.equal(h.jobs.get(id)!.status, 'cancelled'); release(); await exporting;
-  assert.ok(h.media.includes('model'));
+  assert.ok(!h.media.includes('model'));
 });
 
 test('feedback before the first checked draft retains the original subject, while /new resets it', async () => {
@@ -304,25 +304,47 @@ test('Quick with no valid draft keeps earlier selected build and offers Detailed
   assert.equal(h.state().designId, build.id);
 });
 
-test('Detailed partial attempt feedback explicitly says missing sections are not shown', async () => {
-  const h = harness(), conversation = h.create(); await start(conversation, 'Build a flower');
-  const job = h.jobs.get(h.submitted[0].id)!;
-  job.attempts = [{ attempt: 4, status: 'invalid', partial: true, checks: ['Disconnected stem'], previewAvailable: true, at: build.createdAt }];
-  await conversation.poll(); assert.match(h.texts.at(-1)!, /preview only shows part of the build; missing sections are not shown/);
+test('invalid and partial attempts are skipped in both modes while complete checked output survives restart', async () => {
+  for (const quality of ['Quick', 'Detailed']) {
+    const h = harness(), conversation = h.create(); await start(conversation, 'Build a flower', quality);
+    const job = h.jobs.get(h.submitted[0].id)!;
+    job.attempts = [
+      { attempt: 1, status: 'invalid', checks: ['Disconnected'], previewAvailable: true, at: build.createdAt },
+      { attempt: 4, status: 'invalid', checks: ['Overlap'], previewAvailable: true, at: build.createdAt },
+      { attempt: 5, status: 'valid', partial: true, designId: build.id, checks: [], previewAvailable: true, at: build.createdAt },
+      { attempt: 6, status: 'valid', designId: build.id, checks: [], previewAvailable: true, at: build.createdAt },
+      { attempt: 7, status: 'invalid', partial: true, checks: ['Missing section'], previewAvailable: true, at: build.createdAt },
+      { attempt: 8, status: 'valid', checks: [], previewAvailable: true, at: build.createdAt },
+    ];
+    const previews: number[] = [];
+    h.api.preview = async (_id, attempt) => { previews.push(attempt); return Buffer.from('<svg/>'); };
+    await conversation.poll(); await conversation.poll();
+    assert.deepEqual(previews, [6]); assert.deepEqual(h.media, ['attempt']);
+    assert.equal(h.state().lastAttempt, 8); assert.equal(h.state().feedbackDesignId, build.id);
+    assert.deepEqual(h.texts.filter(text => /^Attempt /.test(text)).map(text => /^Attempt (\d+)/.exec(text)![1]), ['6']);
+    const count = h.texts.length; await h.create().poll();
+    assert.equal(h.texts.length, count); assert.deepEqual(previews, [6]);
+    assert.equal(h.state().lastAttempt, 8);
+  }
 });
 
-test('attempt replies explain connection and overlap failures without exposing diagnostics or coordinates', async () => {
+test('unfinished attempts retain diagnostics privately while progress and final no-result message remain available', async () => {
   const h = harness(), conversation = h.create(); await start(conversation, 'Build a flower');
   const job = h.jobs.get(h.submitted[0].id)!;
-  const checks = ['Brick b226 (part 3001, x=46, y=20, z=9 plates, rotation=90) has no stud support directly below it.\nPlan support diagnostics: {"unsupportedPieceCount":13,"disconnectedGroups":[{"pieceCount":3,"bounds":{"x":11,"y":12}}]}', 'A slope envelope overlaps a box.'];
+  const checks = ['Brick b226 (part 3001, x=46, y=20, z=9 plates, rotation=90) has no stud support directly below it.\nPlan support diagnostics: {"unsupportedPieceCount":13}', 'A slope envelope overlaps a box.'];
   job.attempts = [{ attempt: 4, status: 'invalid', partial: true, checks, previewAvailable: true, at: build.createdAt }];
+  h.api.preview = async () => assert.fail('Unfinished previews must never be fetched');
+  h.advance(30_000); await conversation.poll();
+  assert.match(h.texts.at(-1)!, /elapsed/); assert.doesNotMatch(h.texts.at(-1)!, /unfinished|only shows part/);
+  assert.deepEqual(h.media, []); assert.equal(h.state().lastAttempt, 4);
+  job.status = 'failed'; job.error = { message: 'No checked result.', checks };
   await conversation.poll();
   const text = h.texts.at(-1)!;
   assert.match(text, /Some sections don’t connect yet/); assert.match(text, /Some pieces overlap/);
-  assert.match(text, /only shows part/); assert.match(text, /I’m still working/); assert.match(text, /\/stop/);
+  assert.match(text, /No checked draft was produced/);
   assert.doesNotMatch(text, /[{}]|b226|3001|rotation|unsupportedPieceCount|diagnostics|x=46/);
-  assert.ok(text.length < 500); assert.deepEqual(job.attempts[0].checks, checks);
-  assert.deepEqual(h.media, ['attempt']); assert.equal(h.state().lastAttempt, 4);
+  assert.deepEqual(job.attempts[0].checks, checks); assert.deepEqual(h.media, []);
+  const count = h.texts.length; await h.create().poll(); assert.equal(h.texts.length, count);
 });
 
 test('unrecognized JSON diagnostics receive a plain fallback and never leak into text', async () => {
@@ -330,9 +352,9 @@ test('unrecognized JSON diagnostics receive a plain fallback and never leak into
   const job = h.jobs.get(h.submitted[0].id)!;
   job.status = 'failed'; job.error = { message: '{"error":{"detail":"PRIVATE_PROVIDER_TOKEN"}}', checks: [] };
   job.attempts = [{ attempt: 4, status: 'invalid', checks: ['```json\n{"internalPlan":{"z":42}}\n```'], previewAvailable: false, at: build.createdAt }];
-  await conversation.poll(); const attemptText = h.texts.at(-1)!;
-  assert.match(attemptText, /arrangement that passes the brick checks/); assert.match(attemptText, /run has ended/);
-  assert.doesNotMatch(attemptText, /still working/);
+  await conversation.poll(); const finalText = h.texts.at(-1)!;
+  assert.match(finalText, /arrangement that passes the brick checks/); assert.match(finalText, /No checked draft was produced/);
+  assert.doesNotMatch(finalText, /still working/); assert.equal(h.state().lastAttempt, 4);
   await conversation.poll();
   assert.match(h.texts.at(-1)!, /Reply Quick or Detailed/);
   assert.doesNotMatch(h.texts.join('\n'), /[{}]|```|internalPlan|PRIVATE_PROVIDER_TOKEN/);
@@ -393,7 +415,7 @@ test('Stop or a confirmed new request suppresses an obsolete preview still downl
   for (const change of ['stop', 'new']) {
     const h = harness(), conversation = h.create(); await start(conversation, 'Build a flower');
     const job = h.jobs.get(h.submitted[0].id)!;
-    job.attempts = [{ attempt: 4, status: 'invalid', partial: true, checks: ['Disconnected stem'], previewAvailable: true, at: build.createdAt }];
+    job.attempts = [{ attempt: 4, status: 'valid', designId: build.id, checks: [], previewAvailable: true, at: build.createdAt }];
     let release!: (value: Buffer) => void, entered!: () => void;
     const fetching = new Promise<void>(resolve => { entered = resolve; });
     h.api.preview = async () => { entered(); return new Promise<Buffer>(resolve => { release = resolve; }); };
@@ -678,7 +700,8 @@ test('guide approval stays pinned while a newer worker draft appears and Stop by
   release(); await approving; await duplicate;
   assert.ok(ids.every(id => id === build.id)); assert.equal(guides.length, 1);
   assert.equal(h.state().approvedDesignId, build.id); assert.equal(h.state().feedbackDesignId, build.id);
-  assert.deepEqual(h.media, ['model', 'parts']); assert.equal(h.submitted.length, 0);
+  assert.deepEqual(h.media, []);
+  assert.deepEqual(h.state().approvedDeliveries?.[build.id], { mode: 'guide', instructions: true }); assert.equal(h.submitted.length, 0);
 });
 
 test('status and Stop stay responsive during a directly requested guide card', { timeout: 2000 }, async () => {
@@ -718,10 +741,10 @@ test('approval preparation keeps status and Stop responsive during design and gu
     assert.equal(h.state().designId, build.id); assert.equal(h.state().approvedDeliveries, undefined);
     release(); await approval; await duplicate;
     assert.ok(ids.every(id => id === build.id));
-    assert.deepEqual(files, [`${build.id}/mobile.usdz`, `${build.id}/parts.csv`]);
-    assert.deepEqual(guides, [`https://guide.example/?build=${build.id}&share=signed`]);
-    assert.equal(h.state().approvedDesignId, build.id); assert.equal(h.state().feedbackDesignId, build.id);
-    assert.deepEqual(h.state().approvedDeliveries?.[build.id], { mode: 'guide', instructions: true, model: true, parts: true });
+    assert.deepEqual(files, []);
+    assert.deepEqual(guides, []);
+    assert.equal(h.state().approvedDesignId, undefined); assert.equal(h.state().feedbackDesignId, build.id);
+    assert.equal(h.state().approvedDeliveries, undefined);
     assert.equal(h.submitted.length, 0); assert.deepEqual(h.stops, ['running']);
   }
 });
@@ -742,9 +765,9 @@ test('a held approval retry lookup keeps the approved revision and previous ackn
   await conversation.handle(message('/stop')); assert.match(h.texts.at(-1)!, /no active generation/i);
   assert.deepEqual(h.state().approvedDeliveries?.[build.id], { mode: 'guide', instructions: true, parts: true });
   release(); await retry;
-  assert.deepEqual(ids, [build.id]); assert.deepEqual(files, [`${build.id}/mobile.usdz`]); assert.deepEqual(h.media, ['model']);
+  assert.deepEqual(ids, [build.id]); assert.deepEqual(files, []); assert.deepEqual(h.media, []);
   assert.equal(h.state().designId, selected.id); assert.equal(h.state().feedbackDesignId, selected.id); assert.equal(h.state().approvedDesignId, build.id);
-  assert.deepEqual(h.state().approvedDeliveries?.[build.id], { mode: 'guide', instructions: true, model: true, parts: true });
+  assert.deepEqual(h.state().approvedDeliveries?.[build.id], { mode: 'guide', instructions: true, parts: true });
   assert.equal(h.submitted.length, 0);
 });
 
@@ -782,7 +805,8 @@ test('Stop remains responsive while approval exports are pending', async () => {
   const approval = conversation.handle(message('/approve')); await exporting;
   await conversation.handle(message('/stop'));
   assert.match(h.texts.at(-1)!, /no active generation/i);
-  release(); await approval; assert.deepEqual(h.media, ['model', 'manual', 'parts']);
+  release(); await approval; assert.deepEqual(h.media, ['model']);
+  assert.deepEqual(h.state().approvedDeliveries?.[build.id], { model: true });
 });
 
 test('two revisions preserve original prompt, photo, owned stock and approval history, with an explicit mode override', async () => {
@@ -903,7 +927,7 @@ test('the constructor default uses immediate detailed generation without a confi
   assert.equal(h.submitted.length, 1); assert.equal(h.submitted[0].input.quality, 'detailed');
 });
 
-test('status and Stop bypass a long manual export without changing its captured revision or starting a retry job', { timeout: 2000 }, async () => {
+test('Stop bypasses and cancels a long manual export without changing its captured revision or starting a retry job', { timeout: 2000 }, async () => {
   const h = harness({ handledIds: [], designId: build.id }, false), conversation = h.create();
   await conversation.handle(message('Make it taller')); const jobId = h.state().jobId!;
   let release!: () => void, entered!: () => void, delivered = false;
@@ -921,9 +945,9 @@ test('status and Stop bypass a long manual export without changing its captured 
   }
   await conversation.handle(message('/stop'));
   assert.equal(h.jobs.get(jobId)!.status, 'cancelled'); assert.equal(delivered, false);
-  assert.match(h.texts.at(-1)!, /requested files are still being prepared or sent/);
+  assert.match(h.texts.at(-1)!, /File delivery stopped/);
   release(); await exporting;
-  assert.equal(delivered, true); assert.deepEqual(calls, [`${build.id}/manual.pdf`]); assert.equal(h.submitted.length, 1);
+  assert.equal(delivered, false); assert.deepEqual(calls, [`${build.id}/manual.pdf`]); assert.equal(h.submitted.length, 1);
 });
 
 test('approval status and Stop remain responsive during PDF preparation while a duplicate approval waits for acknowledgements', { timeout: 2000 }, async () => {
@@ -943,8 +967,9 @@ test('approval status and Stop remain responsive during PDF preparation while a 
   assert.deepEqual(h.state().approvedDeliveries?.[build.id], { model: true });
   await conversation.handle(message('/stop')); assert.match(h.texts.at(-1)!, /no active generation/i);
   release(); await first; await duplicate;
-  assert.deepEqual(calls, ['mobile.usdz', 'manual.pdf', 'parts.csv'].map(format => `${build.id}/${format}`));
-  assert.deepEqual(h.media, ['model', 'manual', 'parts']); assert.equal(h.submitted.length, 0);
+  assert.deepEqual(calls, ['mobile.usdz', 'manual.pdf'].map(format => `${build.id}/${format}`));
+  assert.deepEqual(h.media, ['model']);
+  assert.deepEqual(h.state().approvedDeliveries?.[build.id], { model: true }); assert.equal(h.submitted.length, 0);
   assert.equal(h.state().approvedDesignId, build.id);
 });
 
@@ -988,10 +1013,10 @@ test('approval polling follows preparation and sending with throttled check-ins 
   h.advance(1); await conversation.poll(); assert.equal(h.texts.length, ++count);
   assert.match(h.texts.at(-1)!, /Sending your rotatable 3D file/);
   await conversation.handle(message('/status')); assert.match(h.texts.at(-1)!, /Sending your rotatable 3D file/);
-  await conversation.handle(message('/stop')); assert.match(h.texts.at(-1)!, /requested files are still being prepared or sent/);
+  await conversation.handle(message('/stop')); assert.match(h.texts.at(-1)!, /File delivery stopped/);
   releaseSend(); await approval; await duplicate;
-  assert.deepEqual(calls, ['mobile.usdz', 'manual.pdf', 'parts.csv'].map(format => `${build.id}/${format}`));
-  assert.deepEqual(h.state().approvedDeliveries?.[build.id], { model: true, manual: true, parts: true });
+  assert.deepEqual(calls, ['mobile.usdz'].map(format => `${build.id}/${format}`));
+  assert.deepEqual(h.state().approvedDeliveries?.[build.id], { model: true });
   assert.equal(h.state().approvedDesignId, build.id); assert.equal(h.submitted.length, 0);
   count = h.texts.length; h.advance(60_000); await conversation.poll(); assert.equal(h.texts.length, count);
 });
@@ -1209,4 +1234,121 @@ test('a natural-language caption uses the waiting photo without reusing an older
   h.api.chat = async () => ({ intent: 'new', text: 'A red rose from the photograph' });
   await h.create().handle(message('A red rose from this picture'));
   assert.deepEqual(h.submitted[0].input.image, image);
+});
+
+test('natural Stop aborts a file wait, drops queued requests and allows a fresh request afterward', { timeout: 2000 }, async () => {
+  const h = harness({ handledIds: [], designId: build.id }, false), conversation = h.create();
+  let started!: () => void;
+  const waiting = new Promise<void>(resolve => { started = resolve; });
+  let signal: AbortSignal | undefined;
+  h.api.file = async (_id, _format, callerSignal) => {
+    signal = callerSignal; started();
+    return new Promise((_resolve, reject) => callerSignal!.addEventListener('abort', () => reject(callerSignal!.reason), { once: true }));
+  };
+  const file = conversation.handle(message('/manual')); await waiting;
+  const queued = message('Build a castle'), duplicate = conversation.handle(queued);
+  const stop = message('please stop sending');
+  await conversation.handle(stop); await conversation.handle(stop);
+  await file; await duplicate;
+  assert.equal(signal!.aborted, true); assert.deepEqual(h.media, []); assert.equal(h.submitted.length, 0);
+  assert.match(h.texts.at(-1)!, /File delivery stopped/);
+  assert.equal(h.texts.filter(text => text.includes('File delivery stopped')).length, 1);
+  await conversation.handle(queued); assert.equal(h.submitted.length, 0, 'A redelivered cancelled queued message stays cancelled');
+  await conversation.handle(message('Build a boat')); assert.equal(h.submitted.length, 1);
+});
+
+test('Stop during revision validation prevents a late generation from starting', { timeout: 2000 }, async () => {
+  const h = harness({ handledIds: [], designId: build.id, requestPrompt: 'Build a rocket' }, false), conversation = h.create();
+  let started!: () => void, release!: () => void;
+  const waiting = new Promise<void>(resolve => { started = resolve; });
+  h.api.design = async () => { started(); await new Promise<void>(resolve => { release = resolve; }); return build; };
+  const revision = conversation.handle(message('Make it taller')); await waiting;
+  await conversation.handle(message('stop it'));
+  assert.match(h.texts.at(-1)!, /cancelled|no active generation/i);
+  const count = h.texts.length; release(); await revision;
+  assert.equal(h.submitted.length, 0); assert.equal(h.texts.length, count); assert.equal(h.state().designId, build.id);
+});
+
+test('Stop does not wait to validate an undelivered draft or send a late poll completion', { timeout: 2000 }, async () => {
+  const h = harness({ handledIds: [] }, false), conversation = h.create();
+  await conversation.handle(message('Build a rocket')); const id = h.state().jobId!;
+  h.jobs.get(id)!.bestDraftId = build.id;
+  let started!: () => void, release!: () => void;
+  const waiting = new Promise<void>(resolve => { started = resolve; }); let lookups = 0;
+  h.api.design = async () => { lookups++; started(); await new Promise<void>(resolve => { release = resolve; }); return build; };
+  const poll = conversation.poll(); await waiting;
+  await conversation.handle(message('please stop'));
+  assert.equal(lookups, 1); assert.equal(h.jobs.get(id)!.status, 'cancelled');
+  assert.match(h.texts.at(-1)!, /Generation stopped/);
+  const count = h.texts.length; release(); await poll;
+  assert.equal(h.texts.length, count); assert.deepEqual(h.media, []);
+});
+
+test('stopped approval resumes missing files only after an explicit retry, including across restart', { timeout: 2000 }, async () => {
+  const h = harness({ handledIds: [], designId: build.id, feedbackDesignId: build.id }, false), conversation = h.create();
+  let started!: () => void;
+  const waiting = new Promise<void>(resolve => { started = resolve; }); const calls: string[] = [];
+  h.api.file = async (_id, format, signal) => {
+    calls.push(format);
+    if (format === 'manual.pdf') { started(); return new Promise((_resolve, reject) => signal!.addEventListener('abort', () => reject(signal!.reason), { once: true })); }
+    return Buffer.from(format);
+  };
+  const approval = conversation.handle(message('/approve')); await waiting;
+  await conversation.handle(message('stop')); await approval;
+  assert.deepEqual(h.state().approvedDeliveries?.[build.id], { model: true });
+  h.api.file = async (_id, format) => { calls.push(format); return Buffer.from(format); };
+  await h.create().handle(message('/retry'));
+  assert.deepEqual(calls, ['mobile.usdz', 'manual.pdf', 'manual.pdf', 'parts.csv']);
+  assert.deepEqual(h.media, ['model', 'manual', 'parts']); assert.equal(h.state().approvedDesignId, build.id);
+});
+
+test('a failed backend cancellation is reported instead of claiming generation stopped', async () => {
+  const h = harness({ handledIds: [] }, false), conversation = h.create();
+  await conversation.handle(message('Build a rocket'));
+  h.api.stop = async () => { throw new PhotonApiError('Unavailable', 503); };
+  await conversation.handle(message('stop'));
+  assert.match(h.texts.at(-1)!, /couldn’t complete|could not confirm|unavailable/i);
+  assert.doesNotMatch(h.texts.at(-1)!, /Generation stopped/);
+});
+
+test('Stop suppresses an automatic guide whose link resolves after the checked preview', { timeout: 2000 }, async () => {
+  const h = harness({ handledIds: [] }, false), conversation = h.create();
+  await conversation.handle(message('Build a rocket')); h.jobs.get(h.state().jobId!)!.bestDraftId = build.id;
+  let started!: () => void, release!: () => void;
+  const waiting = new Promise<void>(resolve => { started = resolve; });
+  h.api.instructionsLink = async id => { started(); await new Promise<void>(resolve => { release = resolve; }); return `https://guide.example/?build=${id}&share=signed`; };
+  h.reply.instructions = async () => { h.media.push('guide'); };
+  const poll = conversation.poll(); await waiting;
+  assert.deepEqual(h.media, [`design:${build.id}`]);
+  await conversation.handle(message('stop'));
+  const count = h.texts.length; release(); await poll;
+  assert.equal(h.texts.length, count); assert.deepEqual(h.media, [`design:${build.id}`]);
+});
+
+test('reply-wrapped and grouped Stop bypass a held export before any attachment is delivered', { timeout: 2000 }, async () => {
+  for (const kind of ['reply', 'group']) {
+    const h = harness({ handledIds: [], designId: build.id }, false), conversation = h.create();
+    let started!: () => void, release!: () => void;
+    const waiting = new Promise<void>(resolve => { started = resolve; });
+    h.api.file = async () => { started(); await new Promise<void>(resolve => { release = resolve; }); return Buffer.from('PDF'); };
+    const file = conversation.handle(message('/manual')); await waiting;
+    const content: Content = kind === 'reply' ? { type: 'reply', content: { type: 'text', text: 'please stop' } } as Content
+      : { type: 'group', items: [message('please stop') as Message] };
+    await conversation.handle({ ...message(''), content });
+    assert.match(h.texts.at(-1)!, /File delivery stopped/);
+    release(); await file; assert.deepEqual(h.media, []);
+  }
+});
+
+test('Stop suppresses a fallback guide when its explanation was already sending', { timeout: 2000 }, async () => {
+  const h = harness({ handledIds: [], designId: build.id }, false), conversation = h.create();
+  let started!: () => void, release!: () => void;
+  const waiting = new Promise<void>(resolve => { started = resolve; });
+  h.api.file = async () => { throw new PhotonInputError('This file is too large.'); };
+  h.api.instructionsLink = async id => `https://guide.example/?build=${id}&share=signed`;
+  h.reply.instructions = async () => { h.media.push('guide'); };
+  h.reply.text = async text => { h.texts.push(text); if (text.includes('download this exact build')) { started(); await new Promise<void>(resolve => { release = resolve; }); } };
+  const file = conversation.handle(message('/model')); await waiting;
+  await conversation.handle(message('stop')); const count = h.texts.length;
+  release(); await file; assert.deepEqual(h.media, []); assert.equal(h.texts.length, count);
 });
