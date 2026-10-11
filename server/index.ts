@@ -17,6 +17,7 @@ import { importSet } from './inventory.js';
 import { loadDesign, saveDesign } from './store.js';
 import { readConfig } from './config.js';
 import { instructionGateway, instructionUrl, loadInstructionSecret, sendInstructionFile } from './instruction-share.js';
+import { interpretPhotonChat } from './photon-chat.js';
 
 readConfig();
 const jobs = new GenerationJobs();
@@ -30,6 +31,7 @@ app.get('/api/status', (_req, res) => {
   const config = readConfig();
   res.json({ gemini: Boolean(config.geminiKey), model: config.model, rebrickable: Boolean(config.rebrickableKey), photon: config.photonReady, photonLive: false, photonJobPolicy: 3 });
 });
+app.post('/api/photon/chat', async (req, res) => res.json(await interpretPhotonChat(req.body.message, req.body.context)));
 app.get('/api/catalog', async (_req, res) => {
   const catalog = await loadCachedCatalog();
   res.json({ ...resolveCatalog(catalog), catalog });

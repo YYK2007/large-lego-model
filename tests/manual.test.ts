@@ -274,6 +274,24 @@ test('same-height translated PDF uses repeated placements with exact destination
   assert.equal((pdf.toString('latin1').match(/\/Type \/Page\b/g) ?? []).length, 4);
 });
 
+test('alternating stack PDF shows A then B with cycle totals and preserves every checked placement', async () => {
+  const repeated: Design = { ...mixed, id: randomUUID(), title: 'Alternating plate courses', bricks:
+    Array.from({ length: 8 }, (_, z) => [0, 1].map(i => ({ id: `course-${z}-${i}`, partId: '3020', colorId: 4,
+      x: z % 2 ? 0 : i * 2, y: z % 2 ? i * 2 : 0, z, rotation: (z % 2 ? 90 : 0) as 0 | 90,
+    }))).flat(),
+  };
+  assert.equal(validateDesign(repeated).valid, true);
+  const steps = buildSteps(repeated), groups = groupManualSteps(steps);
+  assert.equal(groups.length, 1); assert.equal(groups[0].patternLength, 2);
+  const pdf = await generateManualPdf(repeated), content = pdfText(pdf);
+  for (const expected of ['16 PIECES', '8 BUILD STEPS', '4 cycles / 16 pieces total', 'A / 2 pieces', 'B / 2 pieces',
+    'A then B, 4x. Stack directly on the model.', '4 pieces per cycle', '16x', '03 / 03']) {
+    assert.ok(content.includes(expected), `Missing two-layer cycle detail: ${expected}`);
+  }
+  assert.deepEqual(exactPlacements(pdf).steps, steps);
+  assert.equal((pdf.toString('latin1').match(/\/Type \/Page\b/g) ?? []).length, 3);
+});
+
 test('narrow-plate SVG and manual retain one-plate steps, correct exposed studs and source quantities', async () => {
   const narrow: Design = { ...mixed, id: 'narrow-plate-guide', title: 'Narrow plate stair', bricks: ['3710', '3623', '3023', '3024'].map((partId, z) => ({
     id: `narrow-${z}`, partId, colorId: 15, x: 0, y: 0, z, rotation: 0,
@@ -333,7 +351,7 @@ test('manual cache survives process restart and keys exact design and inventory 
   const inventory = [{ partId: '3004', colorId: 1, quantity: 1, source: 'Cached source lot' }];
   const changed = { ...original, title: 'Changed cached revision' };
   const inputs = [{ design: original, inventory }, { design: changed, inventory }, { design: original, inventory: [] }];
-  const filenames = inputs.map(input => `data/manual-cache/manual-v5-diagram-guide-${createHash('sha256').update(JSON.stringify(input)).digest('hex')}.pdf`);
+  const filenames = inputs.map(input => `data/manual-cache/manual-v6-pattern-cycles-${createHash('sha256').update(JSON.stringify(input)).digest('hex')}.pdf`);
   t.after(() => Promise.all(filenames.map(filename => rm(filename, { force: true }))));
   const first = await generateManualPdf(original, inventory);
   assert.deepEqual(await readFile(filenames[0]), first);

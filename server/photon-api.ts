@@ -3,6 +3,7 @@ import type { GenerationJob } from '../shared/generation-job.js';
 import type { GenerationInput } from './generation.js';
 import type { SavedDesign } from './store.js';
 import { PhotonInputError } from './photon-routing.js';
+import { parsePhotonChatResult, type PhotonChatContext, type PhotonChatResult } from './photon-chat.js';
 export class PhotonApiError extends PhotonInputError {
   constructor(message: string, readonly status: number) { super(message); }
 }
@@ -13,6 +14,7 @@ export interface PhotonJobsApi {
   stop(id: string): Promise<GenerationJob>;
   design(id: string): Promise<SavedDesign>;
   instructionsLink?(id: string): Promise<string | null>;
+  chat?(message: string, context: PhotonChatContext): Promise<PhotonChatResult>;
   preview(id: string, attempt: number): Promise<Buffer>;
   file(id: string, format: 'manual.pdf' | 'model.usdz' | 'mobile.usdz' | 'parts.csv'): Promise<Buffer>;
 }
@@ -37,6 +39,7 @@ export function photonJobsApi(base = 'http://127.0.0.1:3001', request: typeof fe
   }
   const idPath = (id: string) => `/generation-jobs/${encodeURIComponent(id)}`;
   return {
+    chat: async (message, context) => parsePhotonChatResult(await (await response('/photon/chat', { message, context })).json()),
     submit: (id, input) => job('/generation-jobs', id, { requestId: id, input, stopWhenMatched: true, visualReview }),
     get: id => job(idPath(id), id),
     stop: id => job(`${idPath(id)}/cancel`, id, {}),

@@ -49,6 +49,8 @@ export class PhotonConversation {
   private writes: Promise<unknown> = Promise.resolve();
   private polling = false;
   private changing = false;
+  private interpreting = false;
+  private chatVersion = 0;
   private activeExport?: ExportProgress;
   private get exporting() { return Boolean(this.activeExport); }
   constructor(value: Conversation, private api: PhotonJobsApi, private reply: PhotonReply,
@@ -155,7 +157,7 @@ export class PhotonConversation {
   }
   handle(message: Pick<Message, 'direction' | 'id' | 'content'>) {
     // Long exports stay serialized, but must not delay status or Stop.
-    if (this.exporting && message.direction === 'inbound' && message.content.type === 'text') {
+    if ((this.exporting || this.interpreting) && message.direction === 'inbound' && message.content.type === 'text') {
       try {
         const { kind } = routeText(message.content.text);
         if (kind === 'stop' || kind === 'status') return this.receive(message);
@@ -253,27 +255,29 @@ export class PhotonConversation {
     const id = retry ? this.state.approvedDesignId : this.state.feedbackDesignId;
     if (retry && !id) throw new PhotonInputError('There is no approved build to resend yet. Choose a checked preview and send /approve first. No new build was started.');
     if (!id || !retry && this.state.pendingRequest) throw new PhotonInputError('Choose a checked preview before approving. Send /use N to select a checked attempt, or finish your pending request first.');
-    const design = await this.api.design(id);
-    const guideUrl = await this.instructionUrl(id);
-    if (!retry) {
-      await this.stopCurrent();
-      // Stopping may expose a newer worker draft. Approval stays on the preview
-      // the user saw, never the latest result returned by the worker.
-      this.state.designId = id; this.state.lastDraftId = id; this.state.approvedDesignId = id;
-    }
-    this.state.approvedDeliveries ??= {};
-    if (!Object.hasOwn(this.state.approvedDeliveries, id)) this.state.approvedDeliveries = { ...this.state.approvedDeliveries, [id]: guideUrl ? { mode: 'guide' } : {} };
-    await this.persist();
-    const delivery = this.state.approvedDeliveries[id];
-    const files = delivery.mode === 'guide'
-      ? [['instructions', null, 'building guide'], ['model', 'mobile.usdz', '3D file'], ['parts', 'parts.csv', 'parts list']] as const
-      : [['model', 'mobile.usdz', '3D file'], ['manual', 'manual.pdf', 'PDF instructions'], ['parts', 'parts.csv', 'parts list']] as const;
-    if (files.every(([kind]) => delivery[kind])) { await this.tell(delivery.mode === 'guide'
-      ? 'Ready to build. Your guide, 3D file and parts list were sent. /instructions reopens the guide; /manual gets an optional PDF.'
-      : 'This build is approved and all three files were sent. Send /model, /manual, or /parts if you want a copy.'); return; }
-    const failed: string[] = [];
-    this.beginExport(files.find(([kind]) => !delivery[kind])![0]);
+    // Status and Stop must also work while validating the revision or finding its guide.
+    this.beginExport(this.api.instructionsLink ? 'instructions' : 'model');
     try {
+      const design = await this.api.design(id);
+      const guideUrl = await this.instructionUrl(id);
+      if (!retry) {
+        await this.stopCurrent();
+        // Stopping may expose a newer worker draft. Approval stays on the preview
+        // the user saw, never the latest result returned by the worker.
+        this.state.designId = id; this.state.lastDraftId = id; this.state.approvedDesignId = id;
+      }
+      this.state.approvedDeliveries ??= {};
+      if (!Object.hasOwn(this.state.approvedDeliveries, id)) this.state.approvedDeliveries = { ...this.state.approvedDeliveries, [id]: guideUrl ? { mode: 'guide' } : {} };
+      await this.persist();
+      const delivery = this.state.approvedDeliveries[id];
+      const files = delivery.mode === 'guide'
+        ? [['instructions', null, 'building guide'], ['model', 'mobile.usdz', '3D file'], ['parts', 'parts.csv', 'parts list']] as const
+        : [['model', 'mobile.usdz', '3D file'], ['manual', 'manual.pdf', 'PDF instructions'], ['parts', 'parts.csv', 'parts list']] as const;
+      if (files.every(([kind]) => delivery[kind])) { await this.finishExport(); await this.tell(delivery.mode === 'guide'
+        ? 'Ready to build. Your guide, 3D file and parts list were sent. /instructions reopens the guide; /manual gets an optional PDF.'
+        : 'This build is approved and all three files were sent. Send /model, /manual, or /parts if you want a copy.'); return; }
+      const failed: string[] = [];
+      this.activeExport!.kind = files.find(([kind]) => !delivery[kind])![0];
       await this.exportMessage(`${retry ? 'Resending missing files for your approved build:' : 'Approved'} ${design.title}. I’ll send the remaining files for this exact build. ${this.exportStage(this.activeExport!)}. Brick connections are checked; physical stability is not tested.`);
       for (const [kind, format, label] of files) {
         if (delivery[kind]) continue;
@@ -292,10 +296,11 @@ export class PhotonConversation {
           await this.persist();
         } catch { failed.push(label); }
       }
+      await this.finishExport();
+      await this.tell(failed.length ? `Your approved build is saved. I couldn’t send: ${failed.join(', ')}. Send /retry to resend just those files.${this.link('design', id)}`
+        : delivery.mode === 'guide' ? 'Ready, set, build. Your guide, 3D file and parts list have been sent. The guide walks through each step; /manual gets an optional PDF. You can still reply with a change.'
+          : 'Your 3D file, PDF instructions, and parts list have been sent. You can still reply with a change.').catch(() => {});
     } finally { await this.finishExport(); }
-    await this.tell(failed.length ? `Your approved build is saved. I couldn’t send: ${failed.join(', ')}. Send /retry to resend just those files.${this.link('design', id)}`
-      : delivery.mode === 'guide' ? 'Ready, set, build. Your guide, 3D file and parts list have been sent. The guide walks through each step; /manual gets an optional PDF. You can still reply with a change.'
-        : 'Your 3D file, PDF instructions, and parts list have been sent. You can still reply with a change.').catch(() => {});
   }
   private async receive(message: Pick<Message, 'direction' | 'id' | 'content'>) {
     if (!shouldHandleMessage(message.direction, message.id, this.state.handledIds)) return;
@@ -304,8 +309,44 @@ export class PhotonConversation {
     try {
       const input = await extractMessageInput(message.content);
       if (!input.prompt && !input.image) return;
-      const command = !this.qualitySelectionEnabled && /^(?:start|continue|go ahead)[.!]?$/i.test(input.prompt.trim())
+      let command = !this.qualitySelectionEnabled && /^(?:start|continue|go ahead)[.!]?$/i.test(input.prompt.trim())
         ? { kind: 'quality' as const, quality: 'detailed' as const, prompt: '' } : routeText(input.prompt);
+      const confirmsSuggestion = /^(?:yes|yep|yeah|sure|ok(?:ay)?|sounds good|go for it|let[’']s do (?:it|that))(?:[, ]+please)?[.!]*$/i.test(input.prompt.trim());
+      if (command.kind === 'chat' && confirmsSuggestion && this.state.chatHistory?.length && !this.state.pendingRequest) command = { kind: 'conversation', prompt: input.prompt };
+      let conversationalRevision = false, conversationalNew = false;
+      if (command.kind === 'conversation') {
+        if (!this.api.chat) {
+          await this.reply.text('Chat is unavailable just now. Your build is unchanged. You can still use /status, /model or /manual, or /new followed by an idea.'); return;
+        }
+        const version = this.chatVersion;
+        const selectedId = this.state.feedbackDesignId || this.state.designId;
+        this.interpreting = true;
+        let answer;
+        try {
+          answer = await this.api.chat(command.prompt, {
+            originalRequest: this.state.requestPrompt, designId: selectedId, recentMessages: this.state.chatHistory,
+            hasPendingPhoto: Boolean(input.image || this.state.pendingImage || this.state.pendingRequest?.image),
+            hasPendingRequest: Boolean(this.state.pendingRequest),
+            hasActiveJob: Boolean(this.state.jobId && this.state.finishedJobId !== this.state.jobId),
+          });
+        } catch {
+          await this.reply.text('I couldn’t understand that just now. Your build is unchanged. Try rephrasing, or use /status, /model, /manual or /new followed by an idea.'); return;
+        } finally { this.interpreting = false; }
+        // A Stop received during interpretation wins over a late AI action.
+        if (version !== this.chatVersion) return;
+        if (answer.intent === 'reply') {
+          await this.tell(answer.text, this.state.jobId);
+          this.state.chatHistory = [...this.state.chatHistory ?? [], { role: 'user' as const, text: input.prompt }, { role: 'assistant' as const, text: answer.text }].slice(-8);
+          await this.persist(); return;
+        }
+        conversationalRevision = answer.intent === 'revision';
+        conversationalNew = answer.intent === 'new';
+        if (conversationalRevision && (!selectedId || selectedId !== (this.state.feedbackDesignId || this.state.designId))) {
+          await this.reply.text('Let’s make sure we’re changing the right draft. Check the latest preview, then tell me what to change.'); return;
+        }
+        command = { kind: answer.intent === 'revision' ? 'design' : answer.intent,
+          prompt: confirmsSuggestion && (answer.intent === 'new' || answer.intent === 'revision') ? `${answer.text}\nUser confirmation: ${input.prompt}` : input.prompt };
+      }
       if (command.kind === 'clarify') {
         await this.tell('What should I change: the shape, color, size, or a particular detail? I’ll keep your current build until you give me a specific change.', this.state.jobId); return;
       }
@@ -391,6 +432,7 @@ export class PhotonConversation {
       if (command.kind === 'approve') { await this.approve(); return; }
       if (command.kind === 'retry') { await this.approve(true); return; }
       if (command.kind === 'stop') {
+        this.chatVersion++;
         const hadPending = Boolean(this.state.pendingRequest || this.state.pendingQuality);
         delete this.state.pendingRequest; delete this.state.pendingQuality; await this.persist();
         const job = await this.stopCurrent();
@@ -443,12 +485,12 @@ export class PhotonConversation {
         }
         await this.beginRequest(request, command.quality); return;
       }
-      const revision = command.kind !== 'new' && isRevisionPrompt(command.prompt) && Boolean(this.state.requestPrompt || this.state.designId);
+      const revision = command.kind !== 'new' && (conversationalRevision || isRevisionPrompt(command.prompt)) && Boolean(this.state.requestPrompt || this.state.designId);
       const kind = revision ? 'design' : 'new';
       const staged = this.state.pendingRequest;
       const request: PendingPhotonRequest = {
         kind, prompt: command.prompt || (input.image && staged ? staged.prompt : ''),
-        ...(input.image ? { image: input.image } : command.kind !== 'new' && staged?.image ? { image: staged.image } : {}),
+        ...(input.image ? { image: input.image } : (command.kind !== 'new' || conversationalNew) && staged?.image ? { image: staged.image } : {}),
       };
       this.state.pendingRequest = request;
       await this.persist();

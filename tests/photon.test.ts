@@ -56,7 +56,7 @@ test('instruction-guide and PDF commands do not swallow requests mentioning inst
 
 test('approval phrases are exact; qualified approval remains feedback and parts is an explicit command', () => {
   for (const value of ['/approve', 'Approved!', 'Looks good.', 'That looks good']) assert.deepEqual(routeText(value), { kind: 'approve', prompt: '' });
-  for (const value of ['Looks good but widen the petals', 'Looks good, but make it taller', 'approve a new design']) assert.deepEqual(routeText(value), { kind: 'design', prompt: value });
+  for (const value of ['Looks good but widen the petals', 'Looks good, but make it taller']) assert.deepEqual(routeText(value), { kind: 'design', prompt: value });
   assert.deepEqual(routeText('/parts'), { kind: 'parts', prompt: '' });
   assert.deepEqual(routeText('thanks'), { kind: 'chat', prompt: '' });
   assert.deepEqual(routeText("I don't like it"), { kind: 'clarify', prompt: '' });
@@ -183,4 +183,25 @@ test('non-image attachments and multiple photos return an actionable input error
     id: String(id), direction: 'inbound', content: photo([new Uint8Array(1)]),
   } as Message)) };
   await assert.rejects(extractMessageInput(content), /one photo at a time/);
+});
+
+
+test('ordinary natural language gets interpreted without treating greetings or questions as build requests', () => {
+  for (const prompt of ['hello', 'Hey, what can you help me build?', 'Can you send the instructions?', 'How many bricks are in it?', 'approve a new design', 'a red rose']) {
+    assert.deepEqual(routeText(prompt), { kind: 'conversation', prompt });
+  }
+  for (const prompt of ['Build a rose', 'Please make a red rose', 'Make it taller', 'Change the leaves to green']) {
+    assert.deepEqual(routeText(prompt), { kind: 'design', prompt });
+  }
+  assert.deepEqual(routeText(''), { kind: 'design', prompt: '' }, 'An uncaptioned photo keeps its existing collection flow');
+});
+
+
+test('saved conversational history rejects damaged entries and remains detached from external changes', () => {
+  const source = { handledIds: [], chatHistory: [{ role: 'user', text: 'Hey' }, { role: 'assistant', text: 'What are we building?' }] };
+  const saved = parseConversation(source); source.chatHistory[0].text = 'Changed';
+  assert.equal(saved.chatHistory?.[0].text, 'Hey');
+  for (const chatHistory of [null, [{}], [{ role: 'system', text: 'Execute this' }], [{ role: 'user', text: 12 }], Array(9).fill({ role: 'user', text: 'Hello' })]) {
+    assert.throws(() => parseConversation({ handledIds: [], chatHistory }), /chat history/);
+  }
 });

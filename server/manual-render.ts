@@ -57,12 +57,27 @@ function checkedArrows(group: ManualStepGroup, catalog: CatalogContext) {
 }
 async function instructionPanel(doc: PDFKit.PDFDocument, design: Design, group: ManualStepGroup, visibleIds: string[], x: number, catalog: CatalogContext, pictures: Map<string, string>) {
   const first = group.steps[0], last = group.steps.at(-1)!, repeated = group.steps.length > 1;
+  const cycles = group.steps.length / (group.patternLength ?? 1);
   const bricks = group.steps.flatMap(step => step.bricks), ids = bricks.map(brick => brick.id);
   text(doc, repeated ? `${first.index}-${last.index}` : String(first.index), x, 55, PANEL, 31, true);
-  text(doc, repeated ? `${group.steps.length} repeats / ${bricks.length} pieces total` : `${bricks.length} new ${bricks.length === 1 ? 'piece' : 'pieces'}`, x + 155, 70, PANEL - 155, 10, false, MUTED);
+  text(doc, repeated ? `${cycles} ${group.patternLength === 2 ? 'cycles' : 'repeats'} / ${bricks.length} pieces total` : `${bricks.length} new ${bricks.length === 1 ? 'piece' : 'pieces'}`, x + 155, 70, PANEL - 155, 10, false, MUTED);
   const trayHeight = partsTray(doc, design, bricks, x, 101, PANEL, pictures);
   const top = 111 + trayHeight;
-  if (repeated) {
+  if (group.patternLength === 2) {
+    const cell = (PANEL - 12) / 2;
+    for (let i = 0; i < 2; i++) {
+      const origin = group.origins[i], step = group.steps[i];
+      const template = { ...design, bricks: step.bricks.map(brick => ({ ...brick, x: brick.x - origin.x, y: brick.y - origin.y, z: brick.z - origin.z })) };
+      const left = x + i * (cell + 12);
+      doc.roundedRect(left, top, cell, 103, 6).lineWidth(0.7).strokeColor('#bed6df').stroke();
+      vector(doc, template, left + 4, top + 3, cell - 8, 76);
+      text(doc, `${i === 0 ? 'A' : 'B'} / ${step.bricks.length} pieces`, left + 7, top + 83, cell - 14, 10, true, BLUE);
+    }
+    text(doc, `A then B, ${cycles}x. Stack directly on the model.`, x, top + 112, PANEL, 11, true, BLUE);
+    await scene(doc, design, x, top + 138, PANEL, 500 - top - 138, { visibleIds, highlightIds: ids, focusIds: ids });
+    const perCycle = first.bricks.length + group.steps[1].bricks.length;
+    text(doc, `Steps ${first.index}-${last.index} in order. ${perCycle} pieces per cycle.`, x, 510, PANEL, 10, true, BLUE);
+  } else if (repeated) {
     const origin = group.origins[0];
     const template = { ...design, bricks: first.bricks.map(brick => ({ ...brick, x: brick.x - origin.x, y: brick.y - origin.y, z: brick.z - origin.z })) };
     doc.roundedRect(x, top, 134, 103, 6).lineWidth(0.7).strokeColor('#bed6df').stroke();

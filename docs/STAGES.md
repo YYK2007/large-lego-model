@@ -38,6 +38,8 @@ Later: ElevenLabs incoming/outgoing voice notes, physical stability solver and r
 
 ## Checkpoints
 
+- Natural conversation and A/B instruction cycles (2026-10-11): a bounded Gemini interpretation layer routes natural chat and file requests without turning greetings into builds. The user confirmed normal replies on the phone. Exact alternating layer cycles reduce the measured Bell Tower PDF from 199 to 121 pages; the guide shows A/B cycle labels and fits narrow screens. All 698 tests and the build pass. Public guide delivery still needs domain/Cloudflare setup; new phone rendering and AR checks remain separate.
+
 - iMessage demo approval loop (2026-10-11): revisions retain the selected mode; the user approves an exact checked revision before automatic USDZ/PDF/parts delivery. Post-build Gemini review is preserved behind `PHOTON_VISUAL_REVIEW_ENABLED`, disabled for the demo. Website workflow remains the supporting viewer; the shared review metadata distinguishes skipped review from a match or mismatch.
 
 - Piece economy and automatic finish (2026-10-11): planning justifies added pieces by subject features or construction needs. Exact-volume packing compares checked alternatives by piece count, preserving color, fixed parts, stock and budgets. Website and iMessage jobs stop on a complete match, stalled reviews/construction, a shared time limit or a bounded attempt count; the best checked draft remains available. See `VERIFICATION.md` for tests and limits.

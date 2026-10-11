@@ -1,6 +1,6 @@
 .build-guide-body{min-width:280px;background:radial-gradient(ellipse at 50% 0,#c5ebff,#eff8fc 60%,#deeee4);overflow:hidden}
 .app-opening{padding:36px;text-align:center}
-.build-guide{height:100dvh;max-width:1100px;margin:auto;display:grid;grid-template-rows:64px minmax(180px,1fr) auto auto;color:#244459;background:#f8fcff;position:relative;overflow:hidden;font-family:'DM Sans',-apple-system,BlinkMacSystemFont,sans-serif;padding:0 0 env(safe-area-inset-bottom)}
+.build-guide{height:100dvh;max-width:1100px;margin:auto;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:64px minmax(180px,1fr) auto auto;color:#244459;background:#f8fcff;position:relative;overflow:hidden;font-family:'DM Sans',-apple-system,BlinkMacSystemFont,sans-serif;padding:0 0 env(safe-area-inset-bottom)}
 .build-guide button,.build-guide a{-webkit-tap-highlight-color:transparent;touch-action:manipulation}
 .build-guide button:focus-visible,.build-guide a:focus-visible{outline:3px solid #1684ca;outline-offset:3px}
 .build-guide button{background:transparent}

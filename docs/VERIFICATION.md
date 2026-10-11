@@ -2,6 +2,16 @@
 
 This document distinguishes tested local behavior from live integrations that need account/device access.
 
+## Conversational replies and compact A/B instructions (2026-10-11)
+
+**698 regression tests and the production build pass.** The bounded Gemini conversation layer handles natural questions, brainstorming and file requests through the existing Photon handlers. Direct commands and explicit build requests keep their existing path. Ambiguity asks for clarification, provider failures leave the build unchanged, approval remains explicit, and Stop invalidates a late interpreted build action. Up to eight conversational messages persist across restart. Tests cover duplicate messages, short confirmations, selected-revision feedback, status/Stop during interpretation, pending-photo captions, retained stock/photos and provider failure. Status and Stop also remain responsive while approval looks up its exact revision and guide.
+
+The API and Photon listener were restarted gracefully after idle checks. Live interpretation calls returned in about 1.1–2.0 seconds; those are measured samples, not a latency promise. The user then sent “Hey, what can you help me build?” in the existing phone conversation and confirmed that it replied normally without starting generation. This confirms that conversational phone exchange, not every possible phrasing.
+
+The repeat detector now compresses exact alternating A/B layer cycles with separate A and B diagrams and total gather quantities. The unchanged 3,135-piece Bell Tower falls from **199 to 121 pages**, **14,689,944 to 10,692,165 bytes**, and **53.16 to 38.42 seconds** for a fresh PDF. Its embedded data retains all **448 ordered steps**, insertion paths and exact BOM. The repeated-page diagrams were rendered and inspected. The interactive guide labels the actual cycle and A/B layer while retaining exact per-piece navigation. A long-title layout defect that made controls wider than a 390-pixel phone was fixed; 390×844 and 320×568 views were inspected. Evidence: `output/pdf/two-layer-integrity.json`, `bell-tower-two-layer-page76.png`, `output/instruction-guide/phone-cycle-b.png`, `cycles-chat-tests.log`, `cycles-chat-build.log`.
+
+Public mini-app delivery remains pending domain registration and Cloudflare setup. The user is comparing domain prices; no domain was purchased or registered. The guide works locally. The new lightweight model's phone performance, public guide card, saved progress on a phone, and optional AR still require device checks.
+
 ## Temporary sharing approved; connection unavailable (2026-10-11)
 
 The user explicitly approved temporary Cloudflare signed sharing. Two attempts to run `cloudflared tunnel --url http://127.0.0.1:3002` exited before creating a URL: HTTPS connections to `api.trycloudflare.com:443` were refused. Direct IPv4/default and IPv6 checks also failed; ordinary HTTPS to `www.cloudflare.com` returned 200. This identifies the failing endpoint, not a proven cause or a general Cloudflare outage. No tunnel is running and `PUBLIC_BASE_URL` remains unset. The private API and Photon listener remain running. The earlier approval blocker is resolved; an accessible connection to the tunnel service is now needed before public-link, iMessage mini-app and AR testing can proceed. Evidence: `output/instruction-guide/tunnel.log`, `tunnel-retry.log`.

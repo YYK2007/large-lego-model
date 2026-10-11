@@ -26,6 +26,7 @@ export interface Conversation {
   lastDraftId?: string;
   finishedJobId?: string;
   requestPrompt?: string;
+  chatHistory?: { role: 'user' | 'assistant'; text: string }[];
   quality?: PhotonQuality;
   pendingRequest?: PendingPhotonRequest;
   pendingQuality?: PhotonQuality;
@@ -51,7 +52,7 @@ export function rememberMessageIds(handledIds: string[], ids: string[]): string[
   return [...new Set([...handledIds, ...ids])].slice(-MESSAGE_HISTORY_LIMIT);
 }
 
-type PhotonCommand = { kind: 'manual' | 'instructions' | 'model' | 'parts' | 'approve' | 'retry' | 'clarify' | 'stop' | 'status' | 'chat' | 'new' | 'design'; prompt: string } | { kind: 'open'; designId: string; prompt: '' } | { kind: 'use'; attempt: number; prompt: '' } | { kind: 'quality'; quality: PhotonQuality; prompt: string };
+type PhotonCommand = { kind: 'manual' | 'instructions' | 'model' | 'parts' | 'approve' | 'retry' | 'clarify' | 'stop' | 'status' | 'chat' | 'conversation' | 'new' | 'design'; prompt: string } | { kind: 'open'; designId: string; prompt: '' } | { kind: 'use'; attempt: number; prompt: '' } | { kind: 'quality'; quality: PhotonQuality; prompt: string };
 const validDesignId = (value: unknown): value is string => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(value);
 const commandHelp = 'I don’t recognize that command. /instructions or /build opens your building guide. Use /status for progress, /stop to stop generation, /approve to accept a checked preview, or /retry to resend missing files from your approved build. /model, /manual and /parts request the 3D file, optional PDF and parts list. Send /new followed by an idea to start another build.';
 
@@ -99,7 +100,8 @@ export function routeText(text: string): PhotonCommand {
   const fresh = /^\/new(?:\s+([\s\S]*))?$/i.exec(prompt);
   if (fresh) return { kind: 'new', prompt: fresh[1]?.trim() ?? '' };
   if (prompt.startsWith('/')) throw new PhotonInputError(commandHelp);
-  return { kind: 'design', prompt };
+  const direct = !prompt || isRevisionPrompt(prompt) || /^(?:(?:please|quickly)\s+)?(?:build|make|create|generate|design)\b/i.test(prompt);
+  return { kind: direct ? 'design' : 'conversation', prompt };
 }
 
 function inventorySnapshot(value: unknown, manifest?: CatalogManifest): InventoryItem[] | undefined {
@@ -140,6 +142,12 @@ export function parseConversation(value: unknown): Conversation {
       return [id, { ...value } as ApprovedDelivery];
     }));
   }
+  let chatHistory: Conversation['chatHistory'];
+  if (data.chatHistory !== undefined) {
+    if (!Array.isArray(data.chatHistory) || data.chatHistory.length > 8 || data.chatHistory.some(item => !item || !['user', 'assistant'].includes(item.role)
+      || typeof item.text !== 'string' || !item.text.length || item.text.length > (item.role === 'user' ? 4000 : 1000))) throw new Error('Invalid saved chat history.');
+    chatHistory = data.chatHistory.map(item => ({ role: item.role, text: item.text }));
+  }
   if (data.lastAttempt !== undefined && (!Number.isSafeInteger(data.lastAttempt) || (data.lastAttempt as number) < 0)) throw new Error('Invalid saved attempt number.');
   if (data.spaceId !== undefined && (typeof data.spaceId !== 'string' || !data.spaceId.length || data.spaceId.length > 1000)) throw new Error('Invalid saved conversation address.');
   if (data.requestPrompt !== undefined && (typeof data.requestPrompt !== 'string' || data.requestPrompt.length > 4000)) throw new Error('Invalid saved build prompt.');
@@ -170,6 +178,7 @@ export function parseConversation(value: unknown): Conversation {
     ...(data.finishedJobId ? { finishedJobId: data.finishedJobId as string } : {}),
     ...(data.lastAttempt !== undefined ? { lastAttempt: data.lastAttempt as number } : {}),
     ...(data.requestPrompt ? { requestPrompt: data.requestPrompt as string } : {}),
+    ...(chatHistory ? { chatHistory } : {}),
     ...(data.quality ? { quality: data.quality as PhotonQuality } : {}),
     ...(data.pendingQuality ? { pendingQuality: data.pendingQuality as PhotonQuality } : {}),
     ...(pendingRequest ? { pendingRequest } : {}),
@@ -188,6 +197,7 @@ export function importSavedDesign(conversation: Conversation, value: unknown): C
     inventory: inventorySnapshot(saved.inventory, inventoryCatalog),
     ...(Object.keys(inventoryCatalog.parts).length || Object.keys(inventoryCatalog.colors).length ? { inventoryCatalog } : {}),
     handledIds: [...conversation.handledIds],
+    ...(conversation.chatHistory ? { chatHistory: structuredClone(conversation.chatHistory) } : {}),
     ...(conversation.quality ? { quality: conversation.quality } : {}),
     ...(conversation.approvedDesignId ? { approvedDesignId: conversation.approvedDesignId } : {}),
     ...(conversation.approvedDeliveries ? { approvedDeliveries: structuredClone(conversation.approvedDeliveries) } : {}),
