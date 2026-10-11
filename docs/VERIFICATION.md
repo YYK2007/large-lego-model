@@ -2,6 +2,16 @@
 
 This document distinguishes tested local behavior from live integrations that need account/device access.
 
+## Public guide rollout and responsive validation (2026-10-11)
+
+**705 regression tests and the production build pass.** Photon now checks saved models in a worker so expensive assembly search does not block status, Stop or other conversations. The same full validator still runs. A hash of the complete saved snapshot, including catalog geometry and colors, reuses successful checks only; changed or invalid models receive fresh checks. Concurrent identical requests share one check, distinct checks serialize, and the success cache retains at most 32 snapshots. Tests cover real worker responsiveness, exact-snapshot reuse, changed geometry/catalogs, invalid results, queue recovery and worker failures.
+
+The recovered 2,731-piece Wilson model previously blocked the listener for **18.47 seconds**. The worker performed the same successful check in **19.75 seconds** with **1.77 ms maximum measured listener timer lag**; the cached check took **3.92 ms**. These measurements demonstrate listener responsiveness and reuse, not faster construction search. Evidence: `output/latency-audit/validation.json`, `validation-worker-check.json`; regression/build logs: `output/instruction-guide/domain-regression-tests.log`, `domain-build.log`.
+
+Instruction tray cards now show exact part name/dimensions, part ID, color and quantity. The actual Bell Tower guide at step 210 was inspected at **390×844 and 320×568**: brown Plate 2×12 (#2445) and Plate 2×16 (#4282) are distinguishable even when their thumbnails scale similarly. All controls fit. Evidence: `output/instruction-guide/tray-labels-390.png`, `tray-labels-320.png`.
+
+The user purchased **llegomodel.site** and authorized Cloudflare setup. Namecheap now delegates to `carmelo.ns.cloudflare.com` and `magnolia.ns.cloudflare.com`; the registry and Cloudflare dashboard confirm activation. The named `large-lego-model-guide` tunnel has four registered connections and routes only to the signed read-only gateway on `127.0.0.1:3002`. Cloudflare's Universal SSL is still automatically validating; public HTTPS, bot-link activation and phone guide/AR checks remain pending. This supersedes the earlier domain-shopping and failed Quick Tunnel notes below. The Mac, API and tunnel must stay running; this is not a separately hosted backend.
+
 ## Conversational replies and compact A/B instructions (2026-10-11)
 
 **698 regression tests and the production build pass.** The bounded Gemini conversation layer handles natural questions, brainstorming and file requests through the existing Photon handlers. Direct commands and explicit build requests keep their existing path. Ambiguity asks for clarification, provider failures leave the build unchanged, approval remains explicit, and Stop invalidates a late interpreted build action. Up to eight conversational messages persist across restart. Tests cover duplicate messages, short confirmations, selected-revision feedback, status/Stop during interpretation, pending-photo captions, retained stock/photos and provider failure. Status and Stop also remain responsive while approval looks up its exact revision and guide.
