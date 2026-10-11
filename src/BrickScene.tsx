@@ -7,7 +7,7 @@ import { createInstancedBrickModel, STUD_UNITS_PER_PLATE } from '../shared/brick
 import { placementOffset, type Placement } from '../shared/assembly';
 import { frameDistance } from './scene-framing';
 
-export function BrickScene({ design, visibleIds, highlightIds, activeId, replayKey, placement, focusIds, opaqueContext = false }: { design: Design; visibleIds?: string[]; highlightIds?: string[]; activeId?: string; replayKey?: number; placement?: Placement; focusIds?: string[]; opaqueContext?: boolean }) {
+export function BrickScene({ design, visibleIds, highlightIds, activeId, replayKey, placement, focusIds, opaqueContext = false, omitCoveredStuds = false }: { design: Design; visibleIds?: string[]; highlightIds?: string[]; activeId?: string; replayKey?: number; placement?: Placement; focusIds?: string[]; opaqueContext?: boolean; omitCoveredStuds?: boolean }) {
   const host = useRef<HTMLDivElement>(null);
   const actions = useRef<{ reset(): void; front(): void; top(): void; rotate(value: boolean): void } | null>(null);
   const [rotating, setRotating] = useState(false);
@@ -93,7 +93,7 @@ export function BrickScene({ design, visibleIds, highlightIds, activeId, replayK
     const floorSize = Math.max(200, 2 * (pedestalRadius + (height + liftHeight) * Math.hypot(sunDirection.x, sunDirection.z) / sunDirection.y + 8));
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(floorSize, floorSize), new THREE.ShadowMaterial({ opacity: 0.1 }));
     floor.rotation.x = -Math.PI / 2; floor.position.y = -0.54; floor.receiveShadow = true; scene.add(floor);
-    const instances = createInstancedBrickModel(canonical, opaqueContext);
+    const instances = createInstancedBrickModel(canonical, opaqueContext, { omitCoveredStuds });
     scene.add(instances.model);
     const brickBounds = new Map(canonical.bricks.map(brick => {
       const size = footprint(brick, catalog);
@@ -199,7 +199,7 @@ export function BrickScene({ design, visibleIds, highlightIds, activeId, replayK
     };
     animate();
     return () => { cancelAnimationFrame(animationFrame); observer.disconnect(); controls.dispose(); instances.dispose(); scene.traverse(object => { if (object instanceof THREE.Mesh || object instanceof THREE.LineSegments) { object.geometry.dispose(); const materials = Array.isArray(object.material) ? object.material : [object.material]; materials.forEach(material => material.dispose()); } }); renderer.dispose(); renderer.domElement.remove(); actions.current = null; };
-  }, [design, opaqueContext]);
+  }, [design, opaqueContext, omitCoveredStuds]);
 
   return <div className="scene-wrap">
     <div ref={host} className="scene-canvas" />

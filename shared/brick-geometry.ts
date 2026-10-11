@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { catalogForDesign, footprint, normalizeDesign, partHeight, partTopStuds, type Brick, type Design, type CatalogContext } from './model.js';
 import { partSurfaces, meshSurfaces } from './part-surfaces.js';
+import { canOmitOrdinaryStuds, ordinaryStudCovers } from './covered-studs.js';
 
 // One stud is 8 mm; the canonical vertical unit is one 3.2 mm plate.
 export const METERS_PER_STUD = 0.008;
@@ -112,7 +113,7 @@ export function createBrickModel(design: Design): THREE.Group {
 }
 
 /** The browser batches identical pieces; native exports retain named real meshes. */
-export function createInstancedBrickModel(input: Design, opaqueContext = false) {
+export function createInstancedBrickModel(input: Design, opaqueContext = false, options: { omitCoveredStuds?: boolean } = {}) {
   const design = normalizeDesign(input);
   const catalog = catalogForDesign(design);
   const { centerX, centerY } = modelCenter(design.bricks, catalog);
@@ -121,16 +122,42 @@ export function createInstancedBrickModel(input: Design, opaqueContext = false) 
   const shapes = new Map<string, { geometry: THREE.BufferGeometry; edges: THREE.EdgesGeometry }>();
   type Batch = { solid: THREE.InstancedMesh; faded: THREE.InstancedMesh };
   const batches = new Map<string, Batch>();
+  const studBatches = new Map<number, Batch>();
+  const covers = options.omitCoveredStuds ? ordinaryStudCovers(design, catalog) : new Map<string, string[]>();
+  let studGeometry: THREE.BufferGeometry | undefined;
   const counts = new Map<string, number>();
+  const studCounts = new Map<number, number>();
   const key = (brick: Brick) => `${brick.partId}:${brick.rotation}:${brick.colorId}`;
-  for (const brick of design.bricks) counts.set(key(brick), (counts.get(key(brick)) ?? 0) + 1);
-  const pieces = design.bricks.map(brick => {
-    const shapeKey = `${brick.partId}:${brick.rotation}`;
+  for (const brick of design.bricks) {
+    counts.set(key(brick), (counts.get(key(brick)) ?? 0) + 1);
+    if (options.omitCoveredStuds && canOmitOrdinaryStuds(brick, catalog)) {
+      studCounts.set(brick.colorId, (studCounts.get(brick.colorId) ?? 0) + partTopStuds(brick, catalog).length);
+    }
+  }
+  const makeBatch = (geometry: THREE.BufferGeometry, colorId: number, count: number): Batch => {
+    const material = new THREE.MeshStandardMaterial({ color: catalog.colors[colorId].hex, roughness: 0.27, metalness: 0.03 });
+    const fadedMaterial = material.clone();
+    if (opaqueContext) fadedMaterial.color.lerp(new THREE.Color('#eaf0ed'), 0.65);
+    else { fadedMaterial.transparent = true; fadedMaterial.opacity = 0.3; fadedMaterial.depthWrite = false; }
+    const solid = new THREE.InstancedMesh(geometry, material, count);
+    const faded = new THREE.InstancedMesh(geometry, fadedMaterial, count);
+    for (const mesh of [solid, faded]) {
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      mesh.castShadow = true; mesh.receiveShadow = true;
+      // Placement animation can move an instance beyond its batch bounds.
+      mesh.frustumCulled = false; model.add(mesh);
+    }
+    return { solid, faded };
+  };
+  const pieces = design.bricks.map((brick, brickIndex) => {
+    const splitStuds = !!options.omitCoveredStuds && canOmitOrdinaryStuds(brick, catalog);
+    const shapeKey = `${brick.partId}:${brick.rotation}${splitStuds ? ':body' : ''}`;
     if (!shapes.has(shapeKey)) {
       // Reuse the exporter's exact body and stud geometry, including its seams.
       const source = createBrickModel({ ...design, bricks: [{ ...brick, x: 0, y: 0, z: 0 }] });
       const meshes = source.children[0].children as THREE.Mesh[];
-      const parts = meshes.map(mesh => {
+      if (splitStuds && !studGeometry) studGeometry = meshes[1].geometry.clone();
+      const parts = (splitStuds ? meshes.slice(0, 1) : meshes).map(mesh => {
         const geometry = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
         geometry.deleteAttribute('uv');
         return geometry.translate(mesh.position.x, mesh.position.y, mesh.position.z);
@@ -144,38 +171,53 @@ export function createInstancedBrickModel(input: Design, opaqueContext = false) 
     }
     const shape = shapes.get(shapeKey)!;
     const batchKey = key(brick);
-    if (!batches.has(batchKey)) {
-      const material = new THREE.MeshStandardMaterial({ color: catalog.colors[brick.colorId].hex, roughness: 0.27, metalness: 0.03 });
-      const fadedMaterial = material.clone();
-      if (opaqueContext) fadedMaterial.color.lerp(new THREE.Color('#eaf0ed'), 0.65);
-      else { fadedMaterial.transparent = true; fadedMaterial.opacity = 0.3; fadedMaterial.depthWrite = false; }
-      const solid = new THREE.InstancedMesh(shape.geometry, material, counts.get(batchKey)!);
-      const faded = new THREE.InstancedMesh(shape.geometry, fadedMaterial, counts.get(batchKey)!);
-      for (const mesh of [solid, faded]) {
-        mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-        mesh.castShadow = true; mesh.receiveShadow = true;
-        // The whole model is fitted to the camera; placement animation can move
-        // an instance beyond a previously computed batch bounding sphere.
-        mesh.frustumCulled = false;
-        model.add(mesh);
-      }
-      batches.set(batchKey, { solid, faded });
+    if (!batches.has(batchKey)) batches.set(batchKey, makeBatch(shape.geometry, brick.colorId, counts.get(batchKey)!));
+    if (splitStuds && !studBatches.has(brick.colorId)) {
+      const batch = makeBatch(studGeometry!, brick.colorId, studCounts.get(brick.colorId)!);
+      studBatches.set(brick.colorId, batch); batches.set(`stud:${brick.colorId}`, batch);
     }
     const { width, depth } = footprint(brick, catalog);
-    return { brick, shape, batch: batches.get(batchKey)!, position: new THREE.Vector3(brick.x + width / 2 - centerX, brick.z * STUD_UNITS_PER_PLATE, brick.y + depth / 2 - centerY), mesh: null as THREE.InstancedMesh | null, index: 0 };
+    const studs = splitStuds ? partTopStuds(brick, catalog).map(site => ({
+      position: new THREE.Vector3(site.x - centerX, site.z * STUD_UNITS_PER_PLATE + 0.08, site.y - centerY),
+      covers: covers.get(`Stud_${brickIndex}_${Math.floor(site.x - brick.x)}_${Math.floor(site.y - brick.y)}`) ?? [],
+      mesh: null as THREE.InstancedMesh | null, index: 0,
+    })) : [];
+    return { brick, shape, studs, batch: batches.get(batchKey)!, position: new THREE.Vector3(brick.x + width / 2 - centerX, brick.z * STUD_UNITS_PER_PLATE, brick.y + depth / 2 - centerY), mesh: null as THREE.InstancedMesh | null, index: 0 };
   });
   const edgeGeometry = new THREE.BufferGeometry();
   const outlines = new THREE.LineSegments(edgeGeometry, new THREE.LineBasicMaterial({ color: 0x142a26, transparent: true, opacity: 0.13 }));
   const selected = new THREE.LineSegments(shapes.values().next().value!.edges, new THREE.LineBasicMaterial({ color: 0x006dff }));
   model.add(outlines, selected);
   let active: typeof pieces[number] | undefined;
+  let visible: Set<string> | null = null, highlighted: Set<string> | null = null;
+  let activeSettled = true;
+  const activeOffset = new THREE.Vector3();
   const matrix = new THREE.Matrix4();
+  const updateStuds = () => {
+    if (!options.omitCoveredStuds) return;
+    for (const batch of studBatches.values()) { batch.solid.count = 0; batch.faded.count = 0; }
+    const coverIsSettled = (id: string) => (!visible || visible.has(id))
+      && (opaqueContext || !highlighted || highlighted.has(id)) && (activeSettled || id !== active?.brick.id);
+    for (const piece of pieces) for (const stud of piece.studs) {
+      stud.mesh = null;
+      if (!piece.mesh || ((activeSettled || piece !== active) && stud.covers.some(coverIsSettled))) continue;
+      const batch = studBatches.get(piece.brick.colorId)!;
+      const mesh = highlighted && !highlighted.has(piece.brick.id) ? batch.faded : batch.solid;
+      stud.index = mesh.count++; stud.mesh = mesh;
+      const offset = piece === active ? activeOffset : null;
+      mesh.setMatrixAt(stud.index, matrix.makeTranslation(stud.position.x + (offset?.x ?? 0), stud.position.y + (offset?.y ?? 0), stud.position.z + (offset?.z ?? 0)));
+    }
+    for (const batch of studBatches.values()) for (const mesh of [batch.solid, batch.faded]) {
+      mesh.visible = mesh.count > 0; mesh.instanceMatrix.needsUpdate = true;
+    }
+  };
   const update = (visibleIds?: string[], highlightIds?: string[], activeId?: string) => {
-    const visible = visibleIds ? new Set(visibleIds) : null;
-    const highlighted = highlightIds ? new Set(highlightIds) : null;
+    visible = visibleIds ? new Set(visibleIds) : null;
+    highlighted = highlightIds ? new Set(highlightIds) : null;
     const positions: number[] = [];
     for (const batch of batches.values()) { batch.solid.count = 0; batch.faded.count = 0; }
     active = undefined;
+    activeOffset.set(0, 0, 0); activeSettled = !activeId;
     for (const piece of pieces) {
       piece.mesh = null;
       if (visible && !visible.has(piece.brick.id)) continue;
@@ -187,6 +229,7 @@ export function createInstancedBrickModel(input: Design, opaqueContext = false) 
       const edges = piece.shape.edges.getAttribute('position');
       for (let i = 0; i < edges.count; i++) positions.push(edges.getX(i) + piece.position.x, edges.getY(i) + piece.position.y, edges.getZ(i) + piece.position.z);
     }
+    updateStuds();
     for (const batch of batches.values()) for (const mesh of [batch.solid, batch.faded]) {
       mesh.visible = mesh.count > 0; mesh.instanceMatrix.needsUpdate = true;
     }
@@ -198,14 +241,22 @@ export function createInstancedBrickModel(input: Design, opaqueContext = false) 
   };
   const setOffset = (x: number, y: number, z: number) => {
     if (!active?.mesh) return;
+    activeOffset.set(x, y, z);
+    const settled = x === 0 && y === 0 && z === 0;
+    if (settled !== activeSettled) { activeSettled = settled; updateStuds(); }
     active.mesh.setMatrixAt(active.index, matrix.makeTranslation(active.position.x + x, active.position.y + y, active.position.z + z));
     active.mesh.instanceMatrix.needsUpdate = true;
+    for (const stud of active.studs) if (stud.mesh) {
+      stud.mesh.setMatrixAt(stud.index, matrix.makeTranslation(stud.position.x + x, stud.position.y + y, stud.position.z + z));
+      stud.mesh.instanceMatrix.needsUpdate = true;
+    }
     selected.position.set(active.position.x + x, active.position.y + y, active.position.z + z);
   };
   const setLift = (lift: number) => setOffset(0, lift, 0);
   update();
   const dispose = () => {
     for (const shape of shapes.values()) { shape.geometry.dispose(); shape.edges.dispose(); }
+    studGeometry?.dispose();
     for (const batch of batches.values()) for (const mesh of [batch.solid, batch.faded]) {
       mesh.dispose(); (mesh.material as THREE.Material).dispose();
     }

@@ -2,6 +2,14 @@
 
 This document distinguishes tested local behavior from live integrations that need account/device access.
 
+## Lighter interactive rendering and attachment recovery (2026-10-11)
+
+**672 regression tests and the production build pass.** The interactive guide now omits covered ordinary studs while retaining canonical bodies, exposed studs, imported parts, hollow studs and translucent geometry. Moving pieces expose the studs below them; replay and backwards navigation restore them without rebuilding the model. The full editor/export geometry remains unchanged. Surface tests compare retained positions, normals and colors against the canonical renderer; tests also cover rotations, partial coverage and transparent context. The omission removes the same tiny cosmetic seam bands as the phone viewing file.
+
+For the approved 1,961-piece Wilson, settled guide geometry drops from **6,709,948 to 263,708 triangles** (96.1%). Host initialization rises from 32.6 to 104.6 ms; median full-step updates rise from 1.26 to 2.20 ms. This trades a small measured CPU cost for much less drawn geometry; it is not a phone frame-rate measurement. Replay, backwards navigation, a jump to step 197, whole-model inspection and return to the selected piece were inspected in the phone-sized browser. The step slider exposes a one-based spoken label. Evidence: `output/instruction-guide/phone-guide-final.png`, `final-render-tests.log`, `final-render-build.log`, and `output/imessage-approval/guide-rendering-benchmark.json`.
+
+When a direct iMessage model, PDF or parts attachment cannot be sent, the agent offers that exact selected revision's signed guide when configured, with a plain URL if the app card fails. It does not regenerate, change approval or falsely acknowledge the failed file. Tests cover a selected revision differing from the approved one, unavailable links and failed card delivery. The idle Photon listener was restarted gracefully after verification. Public guide hosting and the new phone/AR acceptance checks remain pending the sharing approval described below.
+
 ## Interactive guide and phone viewing files (2026-10-11)
 
 **662 regression tests and the production build pass in an isolated copy of the exact staged changes.** New Photon tests cover the signed app card, Safari fallback, exact selected/approved revision, guide delivery acknowledgments, legacy bundle retries, optional PDF and lighter model route. Gateway tests cover signed revision binding, privacy, GET/HEAD, byte ranges, blocked mutations and unrelated designs. Source/check logs: `output/instruction-guide/`.

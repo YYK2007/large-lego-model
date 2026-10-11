@@ -416,6 +416,65 @@ test('failed model delivery retains the selected build and links to that exact r
   assert.equal(h.submitted.length, 0);
 });
 
+test('failed direct file sends offer the signed guide for the requested selection, not the separate approved revision', async () => {
+  for (const kind of ['model', 'manual', 'parts'] as const) {
+    const approvedId = 'older-approved-revision';
+    const deliveries = { [approvedId]: { mode: 'guide' as const, instructions: true as const, parts: true as const } };
+    const h = harness({ handledIds: [], designId: build.id, feedbackDesignId: build.id, approvedDesignId: approvedId, approvedDeliveries: deliveries });
+    const links: string[] = [], cards: string[] = [], files: string[] = [];
+    h.api.instructionsLink = async id => { links.push(id); return `https://guide.example/?build=${id}&share=signed`; };
+    h.api.file = async (id, format) => { files.push(`${id}/${format}`); return Buffer.from(format); };
+    h.reply[kind] = async () => { throw new PhotonInputError('The file couldn’t be sent through iMessage. Your checked build is saved.'); };
+    h.reply.instructions = async url => { cards.push(url); };
+    await h.create().handle(message(`/${kind}`));
+    assert.deepEqual(files, [`${build.id}/${kind === 'model' ? 'mobile.usdz' : kind === 'manual' ? 'manual.pdf' : 'parts.csv'}`]);
+    assert.deepEqual(links, [build.id]); assert.deepEqual(cards, [`https://guide.example/?build=${build.id}&share=signed`]);
+    assert.match(h.texts.at(-1)!, /couldn’t be sent.*\nYou can download this exact build from its guide/);
+    assert.doesNotMatch(h.texts.join('\n'), /local to the computer|\?design=|^Sent your/m);
+    assert.equal(h.state().designId, build.id); assert.equal(h.state().feedbackDesignId, build.id); assert.equal(h.state().approvedDesignId, approvedId);
+    assert.deepEqual(h.state().approvedDeliveries, deliveries); assert.deepEqual(h.media, []); assert.equal(h.submitted.length, 0); assert.deepEqual(h.stops, []);
+  }
+});
+
+test('a failed fallback guide card still supplies the signed download link without acknowledging the file', async () => {
+  const h = harness({ handledIds: [], designId: build.id, approvedDesignId: build.id, approvedDeliveries: { [build.id]: { manual: true, parts: true } } });
+  const url = `https://guide.example/?build=${build.id}&share=signed`;
+  let cardAttempts = 0;
+  h.api.instructionsLink = async () => url;
+  h.reply.model = async () => { throw new PhotonInputError('The file transfer took too long. Your checked build is saved.'); };
+  h.reply.instructions = async () => { cardAttempts++; throw new Error('PRIVATE_GUIDE_TRANSPORT_ERROR'); };
+  await h.create().handle(message('/model'));
+  assert.equal(cardAttempts, 1); assert.match(h.texts.join('\n'), /file transfer took too long/);
+  assert.equal(h.texts.at(-1), `Open this build’s guide to download the file:\n${url}`);
+  assert.doesNotMatch(h.texts.join('\n'), /PRIVATE_GUIDE_TRANSPORT_ERROR|^Sent your/m);
+  assert.deepEqual(h.state().approvedDeliveries, { [build.id]: { manual: true, parts: true } });
+  assert.equal(h.state().designId, build.id); assert.equal(h.submitted.length, 0);
+});
+
+test('unavailable signed guides retain local-only download help after a transport failure', async () => {
+  for (const unavailable of ['null', 'failure']) {
+    const h = harness({ handledIds: [], designId: build.id });
+    const links: string[] = [];
+    h.api.instructionsLink = async id => { links.push(id); if (unavailable === 'failure') throw new Error('PRIVATE_LINK_ERROR'); return null; };
+    h.reply.parts = async () => { throw new PhotonInputError('The parts file could not be delivered.'); };
+    h.reply.instructions = async () => { assert.fail('No card is sent without a verified guide URL'); };
+    await h.create().handle(message('/parts'));
+    assert.deepEqual(links, [build.id]);
+    assert.match(h.texts.at(-1)!, /could not be delivered.*\nThe viewer is local.*\?design=checked-build.*parts CSV/);
+    assert.doesNotMatch(h.texts.join('\n'), /PRIVATE_LINK_ERROR|^Sent your|https:\/\/example.test/m);
+    assert.equal(h.state().designId, build.id); assert.equal(h.state().approvedDeliveries, undefined); assert.equal(h.submitted.length, 0);
+  }
+});
+
+test('approval status translates every pending export key into the existing readable file names', async () => {
+  for (const guide of [false, true]) {
+    const h = harness({ handledIds: [], designId: build.id, feedbackDesignId: build.id, approvedDesignId: build.id, approvedDeliveries: { [build.id]: guide ? { mode: 'guide' } : {} } });
+    await h.create().handle(message('/status'));
+    assert.ok(h.texts.at(-1)!.includes(guide ? 'Still to send: interactive building guide, rotatable 3D file, parts list.' : 'Still to send: rotatable 3D file, PDF instructions, parts list.'));
+    assert.equal(h.submitted.length, 0); assert.deepEqual(h.media, []);
+  }
+});
+
 test('attachment fallback explains local-only viewing when a public origin is absent', async () => {
   const h = harness({ handledIds: [], designId: build.id });
   h.reply.model = async () => { throw new PhotonInputError('The file could not be delivered.'); };
@@ -494,7 +553,7 @@ test('approval continues other files after failure and retries only the unacknow
   assert.deepEqual(h.state().approvedDeliveries?.[build.id], { manual: true, parts: true });
   assert.deepEqual(h.media, ['manual', 'parts']); assert.doesNotMatch(h.texts.join('\n'), /PRIVATE_PROVIDER_TOKEN|[{}]/);
   const restarted = h.create(); await restarted.handle(message('/status'));
-  assert.match(h.texts.at(-1)!, /approved.*Still to send: model/);
+  assert.match(h.texts.at(-1)!, /approved.*Still to send: rotatable 3D file/);
   h.reply.model = async () => { h.media.push('model'); };
   await restarted.handle(message('/approve')); await restarted.handle(message('Approved'));
   assert.deepEqual(h.media, ['manual', 'parts', 'model']);

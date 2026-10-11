@@ -2,7 +2,8 @@ import { Box3, BufferGeometry, Group, Material, Matrix4, Mesh, MeshStandardMater
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { USDZExporter } from 'three/examples/jsm/exporters/USDZExporter.js';
 import { createBrickModel, METERS_PER_STUD } from '../shared/brick-geometry.js';
-import { catalogForDesign, footprint, normalizeDesign, partTopStuds, validateDesign, type Design } from '../shared/model.js';
+import { catalogForDesign, normalizeDesign, validateDesign, type Design } from '../shared/model.js';
+import { ordinaryStudCovers } from '../shared/covered-studs.js';
 import { compactUsdz } from './usdz-package.js';
 
 export type MobileModelReport = {
@@ -20,25 +21,7 @@ export function createMobileModel(input: Design): { model: Group; report: Mobile
   const checked = validateDesign(input);
   if (!checked.valid) throw new Error(`Cannot export invalid design: ${checked.errors.join(' ')}`);
   const design = normalizeDesign(input), catalog = catalogForDesign(design);
-  const opaque = (colorId: number) => (catalog.colors[colorId].alpha ?? 1) === 1;
-  const covers = new Set<string>();
-  const siteKey = (x: number, y: number, z: number) => `${x},${y},${z}`;
-  for (const brick of design.bricks) {
-    const part = catalog.parts[brick.partId];
-    if (part.geometry || !['brick', 'plate', 'tile'].includes(part.kind) || !opaque(brick.colorId)) continue;
-    const { width, depth } = footprint(brick, catalog);
-    for (let x = 0; x < width; x++) for (let y = 0; y < depth; y++) {
-      covers.add(siteKey(brick.x + x + 0.5, brick.y + y + 0.5, brick.z));
-    }
-  }
-  const omitted = new Set<string>();
-  design.bricks.forEach((brick, index) => {
-    const part = catalog.parts[brick.partId];
-    if (part.geometry || !['brick', 'plate'].includes(part.kind) || part.topStudStyle === 'hollow' || !opaque(brick.colorId)) return;
-    for (const site of partTopStuds(brick, catalog)) if (covers.has(siteKey(site.x, site.y, site.z))) {
-      omitted.add(`Stud_${index}_${Math.floor(site.x - brick.x)}_${Math.floor(site.y - brick.y)}`);
-    }
-  });
+  const omitted = ordinaryStudCovers(design, catalog);
   const source = createBrickModel(design);
   source.updateMatrixWorld(true);
   const resources = new Set<BufferGeometry | Material>();

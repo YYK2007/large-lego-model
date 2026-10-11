@@ -319,7 +319,7 @@ export class PhotonConversation {
         if (this.state.approvedDesignId && this.state.feedbackDesignId === this.state.approvedDesignId && this.state.designId === this.state.approvedDesignId && !this.state.pendingRequest) {
           const sent = this.state.approvedDeliveries?.[this.state.approvedDesignId];
           const remaining = (sent?.mode === 'guide' ? ['instructions', 'model', 'parts'] as const : ['model', 'manual', 'parts'] as const).filter(kind => !sent?.[kind]);
-          await this.tell(remaining.length ? `Your selected build is approved. Still to send: ${remaining.join(', ')}. Send /retry to resend only the missing files.`
+          await this.tell(remaining.length ? `Your selected build is approved. Still to send: ${remaining.map(kind => exportLabels[kind]).join(', ')}. Send /retry to resend only the missing files.`
             : sent?.mode === 'guide' ? 'Your selected build is approved. The guide, 3D file and parts list were sent. /instructions opens your guide; /manual gets an optional PDF.'
               : `Your selected build is approved, and its 3D file, PDF instructions, and parts list were sent. Reply with a change or send /model, /manual, or /parts for another copy.`, this.state.jobId); return;
         }
@@ -361,10 +361,11 @@ export class PhotonConversation {
       if (command.kind === 'manual' || command.kind === 'model' || command.kind === 'parts') {
         if (!this.state.designId) throw new PhotonInputError('There is no checked build selected yet. Send an idea first, or /use followed by a checked attempt number.');
         const designId = this.state.designId;
+        let design: SavedDesign | undefined;
         this.beginExport(command.kind);
         try {
           await this.exportMessage(`${this.exportStage(this.activeExport!)}. Your checked build is saved.`);
-          await this.api.design(designId);
+          design = await this.api.design(designId);
           const bytes = await this.api.file(designId, command.kind === 'manual' ? 'manual.pdf' : command.kind === 'model' ? 'mobile.usdz' : 'parts.csv');
           this.activeExport!.phase = 'sending';
           await this.reply[command.kind](bytes);
@@ -372,8 +373,16 @@ export class PhotonConversation {
           await this.tell(`Sent your ${exportLabels[command.kind]}.`).catch(() => {});
         } catch (error) {
           if (error instanceof PhotonInputError && !(error instanceof PhotonApiError)) {
-            const fallback = this.link('design', designId) || `\nThe viewer is local to the computer running this app. On that computer, open the website with ?design=${encodeURIComponent(designId)} at the end of its address, then choose ${command.kind === 'model' ? 'Download 3D (.usdz)' : command.kind === 'manual' ? 'the PDF download' : 'the parts CSV download'}.`;
-            await this.tell(`${error.message}${fallback}`);
+            const url = design ? await this.instructionUrl(designId) : undefined;
+            if (url && design) {
+              await this.tell(`${error.message}\nYou can download this exact build from its guide.`);
+              this.activeExport!.kind = 'instructions'; this.activeExport!.phase = 'sending';
+              try { await this.sendInstructions(design, url); }
+              catch { await this.tell(`Open this build’s guide to download the file:\n${url}`); }
+            } else {
+              const fallback = this.link('design', designId) || `\nThe viewer is local to the computer running this app. On that computer, open the website with ?design=${encodeURIComponent(designId)} at the end of its address, then choose ${command.kind === 'model' ? 'Download 3D (.usdz)' : command.kind === 'manual' ? 'the PDF download' : 'the parts CSV download'}.`;
+              await this.tell(`${error.message}${fallback}`);
+            }
           } else throw error;
         } finally { await this.finishExport(); }
         return;
