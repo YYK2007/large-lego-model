@@ -32,10 +32,14 @@ for (const id of Object.keys(PARTS)) {
 }
 after(async () => { globalThis.fetch = originalFetch; process.chdir(originalCwd); await rm(temporary, { recursive: true, force: true }); });
 
-test('bounded discovery preserves verified successes, searches with empty explicit IDs, and rejects invented snapshots', async () => {
+test('bounded discovery preserves verified successes, searches with empty explicit IDs, and rejects invented snapshots', async t => {
+  const budget = new AbortController(), timeout = AbortSignal.timeout;
+  // Expire discovery at the pending request, independent of cache I/O speed.
+  t.mock.method(AbortSignal, 'timeout', (delay: number) => delay === 500 ? budget.signal : timeout(delay));
   let requests = 0;
   globalThis.fetch = async (input, init) => {
     requests++; assert.equal(String(input), 'https://rebrickable.com/api/v3/lego/parts/uncached/');
+    queueMicrotask(() => budget.abort(new DOMException('Discovery allowance exhausted', 'TimeoutError')));
     return new Promise((_, reject) => { const signal = init!.signal!; if (signal.aborted) reject(signal.reason); else signal.addEventListener('abort', () => reject(signal.reason), { once: true }); });
   };
   const result = await resolveGenerationCatalog({ query: 'Plate', partIds: [], limit: 2, budgetMs: 500 });
